@@ -3,6 +3,11 @@
 // Every other module imports from here rather than reading process.env
 // directly, so a missing var can never silently become `undefined` deeper
 // in the codebase — it's declared and validated in exactly one place.
+//
+// Scope note: this file holds SECRETS and DEPLOYMENT identifiers (tokens,
+// channel IDs, Supabase URLs). Server-specific non-secret values (ping role
+// IDs, emoji IDs) live in config/roles.js and config/emojis.js so they
+// don't need .env edits to be swapped on a new server.
 
 const path = require('path');
 const dotenv = require('dotenv');
@@ -21,13 +26,6 @@ function optionalInt(name, fallback) {
     const v = process.env[name];
     if (v === undefined || v === '') return fallback;
     const n = parseInt(v, 10);
-    return Number.isNaN(n) ? fallback : n;
-}
-
-function optionalFloat(name, fallback) {
-    const v = process.env[name];
-    if (v === undefined || v === '') return fallback;
-    const n = parseFloat(v);
     return Number.isNaN(n) ? fallback : n;
 }
 
@@ -56,16 +54,19 @@ const DASHBOARD_API_KEY = optional('DASHBOARD_API_KEY');
 const DASHBOARD_ALLOWED_ORIGINS = optionalList('DASHBOARD_ALLOWED_ORIGINS');
 
 // ---------- Category channels (main = live, test = staging) ----------
+// Role pings are NOT set here — see config/roles.js. Keeping them separate
+// means swapping to a different server = editing one declarative file, not
+// re-running env setup.
 const CHANNELS = {
-    sports:        { main: optional('SPORTS_CHANNEL_ID'),        test: optional('TEST_SPORTS_CHANNEL_ID'),        ping: '<@&1124916543864713322>' },
-    software:      { main: optional('SOFTWARE_CHANNEL_ID'),      test: optional('TEST_SOFTWARE_CHANNEL_ID'),      ping: '<@&1124986979868745815>' },
-    hardware:      { main: optional('HARDWARE_CHANNEL_ID'),      test: optional('TEST_HARDWARE_CHANNEL_ID'),      ping: '<@&1124986137031753758>' },
-    gaming:        { main: optional('GAMING_CHANNEL_ID'),        test: optional('TEST_GAMING_CHANNEL_ID'),        ping: '<@&1124985995960533015>' },
-    music:         { main: optional('MUSIC_CHANNEL_ID'),         test: optional('TEST_MUSIC_CHANNEL_ID'),         ping: '<@&1125055841834373292>' },
-    business:      { main: optional('BUSINESS_CHANNEL_ID'),      test: optional('TEST_BUSINESS_CHANNEL_ID'),      ping: '<@&1125056110894792754>' },
-    miscellaneous: { main: optional('MISC_CHANNEL_ID'),          test: optional('TEST_MISC_CHANNEL_ID'),          ping: '<@&1388075747679145994>' },
-    jobs:          { main: optional('JOBS_CHANNEL_ID'),          test: optional('TEST_JOBS_CHANNEL_ID'),          ping: optional('JOBS_PING_ROLE_ID') },
-    scholarships:  { main: optional('SCHOLARSHIPS_CHANNEL_ID'),  test: optional('TEST_SCHOLARSHIPS_CHANNEL_ID'),  ping: optional('SCHOLARSHIPS_PING_ROLE_ID') }
+    sports:        { main: optional('SPORTS_CHANNEL_ID'),        test: optional('TEST_SPORTS_CHANNEL_ID') },
+    software:      { main: optional('SOFTWARE_CHANNEL_ID'),      test: optional('TEST_SOFTWARE_CHANNEL_ID') },
+    hardware:      { main: optional('HARDWARE_CHANNEL_ID'),      test: optional('TEST_HARDWARE_CHANNEL_ID') },
+    gaming:        { main: optional('GAMING_CHANNEL_ID'),        test: optional('TEST_GAMING_CHANNEL_ID') },
+    music:         { main: optional('MUSIC_CHANNEL_ID'),         test: optional('TEST_MUSIC_CHANNEL_ID') },
+    business:      { main: optional('BUSINESS_CHANNEL_ID'),      test: optional('TEST_BUSINESS_CHANNEL_ID') },
+    miscellaneous: { main: optional('MISC_CHANNEL_ID'),          test: optional('TEST_MISC_CHANNEL_ID') },
+    jobs:          { main: optional('JOBS_CHANNEL_ID'),          test: optional('TEST_JOBS_CHANNEL_ID') },
+    scholarships:  { main: optional('SCHOLARSHIPS_CHANNEL_ID'),  test: optional('TEST_SCHOLARSHIPS_CHANNEL_ID') }
 };
 
 // ---------- Bot Supabase (posted-event archival) ----------
@@ -109,8 +110,6 @@ const SCRAPE_CRON = optional('SCRAPE_CRON', '0 */6 * * *');
 
 // ---------- Config validation ----------
 // Returns an array of human-readable warnings; never throws.
-// Callers (bot.js) surface these at startup instead of failing hard, so a
-// half-configured dev box can still boot into a diagnostic state.
 function validateConfig() {
     const problems = [];
     if (!DISCORD_TOKEN) problems.push('DISCORD_TOKEN is not set — the bot cannot log in.');
