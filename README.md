@@ -1,4 +1,4 @@
-<div align="center">
+<div align="left">
 
 <img width="1920" height="400" alt="Pulchowk Events" src="https://github.com/user-attachments/assets/4aeb44d8-af5e-46cf-9084-1d2857360c45" />
 
