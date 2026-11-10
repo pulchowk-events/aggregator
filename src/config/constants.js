@@ -151,6 +151,18 @@ const DEFAULT_SCRAPE_CRON = '0 */6 * * *';   // every 6 hours
 const DEFAULT_AUTOPOST_MIN_LEAD_DAYS = 3;
 const DEFAULT_NEEDS_ATTENTION_EXPIRY_DAYS = 14;
 
+// ---------- Source-failure alerts ----------
+// A source-failure streak of consecutive non-'ok' verdicts (blocked /
+// DOM drift / parse failure) has to hit this before pinging the alert
+// channel. Singles and pairs are common (transient network hiccups,
+// legitimately empty scrapes) — three in a row is a real problem.
+const DEFAULT_SOURCE_ALERT_THRESHOLD = 3;
+
+// Once a source is firing alerts, don't re-ping the same source more than
+// once per this window. Keeps an extended outage from spamming the channel
+// every scrape cycle. Console + audit log still record every occurrence.
+const DEFAULT_SOURCE_ALERT_COOLDOWN_MINUTES = 60;
+
 module.exports = {
     TARGET_TIMEZONE,
     YEAR_INFERENCE_PAST_THRESHOLD_MS,
@@ -185,5 +197,7 @@ module.exports = {
 
     DEFAULT_SCRAPE_CRON,
     DEFAULT_AUTOPOST_MIN_LEAD_DAYS,
-    DEFAULT_NEEDS_ATTENTION_EXPIRY_DAYS
+    DEFAULT_NEEDS_ATTENTION_EXPIRY_DAYS,
+    DEFAULT_SOURCE_ALERT_THRESHOLD,
+    DEFAULT_SOURCE_ALERT_COOLDOWN_MINUTES
 };

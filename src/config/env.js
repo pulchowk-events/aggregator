@@ -47,6 +47,8 @@ const HOME_GUILD_ID = optional('HOME_GUILD_ID');
 const LOGS_CHANNEL_ID = optional('LOGS_CHANNEL_ID');
 const AUDIT_LOG_CHANNEL_ID = optional('AUDIT_LOG_CHANNEL_ID');
 const EVENTS_DUMP_CHANNEL_ID = optional('EVENTS_DUMP_CHANNEL_ID');
+const ALERTS_CHANNEL_ID = optional('ALERTS_CHANNEL_ID');
+const ALERTS_PING_ROLE_ID = optional('ALERTS_PING_ROLE_ID');
 
 // ---------- Web (dashboard API) ----------
 const WEB_PORT = optionalInt('WEB_PORT', 3001);
@@ -116,6 +118,7 @@ function validateConfig() {
     if (!HOME_GUILD_ID) problems.push('HOME_GUILD_ID is not set — the bot will refuse ALL admin commands in every guild until this is set.');
     if (!LOGS_CHANNEL_ID) problems.push('LOGS_CHANNEL_ID is not set — scrape logs will have nowhere to go until you set it via /settings set-logs.');
     if (!AUDIT_LOG_CHANNEL_ID) problems.push('AUDIT_LOG_CHANNEL_ID is not set — the audit trail will only be written to the local audit-log.jsonl file, not to Discord.');
+    if (!ALERTS_CHANNEL_ID) problems.push('ALERTS_CHANNEL_ID is not set — time-sensitive source-failure alerts will not be delivered to Discord (they will still be logged to audit-log.jsonl).');
 
     for (const [key, cat] of Object.entries(CHANNELS)) {
         if (!cat.main && !cat.test) {
@@ -135,6 +138,8 @@ module.exports = {
     LOGS_CHANNEL_ID,
     AUDIT_LOG_CHANNEL_ID,
     EVENTS_DUMP_CHANNEL_ID,
+    ALERTS_CHANNEL_ID,
+    ALERTS_PING_ROLE_ID,
 
     WEB_PORT,
     DASHBOARD_API_KEY,
