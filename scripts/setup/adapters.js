@@ -20,7 +20,7 @@ const REPO = path.resolve(__dirname, '..', '..');
 
 const DEMO_GUILDS = [
     { id: '1124910714855886860', name: 'Pulchowk Events (Demo)', memberCount: 1905, ownerId: '1000000000000000000' },
-    { id: '961199022847188993',  name: 'Ye Server ab Nhi raha (Demo)', memberCount: 26, ownerId: '1000000000000000000' }
+    { id: '961199022847188993',  name: 'Pew pew (Demo)', memberCount: 26, ownerId: '1000000000000000000' }
 ];
 
 const DEMO_CATEGORIES = [
