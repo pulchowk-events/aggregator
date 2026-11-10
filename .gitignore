@@ -16,12 +16,3 @@ error-*.png
 Thumbs.db
 .idea/
 .vscode/
-
-# Real site-specific scraper extractors (contain DOM selectors and page-
-# structure knowledge). Only the .example.js stubs ship in this repo — see
-# src/scrapers/extractors/README.md for the plugin contract. The loader at
-# src/scrapers/extractors/index.js is public; the actual <name>.js files
-# are private and gitignored.
-src/scrapers/extractors/**/*.js
-!src/scrapers/extractors/*.js
-!src/scrapers/extractors/**/*.example.js

@@ -1,15 +1,8 @@
 # Scraper extractors
 
-Site-specific DOM extraction for each source plugin lives here. The
-`<type>/<name>.js` files contain the actual CSS selectors, page-evaluate
-bodies, and site-specific quirks — they are `.gitignore`d and stay local
-to the deployment.
-
-The `<type>/<name>.example.js` stubs are committed. They exist so:
-
-1. The loader always resolves a module (no crash-on-missing-file).
-2. The plugin contract is documented by working code.
-3. A forker can `cp khalti.example.js khalti.js` and implement the body.
+Site-specific DOM extraction for each source plugin. One file per source,
+implementing the `extract(page, { progress, meta })` contract from the
+orchestration layer (`../sources/_orchestrate.js`).
 
 ## Contract
 
@@ -25,8 +18,9 @@ module.exports = {
     async extract(page, { progress, meta }) {
         // progress: ScrapeProgressTracker — call progress.discovered(n)
         //           after finding links, progress.unitDone() per item.
-        // meta:     object — mutate to report pagesVisited, listingHits,
-        //           detailPagesVisited, detailParseFailures, looksBlocked.
-        return { items: [...], meta: { ... } };
+        // meta:     object — mutate to report:
+        //             pagesVisited, listingHits, detailPagesVisited,
+        //             detailParseFailures, looksBlocked
+        return { items: [...], meta };
     }
 };

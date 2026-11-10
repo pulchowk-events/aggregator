@@ -26,6 +26,7 @@ const { withPage, closeBrowser } = require(path.join(REPO, 'src', 'scrapers', 'b
 const { ScrapeProgressTracker } = require(path.join(REPO, 'src', 'scrapers', 'progress'));
 const { loadExtractor } = require(path.join(REPO, 'src', 'scrapers', 'extractors'));
 const { classifyOutcome } = require(path.join(REPO, 'src', 'scrapers', 'diagnostics'));
+const { normalizeByType } = require(path.join(REPO, 'src', 'scrapers', 'scrapeAll'));
 
 // Find the source's type by scanning all type dirs
 const fs = require('fs');
@@ -76,12 +77,16 @@ if (!sourceType) {
 
         if (result.items.length > 0) {
             console.log('');
-            console.log('--- first 3 items ---');
+            console.log('--- first 3 items (normalized to event shape) ---');
             for (let i = 0; i < Math.min(3, result.items.length); i++) {
-                const it = result.items[i];
+                const it = normalizeByType(result.items[i], sourceType);
                 console.log(`[${i}] ${it.title}`);
-                console.log('    date:',  it.date || 'null');
-                console.log('    item:',  it.itemType || 'event');
+                console.log('    date:',  it.date || '(null)');
+                console.log('    itemType:', it.itemType || 'event');
+                if (it.itemType === 'scholarship') {
+                    console.log('    deadlineStatus:', it.deadlineStatus || '(null)');
+                    console.log('    deadlineDisplay:', it.deadlineDisplay || '(null)');
+                }
                 console.log('    image:', it.image ? 'present' : 'null');
                 console.log('    warnings:', (it.dataQualityWarnings || []).length);
             }

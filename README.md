@@ -1,4 +1,4 @@
-<div align="left">
+<div align="center">
 
 <img width="1920" height="400" alt="Pulchowk Events" src="https://github.com/user-attachments/assets/4aeb44d8-af5e-46cf-9084-1d2857360c45" />
 
@@ -16,7 +16,7 @@
 |---|---|---|
 | **10** scraped<br/><sub>4 events · 4 jobs · 2 scholarships</sub> | **9** routed<br/><sub>sports, software, hardware, gaming, music, business, misc, jobs, scholarships</sub> | **3** targets<br/><sub>Discord test · Discord live · Supabase website</sub> |
 
-[Scraper contract](src/scrapers/extractors/README.md) · [Architecture](#architecture) · [Runbook](#operations) · [Issues](https://github.com/pulchowk-events/aggregator/issues)
+[Architecture](#architecture) · [Runbook](#operations) · [Adding a source](#adding-a-source) · [Issues](https://github.com/pulchowk-events/aggregator/issues)
 
 </div>
 
@@ -64,15 +64,15 @@ The whole system is built around four principles: every concern lives in exactly
 
 ## What sets it apart
 
-- **A source is one file.** Adding a new website to scrape is: create `src/scrapers/sources/<type>/<name>.js` (five lines), create `src/scrapers/extractors/<type>/<name>.example.js` (a stub), `cp` the stub to `<name>.js` and implement the page-evaluate body. The registry discovers it at boot. Nothing in `src/core/`, `src/posting/`, or `src/discord/` needs to know the source exists.
+- **A source is two files.** Adding a new website to scrape is: create `src/scrapers/sources/<type>/<name>.js` (five-line wrapper around `runSource()`), then create `src/scrapers/extractors/<type>/<name>.js` and implement `extract()`. The registry discovers both at boot. Nothing in `src/core/`, `src/posting/`, or `src/discord/` needs to know the source exists.
 
 - **Fail-closed duplicate prevention.** Every (item, channel) post is guarded by a marker file on disk. Markers carry a `postedAt` timestamp when the send succeeds. If the process crashes between confirming the marker and removing the item from the pending queue, the next startup reconciles it. If a marker's heartbeat is stale, the bot checks Discord itself before re-posting. Duplicates become near-impossible, at the cost of the rare skip — which is the correct trade-off for a community feed.
 
 - **Test → live promotion gate.** Autopost can be configured to post only to test channels, letting a human eyeball each item before it goes live. Live posts are further constrained to a 6 AM–10 PM Nepal-time window because live posts ping roles, and 3 AM pings burn goodwill.
 
-- **Drift detection in the scraper layer.** Every source reports `{ items, meta }` where `meta` carries `listingHits`, `detailPagesVisited`, `detailParseFailures`, and `looksBlocked`. When a run returns zero items, the classifier (`classifyOutcome` in `src/scrapers/diagnostics.js`) distinguishes between "genuinely empty" (fine), "the listing selector is stale" (drift at listing), "the detail selector is stale" (drift at detail), and "the site blocked us" (captcha / cloudflare). Silent zeros become actionable signals.
+- **Drift detection in the scraper layer.** Every source reports `{ items, meta }` where `meta` carries `listingHits`, `detailPagesVisited`, `detailParseFailures`, and `looksBlocked`. When a run returns zero items, the classifier (`classifyOutcome` in `src/scrapers/diagnostics.js`) distinguishes between "genuinely empty" (fine), "the listing selector is stale" (drift at listing), "the detail selector is stale" (drift at detail), and "the site blocked us" (captcha / Cloudflare). Silent zeros become actionable signals.
 
-- **Resilient selectors, not brittle ones.** Every field extraction goes through `pickOne` / `pickAll` (`src/scrapers/selectors.js`) with a fallback chain. When KataJaam changed its card class, one selector stopped matching and the bot returned zero events with no error. The current design logs a drift warning the moment a fallback fires, and continues working through minor class shuffles.
+- **Resilient selectors, not brittle ones.** Field extractions that are known to be unstable go through `pickOne` / `pickAll` (`src/scrapers/selectors.js`) with a fallback chain. When KataJaam changed its card class, one selector stopped matching and the bot returned zero events with no error. The current design logs a drift warning the moment a fallback fires, and continues working through minor class shuffles.
 
 - **Audit-first.** `auditLog()` writes a line to `data/audit-log.jsonl` unconditionally. The Discord mirror is best-effort and never blocks the caller. A Discord outage can never mean zero record exists. Every dedup decision, every post outcome, every Discord API error is logged with the full payload — the local file is the forensic source of truth, not Discord.
 
@@ -85,15 +85,13 @@ The whole system is built around four principles: every concern lives in exactly
 | Events | Khalti | `events.khalti.com` | Single-page DOM harvest, no per-event navigation. Fastest source. |
 | Events | KataJaam | `katajaam.com` | Nine category pages × per-event detail. Blur-up placeholder images need an `aria-hidden` filter. |
 | Events | NepVents | `nepvents.com` | Three category pages. JSON-LD-first extraction with HTML fallback. Registration URL is discovered by clicking through the site's own button. |
-| Events | Kgarira | `kgarira.com` | Three paginated listing pages × per-event detail. Banner image is a CSS `background-image` — inherently fragile. |
+| Events | Kgarira | `kgarira.com` | Three paginated listing pages × per-event detail. JSON-LD-first detail extraction. Pagination currently returns the same 3 items on each page — deduped downstream, just wasteful. |
 | Jobs | SathiJob | `sathijob.com` | Virtualized listing, needs scroll-loop harvesting. Structured stat grid on detail pages. |
 | Jobs | InternSathi | `internsathi.com` | Same structural shape as SathiJob. Slug encodes level/employment-type/mode — used as fallback. |
 | Jobs | MeroJob | `merojob.com` | Normal server-rendered listing with real pagination. Deadlines are relative ("15 days from now") and are converted to absolute at scrape time. |
 | Jobs | KumariJob | `kumarijob.com` | Normal listing with real pagination. Detail pages can apply offsite (LinkedIn, employer ATS). |
-| Scholarships | ScholarshipsAds | `scholarshipsads.com` | Listing cards carry everything except deadline — one extra detail-page visit per item to read the real date. |
+| Scholarships | ScholarshipsAds | `scholarshipsads.com` | Listing cards carry everything except deadline — one extra detail-page visit per item to read the real date. Cloudflare-challenged past page 1 of each category; extractor deliberately stops after page 1. |
 | Scholarships | Erasmus Mundus | `eacea.ec.europa.eu` | Two-hop scrape. Deadlines are intentionally `unknown` (project duration ≠ application deadline). |
-
-The DOM extraction for each source is *not* in this repository — the repo ships the plugin contract, the orchestration layer, and `.example.js` stubs. See [`src/scrapers/extractors/README.md`](src/scrapers/extractors/README.md).
 
 ## Architecture
 
@@ -148,14 +146,14 @@ src/scrapers/sources/
 └── scholarships/
 ```
 
-Each file is a five-line wrapper around `runSource()` (`src/scrapers/sources/_orchestrate.js`), which owns:
+Each source file is a five-line wrapper around `runSource()` (`src/scrapers/sources/_orchestrate.js`), which owns:
 
-- Extractor loading (real file first, `.example.js` stub fallback)
+- Extractor loading
 - Retry and browser lifecycle
 - Common sanitization (description trim, image validation, field clean)
 - Result shape `{ items, meta }` consumed by `classifyOutcome()`
 
-The extractor — the piece that contains site-specific DOM knowledge — lives separately at `src/scrapers/extractors/<type>/<name>.js` and is **gitignored**. See [`src/scrapers/extractors/README.md`](src/scrapers/extractors/README.md) for the contract and rationale.
+The extractor — the piece that contains site-specific DOM knowledge — lives at `src/scrapers/extractors/<type>/<name>.js`. See [`src/scrapers/extractors/README.md`](src/scrapers/extractors/README.md) for the contract and drift-fixing guide.
 
 ### Posting pipeline
 
@@ -253,7 +251,16 @@ cp .env.example .env
 npm start
 ```
 
-Node 18+ required. Puppeteer downloads Chromium (~150 MB) on install; set `BROWSER_EXECUTABLE_PATH` and `BROWSER_USER_DATA_DIR` in `.env` to use an existing browser instead.
+Node 18+ required. Puppeteer downloads Chromium (~150 MB) on install; set `BROWSER_EXECUTABLE_PATH` and `BROWSER_USER_DATA_DIR` in `.env` to use an existing browser instead (see Configuration below for the Windows-only note).
+
+Verify any single source in isolation before trusting a full scrape:
+
+```bash
+node scripts/verify-source.js scholarshipsads
+node scripts/verify-source.js katajaam
+```
+
+This runs the extractor directly against the live site — no bot, no Discord, no cron — and prints item count, verdict, and a sample.
 
 ## First run walkthrough
 
@@ -265,7 +272,7 @@ Assuming `.env` is filled in and `npm start` is running, this is the intended fi
 ✅ Bot logged in as <bot-tag>
 ✅ Slash commands registered to guild <HOME_GUILD_ID> only.
 🕒 Automatic scraping scheduled with cron "0 */6 * * *"
-🌐 Dashboard available at http://localhost:3001
+🌐 Dashboard API available at http://localhost:3001
 ```
 
 Any `⚠️ Startup configuration warnings:` block lists the env vars that are still empty. Fix them, restart.
@@ -383,17 +390,21 @@ Two independent config layers, both loaded at boot.
 | `HOME_GUILD_ID` | The one guild the bot answers in — every command checks this |
 | `LOGS_CHANNEL_ID` | Curated human-facing feed — scrape progress, post results |
 | `AUDIT_LOG_CHANNEL_ID` | Exhaustive audit trail mirror |
+| `ALERTS_CHANNEL_ID` / `ALERTS_PING_ROLE_ID` | Time-sensitive source-failure alerts (optional) |
 | `*_CHANNEL_ID` (one pair per category) | Main + test channel for each of the 9 categories |
 | `JOBS_PING_ROLE_ID` / `SCHOLARSHIPS_PING_ROLE_ID` | Optional ping roles for those categories |
 | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | Bot archival Supabase |
 | `WEBSITE_SUPABASE_URL` + `WEBSITE_SUPABASE_SERVICE_ROLE_KEY` | Public website Supabase |
 | `WEBSITE_SYNC_DRY_RUN` | `true` to preview website changes without writing |
+| `BROWSER_EXECUTABLE_PATH` + `BROWSER_USER_DATA_DIR` | Windows-only: real browser + warm profile for Cloudflare/login-required sites |
 
 **Server-specific non-secrets — `src/config/`.** Emoji IDs and ping role IDs live here so a forker can swap servers by editing three files, not re-running `.env` setup:
 
 - `emojis.js` — all custom emoji references. Replace with your server's emoji IDs (right-click → Copy ID with Developer Mode on).
 - `roles.js` — ping role IDs for the 7 hardcoded categories. Jobs and scholarships read from `.env`.
 - `constants.js` — behavioural tunables: fuzzy thresholds, live-window hours, cache caps, retention periods, keyword dictionaries, safety note text. Nothing here is a secret; everything is overridable at runtime via `/settings`.
+
+**Note on `BROWSER_EXECUTABLE_PATH`:** the path is host-specific. Windows deployments resolve `C:/Program Files/...` fine. WSL2 or native Linux deployments can't resolve Windows paths and fall back to bundled Chromium — this is intentional fail-soft, not a bug. If you need a warm profile on WSL2, install native Chromium instead.
 
 ## Repository layout
 
@@ -416,7 +427,9 @@ src/
 │   ├── deadlineText.js       human-readable deadline text extraction
 │   ├── markers.js            durable posted-channel markers
 │   ├── shape.js              job/scholarship → event-shape normalizer
-│   └── formatting.js         event/job/scholarship message renderers
+│   ├── formatting.js         event/job/scholarship message renderers
+│   ├── cache.js              load/save/quarantine + common cache mutations
+│   └── validation.js         /api/add-event input validation
 ├── scrapers/
 │   ├── browser.js            shared puppeteer-extra + stealth browser
 │   ├── page.js               stealth page setup, __resolveImageSrc helper
@@ -426,14 +439,18 @@ src/
 │   ├── sanitize.js           scraper-side field cleanup
 │   ├── selectors.js          fallback-chain DOM extraction
 │   ├── diagnostics.js        block / drift / empty classifier
+│   ├── alerts.js             source-failure alert subsystem
+│   ├── jobs.js               job-specific parsers + sanitizer
+│   ├── scholarships.js       scholarship-specific deadline + builder
 │   ├── registry.js           filesystem plugin discovery
-│   ├── extractors/           site-specific DOM extraction (gitignored)
-│   └── sources/              thin orchestration wrappers (committed)
+│   ├── scrapeAll.js          top-level parallel orchestration
+│   ├── extractors/           site-specific DOM extraction (one file per source)
+│   └── sources/              thin orchestration wrappers (one file per source)
 ├── posting/                  post pipeline, autopost tracks, scheduling
 ├── discord/                  command handlers, bot extensions
 ├── web/                      express /api/* routes
-└── integrations/             supabase.js, websiteSync.js
-scripts/maintenance/          migration, cache cleaners, one-shot tools
+└── integrations/             supabase.js, websiteSync/
+scripts/                      verify-source.js + one-shot maintenance tools
 data/                         runtime state (gitignored): cache, audit log, markers
 ```
 
@@ -474,13 +491,17 @@ grep -l "target title" data/posted-channel-markers/*.json
 
 If the process is offline when a cron slot fires (laptop asleep, container restart), the catch-up check at the next boot runs a scrape to catch up, then gets out of the way. The original cron schedule is not shifted. Toggle with `/settings toggle-missed-scrape-catchup`.
 
+### Source-failure alerts
+
+When a source fails `N` scrapes in a row (default 3), the bot posts to `ALERTS_CHANNEL_ID` with a role ping if `ALERTS_PING_ROLE_ID` is set. Cooldown is 60 minutes per source — a sustained outage logs every occurrence to the audit file but only pings the channel once per hour. Verdicts that trigger alerts: `blocked`, `dom_drift_listing`, `dom_drift_detail`, `parse_failed`, `extractor_not_implemented`, and `empty`.
+
 ### Importing existing cache data
 
 If you have a `cache.json` and `posted-channel-markers/` directory from a prior deployment and want to bring them into this layout, use the maintenance script:
 
 ```bash
-node scripts/maintenance/migrate-from-legacy.js --from /path/to/old/data --dry-run
-node scripts/maintenance/migrate-from-legacy.js --from /path/to/old/data
+node scripts/maintenance/migrate-from-legacy.js --from /path/to/old/repo --dry-run
+node scripts/maintenance/migrate-from-legacy.js --from /path/to/old/repo
 ```
 
 The script copies (never moves), aborts if `data/cache.json` already exists, and is safe to re-run. Stop the bot before applying — it writes cache.json directly on disk.
@@ -491,7 +512,7 @@ Adding a new source is a two-file operation. No change to `src/core/`, `src/post
 
 ### The two files
 
-**1. The source wrapper** (committed) — a five-line file at `src/scrapers/sources/<type>/<name>.js`:
+**1. The source wrapper** at `src/scrapers/sources/<type>/<name>.js`:
 
 ```js
 const { runSource } = require('../_orchestrate');
@@ -505,32 +526,11 @@ module.exports = {
 
 The `name` must match the filename stem (the registry warns if it doesn't). The `type` must match the directory it's in (`events`, `jobs`, or `scholarships`) — the registry enforces this.
 
-**2. The extractor stub** (committed) at `src/scrapers/extractors/<type>/<name>.example.js`. Copy any existing stub, adjust the throw message:
+**2. The extractor** at `src/scrapers/extractors/<type>/<name>.js`. The full contract is documented in [`src/scrapers/extractors/README.md`](src/scrapers/extractors/README.md), but the shape is:
 
 ```js
 module.exports = {
-    async extract(page, { progress, meta }) {
-        throw new Error('EXTRACTOR_NOT_IMPLEMENTED: mynewsite — see src/scrapers/extractors/README.md');
-    }
-};
-```
-
-### The real extractor (gitignored)
-
-Now create the real file and implement it:
-
-```bash
-cp src/scrapers/extractors/events/mynewsite.example.js src/scrapers/extractors/events/mynewsite.js
-$EDITOR src/scrapers/extractors/events/mynewsite.js
-```
-
-The full contract is documented in [`src/scrapers/extractors/README.md`](src/scrapers/extractors/README.md), but the shape is:
-
-```js
-module.exports = {
-    // Optional. Runs once per item before common sanitization. Return the
-    // (possibly mutated) item. Useful for source-specific cleanups like
-    // "strip the boilerplate from this field".
+    // Optional. Runs once per item before common sanitization.
     preprocessItem(item) { return item; },
 
     // Required. Do the browser work here. Return { items, meta }.
@@ -561,26 +561,10 @@ module.exports = {
 Don't test through the full bot. Test the extractor in isolation:
 
 ```bash
-cat > /tmp/test-source.js << 'EOF'
-const { withPage, closeBrowser } = require('/path/to/repo/src/scrapers/browser');
-const { ScrapeProgressTracker } = require('/path/to/repo/src/scrapers/progress');
-const { classifyOutcome } = require('/path/to/repo/src/scrapers/diagnostics');
-const src = require('/path/to/repo/src/scrapers/registry').getSource('events', 'mynewsite');
-
-(async () => {
-    const progress = new ScrapeProgressTracker();
-    progress.start(['mynewsite']);
-    try {
-        const result = await src.scrape({ withPage, progress });
-        const verdict = classifyOutcome(result);
-        console.log('items:', result.items.length);
-        console.log('verdict:', verdict.status);
-        console.log('meta:', JSON.stringify(result.meta));
-    } finally { await closeBrowser(); }
-})().catch(e => { console.error('FAILED:', e.message); process.exit(1); });
-EOF
-node /tmp/test-source.js
+node scripts/verify-source.js mynewsite
 ```
+
+Runs the extractor directly against the live site — no bot, no Discord, no cron. Prints item count, verdict (`ok` / `dom_drift_listing` / `dom_drift_detail` / `blocked` / `empty` / `parse_failed`), listing/detail counts, and a 3-item sample.
 
 ### When a source drifts
 
@@ -597,12 +581,13 @@ To fix:
 2. In a browser devtools session, inspect the current page — find the equivalent element.
 3. Add the new selector at the **front** of the fallback chain (so the primary reflects reality).
 4. Note the drift in the file's "Selector drift history" comment, with the date.
+5. Re-run `node scripts/verify-source.js <name>` to confirm.
 
 The chain means the source may keep working even before you fix it — the fallback catches minor class changes. But the warning fires the moment the primary stops matching, so you can fix it before the fallback also stops matching.
 
 ## Troubleshooting
 
-**"0 items scraped" but no error.** Run the diagnostic script in "Testing a new source" above. `verdict: dom_drift_listing` or `dom_drift_detail` means selector drift. `verdict: blocked` means captcha/cloudflare. `verdict: empty` means the source is genuinely empty.
+**"0 items scraped" but no error.** Run `node scripts/verify-source.js <name>`. `verdict: dom_drift_listing` or `dom_drift_detail` means selector drift. `verdict: blocked` means captcha/cloudflare. `verdict: empty` means the source is genuinely empty.
 
 **"Post failed: no_image".** Live posts require a valid image URL. Use **Customize** to add one, or post to Test only. Scholarships are exempt from this gate.
 
@@ -616,19 +601,25 @@ The chain means the source may keep working even before you fix it — the fallb
 
 **"Bot is in multiple guilds but only responds in one".** That's the design. `HOME_GUILD_ID` gates all commands. Adding the bot elsewhere grants no access.
 
+**"`scholarshipsads` returns 0 items".** Cloudflare-challenged. The extractor deliberately scrapes only page 1 of each category, then stops. To pass Cloudflare at all, you need a warm browser profile — set `BROWSER_EXECUTABLE_PATH` and `BROWSER_USER_DATA_DIR` to a real Brave/Chrome profile that has cleared Cloudflare for this site once. Windows deployments only; WSL2 falls back to bundled Chromium and will be blocked.
+
 ## Limitations
 
 **Data**
-- Scraper sources are third-party sites with no published APIs. Selector drift happens — the `pickOne` fallback chains and `classifyOutcome` diagnostics make drift visible, but they don't prevent it.
+
+- Scraper sources are third-party sites with no published APIs. Selector drift happens — the `pickOne` fallback chains and `classifyOutcome` diagnostics make drift visible, but they don't prevent it. The `verify-source.js` script makes per-source testing a 60-second operation.
+- Some sources are structurally limited. `scholarshipsads` stops at page 1 per category (Cloudflare); `kgarira` returns the same items on each pagination page (deduped downstream, but wastes fetch time). Both are captured accurately (correct items, deduped) — the limitation is throughput, not data.
 - The website sync excludes items that fail `hasValidImage` or carry unresolved data-quality warnings. That's intentional (public site quality gate) but it means some real events never reach the site.
 - The bot archival Supabase caps at 1000 posted items per type. `republish-all` can only re-upload what's in that window.
 
 **Method**
+
 - Fuzzy dedup (Levenshtein ≥ 0.85) is a *secondary* signal, never standalone. Different sources' wordings of the same event are caught by the exact canonical-date match most of the time; fuzzy catches the rest. Neither is perfect — a title that shifts too far will still produce a duplicate.
 - The website user-collision check is title-first-word + date, not fuzzy. It prevents obvious collisions but not subtle ones.
 - The website sync's prune step is destructive by design — it deletes orphan rows. The three guards make accidental mass-delete unlikely, but not impossible: a source returning a wrong-shaped set can still slip past the >50% check if the wrong set is small.
 
 **Not done**
+
 - No machine translation. Non-English source content is posted as-is.
 - No image-host mirroring. Posted images are hotlinked from the source. If the source removes an image, the Discord attachment stays (Discord caches it) but the audit log's reference to it goes stale.
 - No source-side rate-limit awareness. A source that starts returning 429 will be caught by the drift classifier as a failure and logged, but not throttled automatically.
