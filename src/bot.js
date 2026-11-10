@@ -238,6 +238,12 @@ class EventsBot {
         return pipeline.reconcilePendingAgainstMarkers(this, channelIds);
     }
 
+    // ---------- Scrape entry (used by cron, missed-catchup, /scrape) ----------
+
+    async scrapeAndNotify(site = 'all') {
+        return require('./discord/scrapeAndNotify').scrapeAndNotify(this, site);
+    }
+
     // ---------- Consistency wrappers ----------
 
     runConsistencyCheck() { return consistency.runConsistencyCheck(this); }
