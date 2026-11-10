@@ -143,9 +143,27 @@ async function main() {
 
     // ---- Step 2 — Discord token ----
     tui.step(1, 8, 'Discord bot token');
-    tui.info('Get this from https://discord.com/developers/applications → your app → Bot → Reset Token');
+    if (DEMO) {
+        tui.info('Demo mode — any 3 dot-separated strings work (e.g. "demo.token.here").');
+        tui.info('Real mode would ask for a valid Discord bot token from the Developer Portal.');
+    } else {
+        tui.info('Get this from https://discord.com/developers/applications → your app → Bot → Reset Token');
+    }
     console.log('');
-    const token = await promptValidation('Token', v.validateDiscordToken, { mask: true });
+
+    // In demo mode use a lenient validator — the token is never sent to real
+    // Discord. In real mode use the strict one.
+    const tokenValidator = DEMO
+        ? (raw) => {
+            const trimmed = String(raw || '').trim();
+            if (!trimmed) return { ok: false, reason: 'Token is empty.' };
+            const parts = trimmed.split('.');
+            if (parts.length !== 3) return { ok: false, reason: `Demo token must have 3 dot-separated segments (got ${parts.length}).` };
+            return { ok: true, normalized: trimmed };
+        }
+        : v.validateDiscordToken;
+
+    const token = await promptValidation('Token', tokenValidator, { mask: true });
 
     // ---- Step 3 — Connect + pick guild ----
     tui.step(2, 8, 'Connect to Discord and pick your guild');
