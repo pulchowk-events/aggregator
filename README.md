@@ -16,7 +16,7 @@
 |---|---|---|
 | **10** scraped<br/><sub>4 events · 4 jobs · 2 scholarships</sub> | **9** routed<br/><sub>sports, software, hardware, gaming, music, business, misc, jobs, scholarships</sub> | **3** targets<br/><sub>Discord test · Discord live · Supabase website</sub> |
 
-[Architecture](#architecture) · [Runbook](#operations) · [Adding a source](#adding-a-source) · [Issues](https://github.com/pulchowk-events/aggregator/issues)
+[Architecture](#architecture) · [Quickstart](#quickstart) · [Setup wizard](#setup-wizard) · [Adding a source](#adding-a-source) · [Docs](#documentation) · [Issues](https://github.com/pulchowk-events/aggregator/issues)
 
 </div>
 
@@ -25,22 +25,16 @@
 ## Contents
 
 - [Overview](#overview)
-- [What sets it apart](#what-sets-it-apart)
+- [Features](#features)
 - [Sources supported](#sources-supported)
 - [Architecture](#architecture)
-  - [Scraper plugin system](#scraper-plugin-system)
-  - [Posting pipeline](#posting-pipeline)
-  - [Deduplication and durability](#deduplication-and-durability)
-  - [Delivery targets](#delivery-targets)
-- [Lifecycle of one item](#lifecycle-of-one-item)
 - [Quickstart](#quickstart)
-- [First run walkthrough](#first-run-walkthrough)
+- [Setup wizard](#setup-wizard)
+- [Adding a source](#adding-a-source)
 - [Commands](#commands)
 - [Configuration](#configuration)
 - [Repository layout](#repository-layout)
-- [Operations](#operations)
-- [Adding a source](#adding-a-source)
-- [Troubleshooting](#troubleshooting)
+- [Documentation](#documentation)
 - [Limitations](#limitations)
 - [License](#license)
 
@@ -50,33 +44,25 @@
 
 Events, jobs, and scholarship calls are posted across dozens of sites in Nepal — Khalti, KataJaam, NepVents, Kgarira, SathiJob, InternSathi, MeroJob, KumariJob, ScholarshipsAds, EACEA — each with its own page structure, its own taxonomy, its own idea of what "date" means. Keeping a Discord server and a website current against all of them by hand is not tractable.
 
-This bot automates the whole loop. On a cron it:
+This bot automates the whole loop. On a cron it scrapes every configured source in parallel through a headless browser, classifies each item into a category, deduplicates against a durable on-disk marker per (item, channel) pair, queues new items for human review, posts them on demand or on an autopost schedule, archives posted items to a Supabase project, mirrors a curated subset to the public website's Supabase, and audits every decision into an append-only local JSONL file.
 
-1. **scrapes** every configured source in parallel through a headless browser;
-2. **classifies** each item into a category (sports, software, hardware, gaming, music, business, misc, jobs, scholarships) using a keyword dictionary plus per-source hints;
-3. **deduplicates** against what's already been posted using a durable on-disk marker per (item, channel) pair — markers survive process restarts and are the source of truth, not the in-memory cache;
-4. **queues** new items as *pending* for human review, with per-field data-quality warnings surfaced inline;
-5. **posts** on demand or on an autopost schedule — to *test* channels first if configured, then to *live* channels during a 6 AM–10 PM Nepal-time window;
-6. **archives** posted items to a bot-level Supabase table and mirrors a public subset to the website's own Supabase;
-7. **audits** every decision — from scraping to dedup to posting — into a local append-only JSONL file and, best-effort, into a Discord audit channel.
+## Features
 
-The whole system is built around four principles: every concern lives in exactly one file, every decision is audited, every source is a drop-in plugin, and every "0 items" is distinguishable from every other "0 items".
+- **A source is two files.** Adding a website to scrape is: create `src/scrapers/sources/<type>/<name>.js` (five-line wrapper), then `src/scrapers/extractors/<type>/<name>.js` and implement `extract()`. The registry discovers both at boot. Nothing in `src/core/`, `src/posting/`, or `src/discord/` needs to know the source exists.
 
-## What sets it apart
+- **Fail-closed duplicate prevention.** Every (item, channel) post is guarded by a marker file on disk. Markers carry a `postedAt` timestamp when the send succeeds. If the process crashes between confirming the marker and removing the item from the pending queue, the next startup reconciles it. If a marker's heartbeat is stale, the bot checks Discord itself before re-posting. Duplicates become near-impossible, at the cost of the rare skip — the correct trade-off for a community feed.
 
-- **A source is two files.** Adding a new website to scrape is: create `src/scrapers/sources/<type>/<name>.js` (five-line wrapper around `runSource()`), then create `src/scrapers/extractors/<type>/<name>.js` and implement `extract()`. The registry discovers both at boot. Nothing in `src/core/`, `src/posting/`, or `src/discord/` needs to know the source exists.
-
-- **Fail-closed duplicate prevention.** Every (item, channel) post is guarded by a marker file on disk. Markers carry a `postedAt` timestamp when the send succeeds. If the process crashes between confirming the marker and removing the item from the pending queue, the next startup reconciles it. If a marker's heartbeat is stale, the bot checks Discord itself before re-posting. Duplicates become near-impossible, at the cost of the rare skip — which is the correct trade-off for a community feed.
-
-- **Test → live promotion gate.** Autopost can be configured to post only to test channels, letting a human eyeball each item before it goes live. Live posts are further constrained to a 6 AM–10 PM Nepal-time window because live posts ping roles, and 3 AM pings burn goodwill.
+- **Test → live promotion gate.** Autopost can post only to test channels, letting a human eyeball each item before it goes live. Live posts are further constrained to a 6 AM–10 PM Nepal-time window because live posts ping roles, and 3 AM pings burn goodwill.
 
 - **Drift detection in the scraper layer.** Every source reports `{ items, meta }` where `meta` carries `listingHits`, `detailPagesVisited`, `detailParseFailures`, and `looksBlocked`. When a run returns zero items, the classifier (`classifyOutcome` in `src/scrapers/diagnostics.js`) distinguishes between "genuinely empty" (fine), "the listing selector is stale" (drift at listing), "the detail selector is stale" (drift at detail), and "the site blocked us" (captcha / Cloudflare). Silent zeros become actionable signals.
 
-- **Resilient selectors, not brittle ones.** Field extractions that are known to be unstable go through `pickOne` / `pickAll` (`src/scrapers/selectors.js`) with a fallback chain. When KataJaam changed its card class, one selector stopped matching and the bot returned zero events with no error. The current design logs a drift warning the moment a fallback fires, and continues working through minor class shuffles.
+- **Resilient selectors, not brittle ones.** Field extractions known to be unstable go through `pickOne` / `pickAll` (`src/scrapers/selectors.js`) with a fallback chain. When KataJaam changed its card class, one selector stopped matching and the bot returned zero events with no error. The current design logs a drift warning the moment a fallback fires, and continues working through minor class shuffles.
 
 - **Audit-first.** `auditLog()` writes a line to `data/audit-log.jsonl` unconditionally. The Discord mirror is best-effort and never blocks the caller. A Discord outage can never mean zero record exists. Every dedup decision, every post outcome, every Discord API error is logged with the full payload — the local file is the forensic source of truth, not Discord.
 
-- **Two-tier delivery.** Every item type has two delivery tracks: a bot archival Supabase (service-role, full records) and the public website's Supabase (browser-client, a curated subset filtered by `hasValidImage`, data-quality warnings, and a user-collision check). The two are independent — either can fail without affecting the other, and either can be dry-run independently.
+- **Two-tier delivery.** Every item type has two delivery tracks: a bot archival Supabase (service-role, full records) and the public website's Supabase (a curated subset filtered by `hasValidImage`, data-quality warnings, and a user-collision check). The two are independent — either can fail without affecting the other, and either can be dry-run independently.
+
+- **Guided wizards.** Two interactive CLIs: one to bootstrap a fresh deployment end-to-end (`scripts/setup/`) and one to scaffold a new scraper source against an LLM prompt (`scripts/wizard/`). Both can be walked with mock data (`--demo` / `--no-interactive`) so you can inspect the flow before running it.
 
 ## Sources supported
 
@@ -92,6 +78,8 @@ The whole system is built around four principles: every concern lives in exactly
 | Jobs | KumariJob | `kumarijob.com` | Normal listing with real pagination. Detail pages can apply offsite (LinkedIn, employer ATS). |
 | Scholarships | ScholarshipsAds | `scholarshipsads.com` | Listing cards carry everything except deadline — one extra detail-page visit per item to read the real date. Cloudflare-challenged past page 1 of each category; extractor deliberately stops after page 1. |
 | Scholarships | Erasmus Mundus | `eacea.ec.europa.eu` | Two-hop scrape. Deadlines are intentionally `unknown` (project duration ≠ application deadline). |
+
+Full per-source deep dive (structural quirks, drift history, extraction strategy): [`docs/scrapers.md`](docs/scrapers.md#reference-the-10-current-sources).
 
 ## Architecture
 
@@ -129,115 +117,9 @@ flowchart TD
     WebsiteDB -.-> Audit
 ```
 
-Every decision point — sanitize, dedup, category, post outcome, Discord error — is a single `auditLog()` call, local-first and Discord-mirrored.
+Three properties the diagram is designed to make obvious: **one entry path into the cache** (only `processScrapedEvents` pushes items), **one entry path out** (only `postEventToCategory` sends Discord messages), and **one audit surface** (every decision writes through `auditLog`). Every module boundary in the repo exists to preserve those three properties.
 
-### Scraper plugin system
-
-Sources are discovered from the filesystem at boot:
-
-```
-src/scrapers/sources/
-├── events/
-│   ├── khalti.js       ← exports { name, type, scrape }
-│   ├── katajaam.js
-│   ├── nepvents.js
-│   └── kgarira.js
-├── jobs/
-└── scholarships/
-```
-
-Each source file is a five-line wrapper around `runSource()` (`src/scrapers/sources/_orchestrate.js`), which owns:
-
-- Extractor loading
-- Retry and browser lifecycle
-- Common sanitization (description trim, image validation, field clean)
-- Result shape `{ items, meta }` consumed by `classifyOutcome()`
-
-The extractor — the piece that contains site-specific DOM knowledge — lives at `src/scrapers/extractors/<type>/<name>.js`. See [`src/scrapers/extractors/README.md`](src/scrapers/extractors/README.md) for the contract and drift-fixing guide.
-
-### Posting pipeline
-
-An item flows through these states:
-
-```
-scraped → pending → testPosted → posted
-                ↘ skipped
-                ↘ expired (date passed)
-                ↘ needsAttentionExpired (flagged >N days, archived)
-```
-
-At each transition, the item is written to `data/cache.json` (debounced, atomic via temp-file-rename). The pipeline is not queue-based — a single mutex serializes cache mutations and posting, so concurrent autopost ticks and manual `/pending` clicks never race.
-
-Post attempts go through a four-way check:
-
-1. Category paused? (`/category pause`)
-2. Global ping enabled? (if a ping is requested)
-3. For live posts: has a valid image? (scholarships exempt)
-4. For live posts: any unresolved data-quality warnings? (a manual `force` bypasses this)
-
-If all pass, a marker file is claimed (`wx` flag — fails if it exists, which is the dedup guarantee). Image is fetched and attached. Success → marker is confirmed (`postedAt` set). Failure → marker is released (deleted).
-
-### Deduplication and durability
-
-Two independent dedup signals run side-by-side:
-
-- **Exact key** — `normalizedTitle|canonicalDate`. Deterministic, cheap, fast. Catches the same item scraped twice.
-- **Fuzzy match** — Levenshtein similarity ≥ 0.85 (0.93 for scholarships, because titles share more boilerplate) within the same canonical date. Catches minor wording drift between sources on the same event.
-
-The *authoritative* "was this posted?" answer is never in memory — it's the marker file. On startup the bot reconciles: for any item still in `pendingEvents` that has a confirmed marker, the item is moved to `postedEvents`. On a stale reservation, Discord is queried directly — if the message exists, the reservation is upgraded to confirmed; if the check itself fails (rate limit, permissions, no title), the reservation is treated as *still blocking* (fail closed).
-
-Markers are retained for `MARKER_RETENTION_DAYS` (default 180), then swept by a daily cron.
-
-### Delivery targets
-
-Four downstream targets, independent of each other:
-
-| Target | Purpose | Failure mode |
-|---|---|---|
-| **Discord (test)** | Human review, no ping | Logs warning; nothing sent |
-| **Discord (live)** | Public post, role ping | Logs error; marker released for retry |
-| **Bot Supabase** | Archival, service-role, all item types | Batch fails, item remains unsynced, retried next tick |
-| **Website Supabase** | Public website, curated subset | Prune aborts on >50% loss, otherwise row-by-row delete |
-
-The website sync is guarded by three safety rails:
-
-- **Empty-scrape guard** — if the eligible set is empty but the website has bot rows, prune aborts (the scrape probably failed).
-- **Delete-threshold guard** — if >50% of bot rows would be pruned, abort and alert.
-- **User-collision guard** — if a user-submitted event exists on the same date with a similar title, the bot row is skipped (user submissions take precedence).
-
-## Lifecycle of one item
-
-Every item — event, job, or scholarship — goes through the same ten stages. This is the mental model you need to understand everything else in the repo.
-
-**1. Extraction.** A scraper plugin's `extract()` visits the source site through a headless browser and returns an array of raw items, all shaped like events (jobs and scholarships get remapped onto the event shape by `core/shape.js` — see below). The extractor also fills in `meta` counters so a zero-result run can be diagnosed.
-
-**2. Common sanitize.** Every item passes through `sanitizeScrapedEvent()` (in `scrapers/sanitize.js`), which catches fields the scraper mislabeled ("date" containing "🎵Music", "price" containing a category chip). Suspect fields are cleared and a `dataQualityWarning` is added — the item still survives, but it's flagged for human review.
-
-**3. Shape normalization.** `core/shape.js` remaps job/scholarship fields onto the event field names the rest of the pipeline expects (`date` gets the deadline, `image` gets the company logo, etc.). It also sets `itemType: 'job' | 'scholarship'`. From this point on, every downstream stage treats it identically to an event.
-
-**4. Dedup.** `getEventDedupKey()` (in `bot.js`) computes `normalizedTitle|canonicalDate`. The item is compared against every existing cache array (`postedEvents`, `pendingEvents`, `skippedEvents`, `expiredEvents`) plus a fuzzy match against `postedEvents` (Levenshtein similarity). The verdict is written to `audit-log.jsonl` with the full item payload, so a "why wasn't this posted?" question is always answerable after the fact.
-
-**5. Queue.** New items are pushed to `pendingEvents` with `firstSeenAt = now` (used by the needs-attention-expiry sweep). Items may or may not survive the next few stages — the queue is deliberately human-gated.
-
-**6. Review.** A human runs `/pending`, gets an embed per item with four buttons: **Post to Live**, **Post to Test**, **Customize**, **Skip**. Customize opens a modal that overwrites title/description/date/location/image. Skip moves the item to `skippedEvents`. Every choice goes through the audit log.
-
-**7. Post.** `postEventToCategory()` is the single choke point for all posts (manual button, autopost tick, dashboard API). It:
-
-  1. Checks the paused-categories gate, has-valid-image gate, and data-quality-warning gate.
-  2. Reserves a marker file (fails if one exists — this is the duplicate block).
-  3. Fetches the image (with a 15 s timeout — falls back to text-only if it fails).
-  4. Sends to Discord (with or without a role ping, based on the ping settings).
-  5. Confirms the marker (`postedAt` set) on success, releases it on failure.
-  6. Writes an `auditLog('post_event_outcome', ...)` line either way, so a skipped post is never silent.
-
-**8. State transition.** On successful live post, the item is removed from `pendingEvents` and pushed to `postedEvents`. On successful test post, `testPosted` and `testPostedAt` are set and the item stays pending.
-
-**9. Sync.** Two independent Supabase syncs run in the background:
-
-  - **Bot archival** (`integrations/supabase.js`) — service-role, full item records, batched, retries on failure.
-  - **Website** (`integrations/websiteSync.js`) — browser-client key, curated subset filtered by `hasValidImage`, no unresolved warnings, no user-collision. Prune guards prevent accidental mass-delete.
-
-**10. Audit.** Every step above has already written to `data/audit-log.jsonl`. The Discord mirror (best-effort) puts the same entries in the audit channel. This is the forensic record.
+For the full mental model — the ten-stage lifecycle of an item, the startup sequence, why `src/core/` is pure functions while `src/posting/` owns cache mutations, and the four load-bearing chokepoints — see [`docs/architecture.md`](docs/architecture.md).
 
 ## Quickstart
 
@@ -251,7 +133,9 @@ cp .env.example .env
 npm start
 ```
 
-Node 18+ required. Puppeteer downloads Chromium (~150 MB) on install; set `BROWSER_EXECUTABLE_PATH` and `BROWSER_USER_DATA_DIR` in `.env` to use an existing browser instead (see Configuration below for the Windows-only note).
+Node 18+ required. Puppeteer downloads Chromium (~150 MB) on install; set `BROWSER_EXECUTABLE_PATH` and `BROWSER_USER_DATA_DIR` in `.env` to use an existing browser instead (Windows deployments — see [Configuration](#configuration) for the WSL2 caveat).
+
+To fill `.env` interactively instead of by hand, use the [setup wizard](#setup-wizard). To keep the process running in production (systemd / Task Scheduler / pm2), see [`docs/operations.md#keeping-the-process-alive`](docs/operations.md#keeping-the-process-alive).
 
 Verify any single source in isolation before trusting a full scrape:
 
@@ -262,60 +146,69 @@ node scripts/verify-source.js katajaam
 
 This runs the extractor directly against the live site — no bot, no Discord, no cron — and prints item count, verdict, and a sample.
 
-## First run walkthrough
+## Setup wizard
 
-Assuming `.env` is filled in and `npm start` is running, this is the intended first-run flow.
-
-**1. Verify startup.** The console should show:
-
-```
-✅ Bot logged in as <bot-tag>
-✅ Slash commands registered to guild <HOME_GUILD_ID> only.
-🕒 Automatic scraping scheduled with cron "0 */6 * * *"
-🌐 Dashboard API available at http://localhost:3001
-```
-
-Any `⚠️ Startup configuration warnings:` block lists the env vars that are still empty. Fix them, restart.
-
-**2. Check the health dashboard.** Run `/status` in Discord. You should see pending/posted/skipped counts, autopost tracks all off, and a next-scrape time in the future. If any channel shows "unreachable", the bot lacks permissions there.
-
-**3. Trigger a manual scrape.** Run `/scrape`. It fires the same pipeline the cron would, into the logs channel with a progress bar. When it finishes:
-
-- Every newly-scraped item is added to `pendingEvents`.
-- Every item that failed a data-quality check is flagged, but still visible.
-- The logs channel gets a follow-up embed per item with the review buttons.
-
-**4. Review the first batch.** Run `/pending`. Walk through every item. For each, either **Customize** (fix a field), **Post to Test** (see how it looks without pinging anyone), or **Skip** (irrelevant / already posted elsewhere).
-
-For a first run, aim to **Post to Test** on 5-10 items and inspect them in your test channels. This is your only chance to catch rendering bugs (bad image URLs, truncated descriptions, missing fields) before live.
-
-**5. Promote to live.** For an item you already test-posted and approved, click **Post to Live** from `/pending`. It posts with a role ping if the ping settings allow it.
-
-**6. Set up autopost.** Once you trust the queue, run `/autopost start-live type:events interval_minutes:60`. This starts an independent 60-minute timer that will post one eligible event from `pendingEvents` each tick. Jobs and scholarships get their own timers — they don't compete.
-
-Posting gates still apply. Anything with a data-quality warning, anything with no valid image (except scholarships), anything within `autopostMinLeadDays` of its date, and anything outside the 6 AM–10 PM window will be skipped. That's the safety net working, not a bug.
-
-**7. Watch the audit log.** Every 15 minutes, tail the log:
+For a fresh deployment from zero, the setup wizard walks the entire flow interactively: Discord token → guild selection → category channel pick/create → logs/audit/alerts channels → ping roles → Supabase (both projects) → dashboard key → browser profile → `.env` write (with backup + diff preview) → optional boot test.
 
 ```bash
-tail -20 data/audit-log.jsonl | jq -r '"\(.level)\t\(.category)\t\(.message)"'
+# Walk the entire flow with mock data (never touches .env, Discord, or Supabase)
+node scripts/setup/index.js --demo
+
+# Real setup
+node scripts/setup/index.js
 ```
 
-If something is skipping when it shouldn't, grep for it:
+Every step asks before doing anything. Every side effect is opt-in. `.env` is never written without showing a diff and confirming. The demo mode writes to `data/demo-setup.env` (gitignored) so you can inspect the output without committing anything.
+
+Full walkthrough of every step, what it writes, and how to undo: [`docs/operations.md#setup-wizard`](docs/operations.md#setup-wizard).
+
+## Adding a source
+
+Adding a new source is a two-file operation. No change to `src/core/`, `src/posting/`, or `src/discord/` is needed.
+
+**1. The wrapper** at `src/scrapers/sources/<type>/<name>.js`:
+
+```js
+const { runSource } = require('../_orchestrate');
+
+module.exports = {
+    name: 'mynewsite',
+    type: 'events',
+    scrape: (ctx) => runSource('mynewsite', 'events', ctx)
+};
+```
+
+**2. The extractor** at `src/scrapers/extractors/<type>/<name>.js`:
+
+```js
+module.exports = {
+    async extract(page, { progress, meta }) {
+        // All browser work here. Return { items, meta }.
+        // The orchestrator handles: browser lifecycle, retry, common
+        // sanitization, description trim, image URL validation, and
+        // diagnostic classification. Do NOT duplicate that here.
+        return { items: [...], meta };
+    }
+};
+```
+
+Commit both. Verify:
 
 ```bash
-jq -r 'select(.category=="autopost_filter_skip") | "\(.data.title)\t\(.data.filter)"' data/audit-log.jsonl | tail -20
+node scripts/verify-source.js mynewsite
 ```
 
-**8. Tune.** Every behavioural knob is overridable at runtime. The ones you'll adjust most often:
+When it returns `verdict: ok` with `items > 0`, the source is live. The registry discovers it on the next scrape run.
 
-- `/settings set-lead-days N` — minimum days before an event date that autopost will consider it.
-- `/ping category category:X state:off` — silence pings for one category without turning them off globally.
-- `/category pause category:X` — block one category from going live entirely.
-- `/blacklist add type:keyword value:spam` — auto-skip anything matching "spam" on the next scrape.
-- `/autopost set-interval type:events target:live interval_minutes:0` — back-to-back (no wait between posts).
+To scaffold a new source against an LLM prompt instead of writing the extractor by hand:
 
-**9. Back up.** Run `/backup` once a week. The bot's whole state is `cache.json` — losing it means losing your posted history, and re-scraping will re-post everything. Alternatively, `cp data/cache.json data/cache.json.bak.$(date +%s)` on a cron.
+```bash
+node scripts/wizard/index.js <url> <name> <type>
+```
+
+This dumps the site's DOM structure, classifies its shape (`jsonld-first` / `listing-to-detail` / `single-page-cards`), writes a ready-to-paste prompt for DeepSeek / ChatGPT / Claude, and walks you through pasting the LLM's code back in — with an automatic verify-source step at the end.
+
+Full walkthrough (both manual and wizard paths, plus the drift-fixing playbook): [`docs/scrapers.md#adding-a-source-manual`](docs/scrapers.md#adding-a-source-manual) and [`docs/scrapers.md#adding-a-source-guided`](docs/scrapers.md#adding-a-source-guided).
 
 ## Commands
 
@@ -402,9 +295,11 @@ Two independent config layers, both loaded at boot.
 
 - `emojis.js` — all custom emoji references. Replace with your server's emoji IDs (right-click → Copy ID with Developer Mode on).
 - `roles.js` — ping role IDs for the 7 hardcoded categories. Jobs and scholarships read from `.env`.
-- `constants.js` — behavioural tunables: fuzzy thresholds, live-window hours, cache caps, retention periods, keyword dictionaries, safety note text. Nothing here is a secret; everything is overridable at runtime via `/settings`.
+- `constants.js` — behavioural tunables: fuzzy thresholds, live-window hours, cache caps, retention periods, keyword dictionaries, safety note text.
 
 **Note on `BROWSER_EXECUTABLE_PATH`:** the path is host-specific. Windows deployments resolve `C:/Program Files/...` fine. WSL2 or native Linux deployments can't resolve Windows paths and fall back to bundled Chromium — this is intentional fail-soft, not a bug. If you need a warm profile on WSL2, install native Chromium instead.
+
+Full env var reference, tuning constants, and per-file forking notes: [`docs/operations.md#configuration-reference`](docs/operations.md#configuration-reference).
 
 ## Repository layout
 
@@ -450,158 +345,31 @@ src/
 ├── discord/                  command handlers, bot extensions
 ├── web/                      express /api/* routes
 └── integrations/             supabase.js, websiteSync/
-scripts/                      verify-source.js + one-shot maintenance tools
+scripts/
+├── verify-source.js          run one scraper in isolation (the "unit test")
+├── setup/                    interactive setup wizard (Discord, Supabase, .env)
+├── wizard/                   interactive new-source wizard (LLM prompt generator)
+├── shared/                   cross-wizard helpers (clipboard, URL open, ...)
+└── maintenance/              one-shot migration and cleanup tools
+docs/
+├── architecture.md           mental model, module boundaries, chokepoints
+├── scrapers.md               scraper plugin system + drift playbook
+└── operations.md             deployment, config, troubleshooting, backups
 data/                         runtime state (gitignored): cache, audit log, markers
 ```
 
-## Operations
+## Documentation
 
-### Audit log
+Four docs, each scoped to one audience.
 
-Every decision writes to `data/audit-log.jsonl` first, unconditionally. The Discord audit mirror fires best-effort and never blocks the caller.
+| Doc | Audience | What's inside |
+|---|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | Anyone modifying the code | System overview diagram, lifecycle of one item, startup sequence, module boundaries, the four chokepoints |
+| [`docs/scrapers.md`](docs/scrapers.md) | Anyone touching a scraper | Plugin system, extractor contract, drift classification, fallback chains, `verify-source.js`, `wizard/index.js`, drift-fixing playbook, per-source reference |
+| [`docs/operations.md`](docs/operations.md) | Anyone running the bot | Process supervision, full env var reference, tuning constants, monitoring queries, backups, migration, setup wizard, troubleshooting matrix, alerts, log rotation |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Anyone opening a PR | The four load-bearing invariants, code style, testing philosophy, commit and PR conventions, how to file a useful bug report |
 
-```bash
-# tail the last 20 entries
-tail -20 data/audit-log.jsonl | jq .
-
-# every dedup decision in the last hour
-jq -r 'select(.category=="dedup_decision") | .message' data/audit-log.jsonl | tail -100
-
-# every Discord API error today
-jq -r 'select(.category=="discord_api_error") | .data.errorMessage' data/audit-log.jsonl | tail -50
-```
-
-The file rotates at 5000 lines or 5 MB, whichever comes first. The Discord channel is the alert feed; the local file is the archive.
-
-### Posted markers
-
-`data/posted-channel-markers/*.json` — one file per (item, channel) pair. Filename is `sha1(dedupKey::channelId)`. Do not edit by hand; use `/undo` to release a marker properly.
-
-To find all markers for one item:
-
-```bash
-grep -l "target title" data/posted-channel-markers/*.json
-```
-
-### Cache
-
-`data/cache.json` — debounced writes with atomic temp-file-rename. Corrupt-file quarantine is built in: on load failure the file is renamed to `cache.json.bak.<timestamp>` and the bot starts empty (with an audit-log error entry naming the quarantine path).
-
-### Missed-scrape catch-up
-
-If the process is offline when a cron slot fires (laptop asleep, container restart), the catch-up check at the next boot runs a scrape to catch up, then gets out of the way. The original cron schedule is not shifted. Toggle with `/settings toggle-missed-scrape-catchup`.
-
-### Source-failure alerts
-
-When a source fails `N` scrapes in a row (default 3), the bot posts to `ALERTS_CHANNEL_ID` with a role ping if `ALERTS_PING_ROLE_ID` is set. Cooldown is 60 minutes per source — a sustained outage logs every occurrence to the audit file but only pings the channel once per hour. Verdicts that trigger alerts: `blocked`, `dom_drift_listing`, `dom_drift_detail`, `parse_failed`, `extractor_not_implemented`, and `empty`.
-
-### Importing existing cache data
-
-If you have a `cache.json` and `posted-channel-markers/` directory from a prior deployment and want to bring them into this layout, use the maintenance script:
-
-```bash
-node scripts/maintenance/migrate-from-legacy.js --from /path/to/old/repo --dry-run
-node scripts/maintenance/migrate-from-legacy.js --from /path/to/old/repo
-```
-
-The script copies (never moves), aborts if `data/cache.json` already exists, and is safe to re-run. Stop the bot before applying — it writes cache.json directly on disk.
-
-## Adding a source
-
-Adding a new source is a two-file operation. No change to `src/core/`, `src/posting/`, or `src/discord/` is needed.
-
-### The two files
-
-**1. The source wrapper** at `src/scrapers/sources/<type>/<name>.js`:
-
-```js
-const { runSource } = require('../_orchestrate');
-
-module.exports = {
-    name: 'mynewsite',
-    type: 'events',
-    scrape: (ctx) => runSource('mynewsite', 'events', ctx)
-};
-```
-
-The `name` must match the filename stem (the registry warns if it doesn't). The `type` must match the directory it's in (`events`, `jobs`, or `scholarships`) — the registry enforces this.
-
-**2. The extractor** at `src/scrapers/extractors/<type>/<name>.js`. The full contract is documented in [`src/scrapers/extractors/README.md`](src/scrapers/extractors/README.md), but the shape is:
-
-```js
-module.exports = {
-    // Optional. Runs once per item before common sanitization.
-    preprocessItem(item) { return item; },
-
-    // Required. Do the browser work here. Return { items, meta }.
-    // The orchestrator handles: browser lifecycle, retry, common
-    // sanitization, description trim, image URL validation, and diagnostic
-    // classification. Do NOT duplicate that here.
-    async extract(page, { progress, meta }) {
-        // meta fields to update while running:
-        //   meta.pagesVisited          — page.goto() calls made
-        //   meta.listingHits           — anchor matches across all listings
-        //   meta.detailPagesVisited    — subset that were detail pages
-        //   meta.detailParseFailures   — detail pages where title extraction failed
-        //   meta.looksBlocked          — set true if any page looks captcha'd
-        //
-        // progress fields to report:
-        //   progress.discovered(n)     — after finding n links on a listing
-        //   progress.unitDone(n=1)     — after finishing each item
-        //
-        // Always call unitDone in a finally block — a failed item should
-        // still advance the ETA, not stall the bar.
-        return { items: [...], meta };
-    }
-};
-```
-
-### Testing a new source
-
-Don't test through the full bot. Test the extractor in isolation:
-
-```bash
-node scripts/verify-source.js mynewsite
-```
-
-Runs the extractor directly against the live site — no bot, no Discord, no cron. Prints item count, verdict (`ok` / `dom_drift_listing` / `dom_drift_detail` / `blocked` / `empty` / `parse_failed`), listing/detail counts, and a 3-item sample.
-
-### When a source drifts
-
-Signs a source has drifted:
-
-- `verdict: dom_drift_listing` — every anchor selector matched zero elements across every listing page.
-- `verdict: dom_drift_detail` — listings yielded links, but every detail page failed title extraction.
-- A `⚠️ [selectors] <label>: primary "<X>" matched nothing, fell back to "<Y>"` log line.
-- Sudden item count drop with no error.
-
-To fix:
-
-1. Open the extractor file and find the `SEL` object (or inline selectors).
-2. In a browser devtools session, inspect the current page — find the equivalent element.
-3. Add the new selector at the **front** of the fallback chain (so the primary reflects reality).
-4. Note the drift in the file's "Selector drift history" comment, with the date.
-5. Re-run `node scripts/verify-source.js <name>` to confirm.
-
-The chain means the source may keep working even before you fix it — the fallback catches minor class changes. But the warning fires the moment the primary stops matching, so you can fix it before the fallback also stops matching.
-
-## Troubleshooting
-
-**"0 items scraped" but no error.** Run `node scripts/verify-source.js <name>`. `verdict: dom_drift_listing` or `dom_drift_detail` means selector drift. `verdict: blocked` means captcha/cloudflare. `verdict: empty` means the source is genuinely empty.
-
-**"Post failed: no_image".** Live posts require a valid image URL. Use **Customize** to add one, or post to Test only. Scholarships are exempt from this gate.
-
-**"Post failed: data_quality_warning".** The item has a field-level issue (bad date, mislabeled price, etc). Use **Customize** to fix the flagged field. The warning text names the field.
-
-**"Autopost keeps saying 'nothing eligible'".** The idle throttle logs once per 5 minutes. Check `audit-log.jsonl` for `autopost_filter_skip` entries — the filter name tells you why (`past_filter`, `too_soon_filter`, `has_image_filter`, `data_quality`).
-
-**"Live posts stopped after 10 PM".** Correct behaviour. Live autopost is capped to 6 AM–10 PM Nepal time because live posts ping roles. Test autopost is exempt.
-
-**"`cache.json` was corrupted".** The bot quarantines it to `cache.json.bak.<timestamp>` and starts empty. Restore the backup manually: `cp data/cache.json.bak.<ts> data/cache.json && npm start`.
-
-**"Bot is in multiple guilds but only responds in one".** That's the design. `HOME_GUILD_ID` gates all commands. Adding the bot elsewhere grants no access.
-
-**"`scholarshipsads` returns 0 items".** Cloudflare-challenged. The extractor deliberately scrapes only page 1 of each category, then stops. To pass Cloudflare at all, you need a warm browser profile — set `BROWSER_EXECUTABLE_PATH` and `BROWSER_USER_DATA_DIR` to a real Brave/Chrome profile that has cleared Cloudflare for this site once. Windows deployments only; WSL2 falls back to bundled Chromium and will be blocked.
+Read them in the order that matches what you're about to do. If you're modifying code, `architecture.md` first. If you're adding a source, `scrapers.md` first. If you're operating the bot, `operations.md` first. If you're opening a PR that touches any of the above, `CONTRIBUTING.md` first — the four chokepoints section is the one thing reviewers will block on.
 
 ## Limitations
 
