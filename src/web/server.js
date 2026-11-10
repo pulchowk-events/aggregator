@@ -1,0 +1,191 @@
+// src/web/server.js
+// Express dashboard + /api/* endpoints.
+//
+// Same routes the original bot exposed. Every mutating route is guarded
+// by X-API-Key when DASHBOARD_API_KEY is set. Without it, routes are open
+// (development only — see config/env.js validateConfig warning).
+//
+// Routes:
+//   GET  /api/events              — recentEvents (scraped, not yet queued)
+//   GET  /api/settings            — current settings + categories + autopost
+//   POST /api/settings            — update logs channel (auth)
+//   POST /api/send-event          — post an item (auth)
+//   POST /api/add-event           — add an item to recentEvents (auth)
+//   GET  /api/health              — cheap health: isScraping, autopost, etc.
+//   GET  /api/consistency-check   — run consistency check on demand
+//   GET  /api/needs-attention-expired — items archived for review
+//   GET  /api/scrape-progress     — live scrape progress snapshot
+
+const express = require('express');
+const path = require('path');
+const cors = require('cors');
+const env = require('../config/env');
+const { auditLog } = require('../core/auditLogger');
+const { validateAddEventPayload } = require('../core/validation');
+const { isEventPast, compareByEventDate } = require('../core/dateUtils');
+
+function requireApiKey(req, res, next) {
+    if (!env.DASHBOARD_API_KEY) return next();
+    const provided = req.get('x-api-key');
+    if (provided && provided === env.DASHBOARD_API_KEY) return next();
+    return res.status(401).json({ error: 'Unauthorized — missing or invalid X-API-Key header.' });
+}
+
+async function resolveCategoryChannelInfo(bot, mode) {
+    const out = {};
+    for (const [key, cat] of Object.entries(bot.CATEGORIES)) {
+        const channelId = mode === 'main' ? cat.main : cat.test;
+        if (!channelId) continue;
+        try {
+            const channel = await bot.client.channels.fetch(channelId);
+            out[key] = { id: channelId, name: (channel && channel.name) || 'unknown' };
+        } catch {
+            out[key] = { id: channelId, name: 'unreachable' };
+        }
+    }
+    return out;
+}
+
+function startWebServer(bot) {
+    const app = express();
+    app.use(cors(env.DASHBOARD_ALLOWED_ORIGINS.length > 0 ? { origin: env.DASHBOARD_ALLOWED_ORIGINS } : {}));
+    app.use(express.json({ limit: '10mb' }));
+    app.use(express.static(path.join(__dirname, '..', '..', 'public')));
+
+    app.get('/api/events', (req, res) => {
+        res.json(bot.cache.recentEvents || []);
+    });
+
+    app.get('/api/settings', async (req, res) => {
+        try {
+            const channelInfo = await resolveCategoryChannelInfo(bot, 'main');
+            const channelInfoTest = await resolveCategoryChannelInfo(bot, 'test');
+            res.json({
+                settings: bot.cache.settings,
+                categories: { main: channelInfo, test: channelInfoTest },
+                autopost: bot.autopostConfig
+            });
+        } catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+
+    app.post('/api/settings', requireApiKey, (req, res) => {
+        const { logsChannelId } = req.body || {};
+        if (logsChannelId) {
+            bot.cache.settings.logsChannelId = logsChannelId;
+            bot.saveCache();
+        }
+        res.json({ success: true });
+    });
+
+    app.post('/api/send-event', requireApiKey, async (req, res) => {
+        try {
+            const { eventId, testMode, category, force } = req.body || {};
+            let event = bot.cache.pendingEvents.find((e) => e.id === eventId);
+            if (!event) event = bot.cache.recentEvents.find((e) => e.id === eventId);
+            if (!event) return res.status(404).json({ error: 'Event not found' });
+
+            const mode = testMode ? 'test' : 'main';
+            const categoryOverride = category && bot.CATEGORIES[category] ? category : null;
+            const result = await bot.postEventToCategory(event, mode, categoryOverride, Boolean(force));
+
+            if (!result.ok) {
+                if (result.reason === 'no_image') return res.status(422).json({ error: 'Item has no image — cannot go to a LIVE channel.', noImage: true });
+                if (result.reason === 'data_quality_warning') return res.status(422).json({ error: 'Item has unresolved data-quality warnings.', dataQualityWarnings: event.dataQualityWarnings || [] });
+                if (result.reason === 'already_posted' || result.reason === 'already_posted_or_racing') return res.status(409).json({ error: 'Already posted to this channel.', alreadyPosted: true });
+                if (result.reason === 'in_progress') return res.status(429).json({ error: 'A post for this item to this channel is already in progress.' });
+                return res.status(502).json({ error: `Failed to post: ${result.reason}` });
+            }
+
+            if (testMode) {
+                const pe = bot.cache.pendingEvents.find((e) => e.id === event.id);
+                if (pe) { pe.testPosted = true; pe.testPostedAt = Date.now(); bot.saveCache(); }
+            } else {
+                bot.removeFromPending(eventId);
+                bot.markEventPosted(event);
+                bot.saveCache();
+            }
+            await bot.sendLogMessage(`✅ Item "${event.title}" posted via dashboard (${mode} mode)`);
+            res.json({ success: true });
+        } catch (error) {
+            console.error('Error in /api/send-event:', error);
+            res.status(500).json({ error: error.message });
+        }
+    });
+
+    app.post('/api/add-event', requireApiKey, async (req, res) => {
+        try {
+            const eventData = req.body || {};
+            if (!eventData.title || !eventData.title.trim()) return res.status(400).json({ error: 'Event title is required' });
+
+            const validationError = validateAddEventPayload(eventData);
+            if (validationError) return res.status(400).json({ error: validationError });
+
+            const newEvent = {
+                id: `custom_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                title: eventData.title,
+                description: eventData.description || '',
+                category: eventData.category || 'General',
+                date: eventData.date || '',
+                time: eventData.time || '',
+                location: eventData.location || '',
+                organizer: eventData.organizer || '',
+                price: eventData.price || 'Free',
+                attendanceMode: eventData.attendanceMode || '',
+                url: eventData.registrationUrl,
+                registrationUrl: eventData.registrationUrl,
+                tags: eventData.tags || [],
+                image: eventData.image || null,
+                source: 'manual',
+                createdAt: new Date().toISOString()
+            };
+
+            bot.sanitizeEventFields(newEvent);
+            bot.cache.recentEvents.unshift(newEvent);
+            if (bot.cache.recentEvents.length > 100) bot.cache.recentEvents = bot.cache.recentEvents.slice(0, 100);
+            bot.saveCache();
+            await bot.sendLogMessage(`✅ Manual event added: "${newEvent.title}"`);
+            res.json({ success: true, eventId: newEvent.id });
+        } catch (error) {
+            console.error('Error in /api/add-event:', error);
+            res.status(500).json({ error: error.message });
+        }
+    });
+
+    app.get('/api/health', (req, res) => {
+        const next = bot.getNextScrapeTime();
+        res.json({
+            ok: true,
+            isScraping: bot.isScraping,
+            inFlightPosts: bot.postingLocks.size,
+            autopost: bot.autopostConfig,
+            pending: bot.cache.pendingEvents.length,
+            lastCheck: bot.cache.lastCheck,
+            nextScrapeAt: next ? next.toISOString() : null
+        });
+    });
+
+    app.get('/api/consistency-check', (req, res) => {
+        try {
+            const discrepancies = bot.runConsistencyCheck();
+            res.json({ ok: true, discrepancyCount: discrepancies.length, discrepancies });
+        } catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+
+    app.get('/api/needs-attention-expired', (req, res) => {
+        res.json(bot.cache.needsAttentionExpiredEvents || []);
+    });
+
+    app.get('/api/scrape-progress', (req, res) => {
+        res.json(bot.scrapeProgress.toJSON());
+    });
+
+    bot.server = app.listen(env.WEB_PORT, () => {
+        console.log(`🌐 Dashboard API available at http://localhost:${env.WEB_PORT}`);
+    });
+}
+
+module.exports = { startWebServer };
