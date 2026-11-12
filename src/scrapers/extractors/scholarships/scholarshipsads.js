@@ -65,7 +65,11 @@ async function harvestCards(page) {
                 degreeLevel: findByIcon(card, 'icon-Bachelor2'),
                 fieldOfStudy: findByIcon(card, 'icon-book'),
                 studentType: findByIcon(card, 'icon-world'),
-                country: findByIcon(card, 'icon-map')
+                country: findByIcon(card, 'icon-map'),
+                // Absolute deadline lives on the listing card as
+                // `<i class="icon-calendar"></i> Deadline: 01 Feb 2027`.
+                // This is authoritative and requires no detail-page visit.
+                deadline: findByIcon(card, 'icon-calendar')
             };
         }).filter((c) => c.title);
     });
@@ -171,11 +175,16 @@ module.exports = {
                             .filter(Boolean)
                             .slice(0, 6);
 
-                        let deadlineRaw = raw.title;
-                        if (raw.detailUrl) {
-                            const deadlineText = await lookupDeadline(page, raw.detailUrl);
-                            if (deadlineText) deadlineRaw = deadlineText;
-                        }
+                        // Deadline comes straight off the listing card. The
+                        // previous design navigated to each item's detail page
+                        // to find richer deadline text in body paragraphs, but
+                        // Cloudflare blocked ~95% of those visits — 184/193
+                        // items fell back to raw.title (year-only), producing
+                        // deadlineStatus='estimated-year-only' at scale. The
+                        // listing card always carries an absolute date
+                        // ("Deadline: 01 Feb 2027"), so the detail visit is
+                        // dropped entirely. Fast, no Cloudflare failure mode.
+                        const deadlineRaw = raw.deadline || raw.title;
 
                         items.push(buildScholarship({
                             title: raw.title,
