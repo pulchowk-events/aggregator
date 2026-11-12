@@ -342,7 +342,22 @@ async function _runAutopostTickLocked(bot, itemType, mode) {
         const channelId = channelMode === 'main' ? category?.main : category?.test;
         if (!channelId) continue;
 
-        if (await hasBeenPostedToChannel(bot, event, channelId)) continue;
+        if (await hasBeenPostedToChannel(bot, event, channelId)) {
+            // Marker says already posted. In LIVE mode this means the item is
+            // a phantom — cache was lost/restored but the marker survived, so
+            // it re-entered pending during the last scrape. Remove it from
+            // pending instead of leaving it stuck forever. TEST mode keeps
+            // items in pending (test-posted items are still pending for LIVE).
+            if (channelMode === 'main') {
+                auditLog('autopost_phantom_cleanup', `Removing phantom pending item "${event.title}" — marker says already posted to LIVE`, {
+                    eventId: event.id || null, title: event.title || null, channelId
+                }, 'warn');
+                bot.removeFromPending(event.id);
+                bot.markEventPosted(event);
+                bot.saveCache();
+            }
+            continue;
+        }
 
         const result = await bot.postEventToCategory(event, channelMode, categoryKey);
         if (result.ok) {

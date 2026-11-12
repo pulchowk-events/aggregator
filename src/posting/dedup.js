@@ -112,9 +112,64 @@ function deduplicateEventsByKey(events) {
     return unique;
 }
 
+// Year-inference drift detection.
+//
+// Sources without a year in their date string ("15 Dec") get a year inferred
+// from the current date — if the inferred date is >60 days in the past, the
+// parser bumps it to next year. That means the SAME source text can resolve
+// to different canonical dates depending on WHEN it is scraped. If the source
+// listing persists across the year boundary (event scraped in Nov 2026 as
+// "15 Dec" → 2026-12-15, re-scraped in Mar 2027 as "15 Dec" → 2027-12-15),
+// the dedup key changes and the item would post a second time.
+//
+// This finds that specific case: same normalized title, same exact raw
+// source-date string, neither has an explicit year, and canonical dates
+// ~1 year apart (330-400 days). It does NOT fire on:
+//   - annual events with an explicit year in their source date (2026, 2027)
+//   - events on different dates (different source strings, or >400 days)
+//   - events with different titles
+//
+// Returns { candidate, daysDiff } on match, null otherwise.
+function findYearDriftDuplicate(event, candidatePool) {
+    if (!event || !Array.isArray(candidatePool)) return null;
+    const sourceDate = String(event.date || event.startDate || '').trim();
+    if (!sourceDate) return null;
+    // If the source date has an explicit year, drift is impossible — the
+    // year is already locked into the string.
+    if (/\b20\d{2}\b/.test(sourceDate)) return null;
+
+    const canonicalNew = getCanonicalDateForDedup(event);
+    if (!canonicalNew) return null;
+    const normalizedTitle = normalizeEventName(event.title || '');
+    if (!normalizedTitle) return null;
+
+    const { DateTime } = require('luxon');
+    const { TARGET_TIMEZONE } = require('../config/constants');
+    const newDate = DateTime.fromFormat(canonicalNew, 'yyyy-LL-dd', { zone: TARGET_TIMEZONE });
+    if (!newDate.isValid) return null;
+
+    for (const candidate of candidatePool) {
+        if (!candidate || candidate === event) continue;
+        const candSourceDate = String(candidate.date || candidate.startDate || '').trim();
+        if (candSourceDate !== sourceDate) continue;
+        const candTitle = normalizeEventName(candidate.title || '');
+        if (candTitle !== normalizedTitle) continue;
+        const candCanonical = getCanonicalDateForDedup(candidate);
+        if (!candCanonical) continue;
+        const candDate = DateTime.fromFormat(candCanonical, 'yyyy-LL-dd', { zone: TARGET_TIMEZONE });
+        if (!candDate.isValid) continue;
+        const daysDiff = Math.abs(candDate.diff(newDate, 'days').days);
+        if (daysDiff > 330 && daysDiff < 400) {
+            return { candidate, daysDiff };
+        }
+    }
+    return null;
+}
+
 module.exports = {
     getDedupFallbackComponent,
     getEventDedupKey,
     findFuzzyDuplicateMatch,
+    findYearDriftDuplicate,
     deduplicateEventsByKey
 };

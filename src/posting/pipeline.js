@@ -32,7 +32,7 @@
 const { auditLog } = require('../core/auditLogger');
 const { isEventPast } = require('../core/dateUtils');
 const { sanitizeEventFields } = require('../core/sanitize');
-const { getEventDedupKey, findFuzzyDuplicateMatch, deduplicateEventsByKey } = require('./dedup');
+const { getEventDedupKey, findFuzzyDuplicateMatch, findYearDriftDuplicate, deduplicateEventsByKey } = require('./dedup');
 const { hasValidImage, hasDataQualityWarnings } = require('./gates');
 const markers = require('../core/markers');
 const { CACHE_CAP, NEEDS_ATTENTION_EXPIRY_DAYS, DEFAULT_NEEDS_ATTENTION_EXPIRY_DAYS } = require('../config/constants');
@@ -211,7 +211,23 @@ function processScrapedEvents(bot, events, errors) {
         let fuzzyMatch = null;
         if (classification === 'new') {
             const candidatePool = bot.cache.pendingEvents.concat(bot.cache.postedEvents, newEvents);
-            fuzzyMatch = findFuzzyDuplicateMatch(e, candidatePool);
+
+            // Year-inference drift check runs BEFORE fuzzy because it is a
+            // stronger signal (exact title + exact raw date string + 1 year
+            // apart). See findYearDriftDuplicate in dedup.js.
+            const yearDrift = findYearDriftDuplicate(e, candidatePool);
+            if (yearDrift) {
+                auditLog('dedup_decision', `"${e.title}" classified as already-posted-year-drift`, {
+                    eventId: e.id || null, title: e.title || null, source: e.source || null,
+                    dedupKey: key, classification: 'already-posted-year-drift',
+                    candidateId: yearDrift.candidate.id || null,
+                    candidateTitle: yearDrift.candidate.title || null,
+                    daysDiff: Math.round(yearDrift.daysDiff)
+                });
+                classification = 'already-posted-year-drift';
+            } else {
+                fuzzyMatch = findFuzzyDuplicateMatch(e, candidatePool);
+            }
             if (fuzzyMatch) {
                 const sameSource = Boolean(fuzzyMatch.candidate.source) && fuzzyMatch.candidate.source === e.source;
                 if (sameSource) {
