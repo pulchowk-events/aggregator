@@ -158,6 +158,13 @@ Optional:
 | `BROWSER_USER_DATA_DIR` | — | Windows only. Path to the browser profile (e.g. `C:/Users/you/AppData/Local/BraveSoftware/Brave-Browser/User Data/Profile 9`). |
 | `SCRAPE_CRON` | `0 */6 * * *` | Default scrape schedule (5-field cron). Overridable at runtime via `/settings set-schedule`. |
 
+**Role-ID values** — the three role vars (`ALERTS_PING_ROLE_ID`, `SCHOLARSHIPS_PING_ROLE_ID`, `JOBS_PING_ROLE_ID`) accept both forms:
+
+- raw snowflake: `123456789012345678`
+- mention-wrapped: `<@&123456789012345678>`
+
+The bot normalizes either form on read. If you paste the full right-click "Copy Role ID" output from some Discord clients that include the mention wrapper, the bot unwraps it and renders a single ping. It also rejects anything that isn't a valid snowflake after normalization (no accidental pings from copy-paste garbage).
+
 Supabase — bot archival:
 
 | Var | Purpose |
@@ -354,6 +361,21 @@ See [`scrapers.md`](scrapers.md) for the full drift playbook.
 
 The health command diffs the bot's eligible set against the website's rows. `missing` = should be on the site but isn't. `orphans` = on the site but shouldn't be. Both get reconciled by `now`.
 
+**"Autopublish isn't crossposting new live posts."** The wrap fires on every successful live post, but only crossposts if the target channel is an Announcement channel and the just-posted message wasn't removed by the dedupe sweep. Check:
+
+```bash
+# Was autopublish even attempted?
+tail -100 data/audit-log.jsonl | jq -r 'select(.category | test("autopublish")) | "\(.timestamp)\t\(.category)\t\(.message)"' | tail -20
+```
+
+What you might see:
+
+- **`autopublish — Crossposted <messageId> in <channelId>`** — working correctly.
+- **`autopublish_skipped` with `reason: not_crosspostable`** — the channel is a plain text channel, not an Announcement channel. Fix in Discord: Channel Settings → Overview → Channel Type → Announcement. Text channels cannot be crossposted; this isn't a bot bug.
+- **`autopublish_skipped` with `reason: was_duplicate`** — the just-posted message was removed by the immediately-preceding dedupe sweep as a duplicate of an older message. The older one is already out; nothing to publish. This is the correct guard against re-publishing duplicates.
+- **`autopublish_error`** — `message.crosspost()` threw. Usually rate limiting. The error payload names the Discord error code.
+- **No `autopublish*` entries at all** — either `autopublishEnabled` is false (`/autopublish status`), or the post wasn't a live post (test-mode posts never trigger autopublish), or the extension didn't attach (check boot log for `🧩 [ext] Attached N command(s)`).
+
 ---
 
 ## Backups
@@ -493,6 +515,21 @@ Look for:
 - Commands can take up to 60 seconds to propagate after a fresh registration
 - If still missing after 2 min: check console for `❌ Failed to register slash commands` — usually a permissions issue (bot needs `applications.commands` scope)
 
+### "Slash commands appear in a guild OTHER than HOME_GUILD_ID"
+
+That's a bug, not intended behavior. Every command — base, extension, `/supabase`, `/website-sync` — should be guild-scoped to `HOME_GUILD_ID` and nowhere else. If they show up in a foreign guild, the admin gate still blocks them from *working* there, but they shouldn't even be visible.
+
+Check the boot log for these four lines:
+
+```
+✅ Slash commands registered to guild <ID> only (N command(s)).
+✅ [ext] Registered N extension command(s) to guild <ID> only.
+✅ [supabase] Registered N command(s) to guild <ID> only.
+✅ [websiteSync] Registered N command(s) to guild <ID> only.
+```
+
+Every one must end with `to guild <ID> only`. If any of them says `Registered N command(s).` without that suffix, that module fell back to `Routes.applicationCommands` (global). That's a code regression — the registration path in that file uses `Routes.applicationGuildCommands` and the fix is to restore it. File an issue with the log line.
+
 ### "0 items scraped"
 
 ```bash
@@ -571,7 +608,7 @@ Eligible item gates:
 - `hasValidImage` — no image → excluded
 - data-quality warnings — flagged → excluded
 - blacklisted — matches `/blacklist` rules → excluded
-- user-collision — a user-submitted event on the same date with a similar title → excluded
+- user-collision — a user-submitted event on the same date shares at least one substantive word (≥4 chars, word-boundary, not a stopword like "nepal"/"the"/"event") with the bot event → excluded. Titles that share only stopwords or only short common words like "AI" do NOT collide.
 
 Run `/website-sync health` to see the counts. If `expected` is much higher than `existing`, gates are filtering aggressively. Check `/pending` for flagged items.
 
@@ -625,6 +662,20 @@ If most failures are the same reason (`no_image`, `data_quality_warning`), that'
 
 2. **Autopost isn't running.** Check `/autopost status`. All tracks off = nothing will post automatically; `/pending` manual posting still works.
 
+### "/undo says 'Couldn't locate the live message'"
+
+Expected refusal, not a bug. `handleUndo` refuses when it can't find the live message in either:
+- `bot._ext.recentPosts` — the in-memory registry of the last 20 live posts (lost on restart)
+- a scan of the last 25 messages per live channel (missed if the message has since drifted out of the window)
+
+Reverting the cache here would strand the item: it would move back to `pending`, but its marker at the original channel would still be confirmed, so the next post attempt would see `already_posted` and refuse. The bot refuses the undo cleanly instead of silently creating a zombie.
+
+Three options, in order of preference:
+
+- **`/edit-live query:"<title>"`** — edit the existing live message in place (same title-match rules, but no cache mutation on failure)
+- **`/cleanup item_type:<type>`** — force-remove from cache (drops the marker too, allowing a clean re-post)
+- **Manually delete the Discord message in the channel**, then retry `/undo` — this clears the scanned-channel state so the undo can proceed normally
+
 ---
 
 ## Alerts
@@ -642,7 +693,7 @@ Source-failure alerts are a separate subsystem from the audit log.
 **Configuration:**
 
 - `ALERTS_CHANNEL_ID` — destination channel. Unset = alerts only go to `audit-log.jsonl`, no Discord ping.
-- `ALERTS_PING_ROLE_ID` — role to ping. Unset = alert posts without a ping.
+- `ALERTS_PING_ROLE_ID` — role to ping. Unset = alert posts without a ping. Accepts raw snowflake or `<@&...>` wrapper.
 - `DEFAULT_SOURCE_ALERT_THRESHOLD` in `constants.js` — streak count. Default 3.
 - `DEFAULT_SOURCE_ALERT_COOLDOWN_MINUTES` in `constants.js` — cooldown. Default 60.
 

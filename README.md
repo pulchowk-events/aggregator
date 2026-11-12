@@ -62,7 +62,7 @@ This bot automates the whole loop. On a cron it scrapes every configured source 
 
 - **Two-tier delivery.** Every item type has two delivery tracks: a bot archival Supabase (service-role, full records) and the public website's Supabase (a curated subset filtered by `hasValidImage`, data-quality warnings, and a user-collision check). The two are independent — either can fail without affecting the other, and either can be dry-run independently.
 
-- **Guided wizards.** Two interactive CLIs: one to bootstrap a fresh deployment end-to-end (`scripts/setup/`) and one to scaffold a new scraper source against an LLM prompt (`scripts/wizard/`). Both can be walked with mock data (`--demo` / `--no-interactive`) so you can inspect the flow before running it.
+- **Guided wizards.** Two interactive CLIs. The setup wizard (`scripts/setup/`) walks a fresh deployment end-to-end and has a `--demo` mode that runs the entire flow with mock data and writes nothing outside `data/demo-setup.env`. The source wizard (`scripts/wizard/`) scaffolds a new scraper against an LLM prompt. Both fall back to a plain-text recipe when stdin isn't a TTY, so they work in CI.
 
 ## Sources supported
 
@@ -383,7 +383,7 @@ Read them in the order that matches what you're about to do. If you're modifying
 **Method**
 
 - Fuzzy dedup (Levenshtein ≥ 0.85) is a *secondary* signal, never standalone. Different sources' wordings of the same event are caught by the exact canonical-date match most of the time; fuzzy catches the rest. Neither is perfect — a title that shifts too far will still produce a duplicate.
-- The website user-collision check is title-first-word + date, not fuzzy. It prevents obvious collisions but not subtle ones.
+- The website user-collision check matches substantive words (≥4 chars, word-boundary, stopwords filtered) on the same date. Titles sharing only common words like "Nepal" or "The" are not treated as collisions.
 - The website sync's prune step is destructive by design — it deletes orphan rows. The three guards make accidental mass-delete unlikely, but not impossible: a source returning a wrong-shaped set can still slip past the >50% check if the wrong set is small.
 
 **Not done**
