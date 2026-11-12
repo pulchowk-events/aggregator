@@ -37,12 +37,19 @@ function attachHooks(bot) {
 function registerCommands(bot) {
     bot.client.once('ready', async () => {
         try {
+            if (!env.HOME_GUILD_ID) {
+                console.error('❌ [websiteSync] HOME_GUILD_ID not set — refusing to register commands globally.');
+                return;
+            }
             const { REST, Routes } = require('discord.js');
             const rest = new REST({ version: '10' }).setToken(env.DISCORD_TOKEN);
             for (const cmd of commands) {
-                await rest.post(Routes.applicationCommands(bot.client.user.id), { body: cmd.toJSON() });
+                await rest.post(
+                    Routes.applicationGuildCommands(bot.client.user.id, env.HOME_GUILD_ID),
+                    { body: cmd.toJSON() }
+                );
             }
-            console.log(`✅ [websiteSync] Registered ${commands.length} command(s).`);
+            console.log(`✅ [websiteSync] Registered ${commands.length} command(s) to guild ${env.HOME_GUILD_ID} only.`);
         } catch (error) {
             console.error('❌ [websiteSync] Failed to register command:', error);
         }

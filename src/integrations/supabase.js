@@ -366,12 +366,19 @@ function attach(bot) {
     // extensions/index.js so it never touches the base commands.
     bot.client.once('ready', async () => {
         try {
+            if (!env.HOME_GUILD_ID) {
+                console.error('❌ [supabase] HOME_GUILD_ID not set — refusing to register commands globally.');
+                return;
+            }
             const { REST, Routes } = require('discord.js');
             const rest = new REST({ version: '10' }).setToken(env.DISCORD_TOKEN);
             for (const cmd of commands) {
-                await rest.post(Routes.applicationCommands(bot.client.user.id), { body: cmd.toJSON() });
+                await rest.post(
+                    Routes.applicationGuildCommands(bot.client.user.id, env.HOME_GUILD_ID),
+                    { body: cmd.toJSON() }
+                );
             }
-            console.log(`✅ [supabase] Registered ${commands.length} command(s).`);
+            console.log(`✅ [supabase] Registered ${commands.length} command(s) to guild ${env.HOME_GUILD_ID} only.`);
         } catch (error) {
             console.error('❌ [supabase] Failed to register command:', error);
         }

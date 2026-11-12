@@ -211,14 +211,21 @@ function attachBlacklistFilter(bot) {
 function registerExtensionCommands(bot) {
     bot.client.once('ready', async () => {
         try {
+            if (!env.HOME_GUILD_ID) {
+                console.error('❌ [ext] HOME_GUILD_ID not set — refusing to register extension commands globally.');
+                return;
+            }
             const rest = new REST({ version: '10' }).setToken(env.DISCORD_TOKEN);
+            // Register extension commands GUILD-SCOPED to HOME_GUILD_ID only.
+            // POST (not bulk PUT) creates-or-updates each command by name without
+            // touching any other command — so this never clobbers the base commands.
             for (const cmd of EXT_DEFINITIONS) {
                 await rest.post(
-                    Routes.applicationCommands(bot.client.user.id),
+                    Routes.applicationGuildCommands(bot.client.user.id, env.HOME_GUILD_ID),
                     { body: cmd.toJSON() }
                 );
             }
-            console.log(`✅ [ext] Registered ${EXT_DEFINITIONS.length} extension command(s).`);
+            console.log(`✅ [ext] Registered ${EXT_DEFINITIONS.length} extension command(s) to guild ${env.HOME_GUILD_ID} only.`);
         } catch (error) {
             console.error('❌ [ext] Failed to register extension commands:', error);
         }

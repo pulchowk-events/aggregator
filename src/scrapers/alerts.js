@@ -122,8 +122,11 @@ async function recordOutcome(bot, source, type, verdict, meta = {}) {
 
 async function deliverAlert(bot, source, type, streak, threshold, reason, metaStr, verdict) {
     const env = require('../config/env');
+    const { normalizeRoleId } = require('../config/roles');
     const channelId = env.ALERTS_CHANNEL_ID;
-    const roleId = env.ALERTS_PING_ROLE_ID;
+    // Normalize role ID so a .env value wrapped as <@&123...> (a common paste
+    // mistake) doesn't double-wrap here the way it once did in post-formatting.
+    const roleId = normalizeRoleId(env.ALERTS_PING_ROLE_ID);
 
     if (!channelId) {
         console.warn(`⚠️ [alerts] ALERTS_CHANNEL_ID not set — source alert for "${source}" logged to audit only.`);

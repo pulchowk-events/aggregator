@@ -82,6 +82,7 @@ function getPingMention(categoryKey) {
 
 module.exports = {
     PING_ROLE_IDS,
+    normalizeRoleId,
     getPingRoleId,
     getPingMention
 };
