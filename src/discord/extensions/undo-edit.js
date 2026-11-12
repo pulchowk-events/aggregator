@@ -80,6 +80,31 @@ async function handleUndo(bot, interaction) {
         } catch (error) {
             console.warn('⚠️ /undo could not delete the message:', error.message);
         }
+    } else if (!channelId) {
+        // Neither the message nor its channel could be determined:
+        //   - registry is empty (post-restart, in-memory only)
+        //   - message is beyond the 25-message scan window of findLiveMessageForEvent
+        //
+        // Reverting cache state here would strand the item: it moves to
+        // pending, but the marker at the (unknown) original channel is
+        // still confirmed, so the next post attempt sees
+        // already_posted and refuses. Item becomes a permanent zombie.
+        //
+        // Refuse cleanly instead. Three clear paths forward for the user.
+        const itemTypeArg = event.itemType === 'job' ? 'jobs'
+                          : event.itemType === 'scholarship' ? 'scholarships'
+                          : 'events';
+        return interaction.editReply({
+            content: `❌ Couldn't locate the live message for "${event.title}".\n\n` +
+                `The message may have been deleted manually, or it's beyond the ` +
+                `25-message scan window of every live channel. Nothing was changed — ` +
+                `moving the item back to pending without finding the message would ` +
+                `strand it (its marker would still be confirmed, blocking any re-post).\n\n` +
+                `Options:\n` +
+                `• \`/edit-live query:"${(event.title || '').slice(0, 40)}"\` — edit the existing message instead\n` +
+                `• \`/cleanup item_type:${itemTypeArg}\` — force-remove from cache (allows re-post)\n` +
+                `• Manually delete the Discord message, then retry \`/undo\``
+        });
     }
 
     const idx = bot.cache.postedEvents.findIndex((e) => e.id === event.id);
