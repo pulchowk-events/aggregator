@@ -140,7 +140,7 @@ The stages, with the owner of each:
 | 7 | Post | `src/posting/post.js` | Runs every gate, reserves the marker, sends, confirms the marker |
 | 8 | Transition | `src/core/cache.js` | `removeFromPending` + `markEventPosted` (live) or `testPostedAt` (test) |
 | 9 | Post-hook | `src/discord/extensions/index.js` | Records recent-post reference; sequences dedupe-scan then crosspost (if autopublish enabled); logs outcome |
-| 10 | Sync | `src/integrations/supabase.js` + `websiteSync/engine.js` | Async upsert to two independent Supabase projects |
+| 10 | Sync | `src/integrations/supabase.js` + `websiteSync/engine.js` | Async upsert to two independent Supabase projects. The archival project has one `events` table (jobs ride along via a `type` column) plus a `scholarships` table; the website project has three tables — `events`, `jobs`, `scholarships` — each filtered through its own gates. |
 
 Every stage above can fail independently. A failure at stage 2 flags the item but doesn't block. A failure at stage 7 releases the marker so the next attempt can retry. A failure at stage 9 (post-hook) is logged but never undoes the post — the message is already out, the marker is already confirmed, and reversing either would risk a duplicate on the next tick. A failure at stage 10 logs but doesn't touch stages 7-9. This is by design: the pipeline is not transactionally atomic across stages; each stage has its own recovery boundary, and a recovery failure is loudly logged rather than silently swallowed.
 

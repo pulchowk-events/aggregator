@@ -187,6 +187,8 @@ Supabase — website sync:
 | `WEBSITE_EVENTS_TABLE` | Default `events`. |
 | `WEBSITE_JOBS_TABLE` | Default `jobs`. |
 | `WEBSITE_JOBS_SYNC_ENABLED` | Default `true`. Set to `false` to skip job sync. |
+| `WEBSITE_SCHOLARSHIPS_TABLE` | Default `scholarships`. |
+| `WEBSITE_SCHOLARSHIPS_SYNC_ENABLED` | Default `true`. Set to `false` to skip scholarship sync. |
 | `WEBSITE_SYNC_BATCH_SIZE` | Default `50`. |
 | `WEBSITE_SYNC_BATCH_DELAY_MS` | Default `200`. Pause between batches. |
 | `WEBSITE_SYNC_CRON` | Default `0 * * * *`. Hourly safety net. |
@@ -594,12 +596,12 @@ If the bot IS responding in a foreign guild, that's a real bug — check `unauth
 
 ### "Website sync says 'Prune ABORTED'"
 
-The website sync has two prune guards, both fire warnings when tripped:
+The website sync runs three independent tables (events, jobs, scholarships), and each has its own pair of prune guards. Both fire warnings when tripped:
 
 - `empty_eligible_set` — 0 eligible items but existing rows in the target table. Almost always a scrape failure upstream. Check the last scrape's per-source verdicts.
 - `delete_threshold_exceeded` — >50% of bot-origin rows would be pruned. A scrape probably returned a wrong-shaped set. Verify with `/website-sync health`.
 
-Neither guard is a failure — both are refusals to delete, which is the correct response. Investigate what caused the anomalous set, fix, then re-sync.
+Neither guard is a failure — both are refusals to delete, which is the correct response. Investigate what caused the anomalous set, fix, then re-sync. Per-table aborts are independent — a bad event scrape can't block the jobs or scholarships prune.
 
 ### "Website sync runs but nothing reaches the site"
 

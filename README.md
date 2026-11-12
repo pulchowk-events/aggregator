@@ -250,7 +250,7 @@ All commands are guild-scoped to `HOME_GUILD_ID` and require Discord's `ADMINIST
 | `/supabase sync-now` | Upload unsynced posted items to the bot archival Supabase |
 | `/supabase republish-all` | Force re-upload the entire posted-events cache |
 | `/supabase autosync-start` / `stop` | Interval-based auto-sync |
-| `/website-sync now` | Immediate public-site sync (events + jobs) |
+| `/website-sync now` | Immediate public-site sync (events + jobs + scholarships) |
 | `/website-sync health` | Diff the bot's eligible set against the website |
 | `/website-sync prune` | Force-delete orphans (bypasses threshold guard) |
 
