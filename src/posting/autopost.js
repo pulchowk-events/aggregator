@@ -35,7 +35,12 @@ const { sanitizeEventFields } = require('../core/sanitize');
 const { determineCategory } = require('./category');
 const { hasValidImage, hasDataQualityWarnings } = require('./gates');
 const { hasBeenPostedToChannel } = require('./reconcile');
-const { postEventToCategory } = require('./post');
+// Note: do NOT import postEventToCategory directly from './post'.
+// bot.postEventToCategory is wrapped by extensions/index.js (attachPostHooks)
+// so every successful live post also fires the sequenced dedupe-then-publish
+// flow. Importing the raw function bypasses the wrap — autopublish, undo's
+// recent-post registry, and any future post-hooks would silently never run
+// for autoposted items. Always route through bot.postEventToCategory.
 const {
     TARGET_TIMEZONE,
     AUTOPOST_LIVE_WINDOW_START_HOUR,
@@ -339,7 +344,7 @@ async function _runAutopostTickLocked(bot, itemType, mode) {
 
         if (await hasBeenPostedToChannel(bot, event, channelId)) continue;
 
-        const result = await postEventToCategory(bot, event, channelMode, categoryKey);
+        const result = await bot.postEventToCategory(event, channelMode, categoryKey);
         if (result.ok) {
             if (mode === 'test') {
                 const pendingEvent = bot.cache.pendingEvents.find((e) => e.id === event.id);

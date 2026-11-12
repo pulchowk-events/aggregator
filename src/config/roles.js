@@ -51,8 +51,27 @@ const FROM_ENV = {
 // ever edits ONE file when porting to a new server.
 const PING_ROLE_IDS = { ...HARDCODED, ...FROM_ENV };
 
+// Accept raw snowflakes only. If a value arrives already wrapped as a
+// mention (<@&123...>, <@123...>, or with quotes), unwrap it. This makes
+// the module resilient to a common .env paste mistake: pasting the full
+// mention instead of just the ID. Without this normalization, a wrapped
+// value ends up double-wrapped in getPingMention, producing
+// "<@&<@&123...>>" which Discord renders as literal text.
+function normalizeRoleId(raw) {
+    if (!raw) return null;
+    let v = String(raw).trim();
+    // Strip surrounding quotes
+    v = v.replace(/^["']|["']$/g, '');
+    // Strip Discord mention wrapper: <@&123>, <@123>, <@!123>
+    const mentionMatch = v.match(/^<@&?!?(\d+)>$/);
+    if (mentionMatch) v = mentionMatch[1];
+    // Whatever is left must be digits — otherwise treat as invalid
+    if (!/^\d{17,19}$/.test(v)) return null;
+    return v;
+}
+
 function getPingRoleId(categoryKey) {
-    return PING_ROLE_IDS[categoryKey] || null;
+    return normalizeRoleId(PING_ROLE_IDS[categoryKey]);
 }
 
 // Convenience for formatting code that needs the Discord mention syntax.
