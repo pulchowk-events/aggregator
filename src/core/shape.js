@@ -52,7 +52,24 @@ function normalizeScholarshipToEventShape(scholarship) {
     if (scholarship.deadlineStatus === 'rolling') {
         deadlineDisplay = 'Rolling / Ongoing';
     } else if (scholarship.deadlineStatus === 'parsed') {
-        deadlineDisplay = cleanScholarshipDeadlineText(scholarship.deadlineRaw || scholarship.deadlineParsed);
+        const cleaned = cleanScholarshipDeadlineText(scholarship.deadlineRaw || scholarship.deadlineParsed);
+        // If the cleaned text has no digits, it's UI chrome that slipped
+        // through ("♡ Save & track", "Add to calendar"). Fall back to the
+        // parsed ISO date formatted for human display. Defense in depth:
+        // the cleaner should have caught this, but a shape fallback means
+        // no garbage reaches the website DB even if a new source produces
+        // a chrome-string pattern the cleaner doesn't yet know about.
+        if (!cleaned || !/\d/.test(cleaned)) {
+            if (scholarship.deadlineParsed) {
+                const { DateTime } = require('luxon');
+                const dt = DateTime.fromFormat(scholarship.deadlineParsed, 'yyyy-LL-dd');
+                deadlineDisplay = dt.isValid ? dt.toFormat('d LLL yyyy') : scholarship.deadlineParsed;
+            } else {
+                deadlineDisplay = cleaned;
+            }
+        } else {
+            deadlineDisplay = cleaned;
+        }
     } else if (scholarship.deadlineStatus === 'estimated-year-only') {
         deadlineDisplay = scholarship.deadlineParsed ? scholarship.deadlineParsed.slice(0, 4) : null;
     }

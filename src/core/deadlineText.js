@@ -25,13 +25,19 @@ function cleanScholarshipDeadlineText(raw) {
     // each fragment individually before falling back.
     const parts = raw.split('|').map((p) => p.trim()).filter(Boolean);
 
-    // 1. Prefer a fragment that explicitly labels itself as the deadline.
+    // 1. Prefer a fragment that explicitly labels itself as the deadline
+    //    AND contains a date. Skip label-only fragments — real pages
+    //    often have several deadline-labeled fragments, and the first is
+    //    sometimes UI chrome ("♡ Save & track deadline", "Add to calendar
+    //    deadline") rather than the actual date. Previously the loop
+    //    returned the stripped label text on no-date fragments, producing
+    //    garbage like "♡ Save & track" as the display value.
     for (const part of parts) {
-        if (DEADLINE_LABEL_RE.test(part)) {
-            const stripped = part.replace(DEADLINE_LABEL_RE, '').trim();
-            const dateMatch = stripped.match(DATE_PATTERN);
-            return dateMatch ? dateMatch[0] : stripped;
-        }
+        if (!DEADLINE_LABEL_RE.test(part)) continue;
+        const stripped = part.replace(DEADLINE_LABEL_RE, '').trim();
+        const dateMatch = stripped.match(DATE_PATTERN);
+        if (dateMatch) return dateMatch[0];
+        // No date in this labeled fragment — try the next one
     }
 
     // 2. Fall back to the first fragment that merely CONTAINS a date.
