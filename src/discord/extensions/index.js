@@ -190,8 +190,8 @@ function attachBlacklistFilter(bot) {
 
             if (autoSkipped.length > 0) {
                 bot.cache.pendingEvents = stillPending;
-                bot.cache.skippedEvents = bot.cache.skippedEvents || [];
-                bot.cache.skippedEvents.push(...autoSkipped);
+                const { pushToSkipped } = require('../../core/cache');
+                for (const ev of autoSkipped) pushToSkipped(bot, ev);
                 bot.saveCache();
                 await bot.sendLogMessage(`🚫 Blacklist auto-skipped ${autoSkipped.length} newly-scraped item(s): ${autoSkipped.map((e) => `"${e.title}"`).join(', ')}`);
                 auditLog('blacklist_filter', `Auto-skipped ${autoSkipped.length} newly-scraped item(s)`, {
