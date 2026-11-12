@@ -258,13 +258,52 @@ async function fetchUserEventsLookup() {
     }
 }
 
+// Words that appear in too many titles to be a meaningful collision signal.
+// A user-submitted event on the same date as a bot event should NOT suppress
+// the bot event just because both titles contain "Nepal", "The", "New", etc.
+// Keep this list small and focused on words that carry no distinguishing
+// information on their own.
+const COLLISION_STOPWORDS = new Set([
+    'the', 'a', 'an', 'of', 'and', 'or', 'for', 'to', 'in', 'on', 'at', 'by',
+    'with', 'from', 'live', 'annual', 'event', 'events', 'nepal', 'nepali',
+    'kathmandu', 'national', 'international', 'new', 'big', 'best', 'free'
+]);
+
+// Extract substantive words from a title, lowercased and stripped of
+// punctuation. "Substantive" = length >= 4 chars and not in the stopword list.
+function substantiveWords(title) {
+    if (!title) return [];
+    return title
+        .toLowerCase()
+        .replace(/[^\w\s]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length >= 4 && !COLLISION_STOPWORDS.has(w));
+}
+
+// True when a user-submitted event on the same date as a bot event shares at
+// least one substantive word with it. Two events sharing only stopwords or
+// only a short common word ("AI", "Art") are NOT considered collisions.
+//
+// Previous implementation used substring matching on the bot's first word,
+// which over-triggered on:
+//   - common first words ("Nepal", "The") suppressing unrelated bot events
+//   - substring matches ("AI" matching inside "AIDS", "Cat" inside "Catalogue")
+// The current implementation requires a full-word match of a word >= 4 chars
+// that isn't a stopword.
 function isUserCollision(userEventsByDate, row) {
     const dateOnly = row.event_date.split('T')[0];
     const candidateTitles = userEventsByDate.get(dateOnly);
     if (!candidateTitles || candidateTitles.length === 0) return false;
-    const botTitleFirstWord = row.title.toLowerCase().replace(/[^\w\s]/g, '').split(' ')[0];
-    if (!botTitleFirstWord) return false;
-    for (const ut of candidateTitles) if (ut.includes(botTitleFirstWord)) return true;
+
+    const botWords = substantiveWords(row.title);
+    if (botWords.length === 0) return false;
+
+    for (const ut of candidateTitles) {
+        const userWords = new Set(substantiveWords(ut));
+        for (const w of botWords) {
+            if (userWords.has(w)) return true;
+        }
+    }
     return false;
 }
 
