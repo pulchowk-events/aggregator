@@ -35,6 +35,8 @@ const WEBSITE_KEY = env.WEBSITE_SUPABASE_SERVICE_ROLE_KEY;
 const WEBSITE_TABLE = env.WEBSITE_EVENTS_TABLE || 'events';
 const WEBSITE_JOBS_TABLE = env.WEBSITE_JOBS_TABLE || 'jobs';
 const JOBS_SYNC_ENABLED = env.WEBSITE_JOBS_SYNC_ENABLED !== false;
+const WEBSITE_SCHOLARSHIPS_TABLE = env.WEBSITE_SCHOLARSHIPS_TABLE || 'scholarships';
+const SCHOLARSHIPS_SYNC_ENABLED = env.WEBSITE_SCHOLARSHIPS_SYNC_ENABLED !== false;
 const DRY_RUN = env.WEBSITE_SYNC_DRY_RUN === true;
 const BATCH_SIZE = Math.max(1, env.WEBSITE_SYNC_BATCH_SIZE || 50);
 const BATCH_DELAY_MS = Math.max(0, env.WEBSITE_SYNC_BATCH_DELAY_MS || 200);
@@ -83,6 +85,81 @@ function passesWebsiteGates(bot, event) {
     if (bot.hasDataQualityWarnings(event)) return false;
     if (matchesBlacklist(bot, `${event.title || ''} ${event.description || ''}`, event.organizer)) return false;
     return true;
+}
+
+function getScholarshipWebsiteDedupKey(scholarship) {
+    const url = scholarship.url || scholarship.registrationUrl || '';
+    if (url) return `url:${url.trim().toLowerCase()}`;
+    // Fallback for scholarships with no URL — should not happen in practice
+    // but keeps upsert idempotent if it does. Same reasoning as jobs: the
+    // URL is a stable identity; the parsed deadline can drift ("estimated-
+    // year-only" is synthesized, and parseScholarshipDeadline can shift
+    // year boundaries like the events path does).
+    const title = (scholarship.title || '').trim().toLowerCase();
+    const source = (scholarship.source || '').trim().toLowerCase();
+    return `scholarship:${title}|${source}`;
+}
+
+function passesScholarshipGates(bot, scholarship) {
+    if (scholarship.itemType !== 'scholarship') return false;
+    // No hasValidImage gate — scholarships are image-optional by product
+    // decision, and the bot's own postEventToCategory treats them the same
+    // way. Adding a gate here would silently drop legitimate records.
+    if (bot.hasDataQualityWarnings(scholarship)) return false;
+    if (matchesBlacklist(
+        bot,
+        `${scholarship.title || ''} ${scholarship.description || ''}`,
+        scholarship.provider || scholarship.organizer
+    )) return false;
+    // Expired: bot.isEventPast handles the scholarship-specific rule
+    // internally — rolling/unknown/no-parsed-deadline items are never past,
+    // only parsed deadlines in the past trigger exclusion.
+    if (bot.isEventPast(scholarship)) return false;
+    return true;
+}
+
+function computeEligibleScholarships(bot) {
+    const pending = (bot.cache.pendingEvents || []).filter((e) => passesScholarshipGates(bot, e));
+    const posted = (bot.cache.postedEvents || []).filter((e) => passesScholarshipGates(bot, e));
+    const byKey = new Map();
+    for (const s of pending) byKey.set(getScholarshipWebsiteDedupKey(s), { scholarship: s, bucket: 'pending' });
+    for (const s of posted) byKey.set(getScholarshipWebsiteDedupKey(s), { scholarship: s, bucket: 'posted' });
+    return Array.from(byKey.values());
+}
+
+function scholarshipToWebsiteRow(bot, scholarship) {
+    const applyUrl = scholarship.registrationUrl || scholarship.url;
+    if (!applyUrl) return null;
+    const dedupKey = getScholarshipWebsiteDedupKey(scholarship);
+    const firstSeen = scholarship.firstSeenAt
+        ? new Date(scholarship.firstSeenAt)
+        : (scholarship.scrapedAt ? new Date(scholarship.scrapedAt) : new Date());
+    return {
+        id: deterministicUUID(dedupKey),
+        bot_dedup_key: dedupKey,
+        origin: `scraper:${scholarship.source || 'unknown'}`,
+        title: scholarship.title || 'Untitled Scholarship',
+        description: scholarship.description || null,
+        provider: scholarship.provider || scholarship.organizer || null,
+        deadline_parsed: scholarship.deadlineParsed || null,
+        deadline_status: scholarship.deadlineStatus || null,
+        deadline_display: scholarship.deadlineDisplay || null,
+        deadline_raw: scholarship.deadlineRaw || null,
+        funding_type: scholarship.fundingType || null,
+        funding_amount: scholarship.fundingAmount || null,
+        degree_level: scholarship.degreeLevel || null,
+        field_of_study: scholarship.fieldOfStudy || null,
+        image_url: scholarship.image || null,
+        tags: Array.isArray(scholarship.tags) ? scholarship.tags.slice(0, 30) : [],
+        apply_url: applyUrl,
+        source_url: scholarship.url || null,
+        source: scholarship.source || null,
+        created_by: BOT_USER_ID,
+        verified: true,
+        first_seen_at: firstSeen.toISOString(),
+        posted_at: firstSeen.toISOString(),
+        updated_at: new Date().toISOString()
+    };
 }
 
 function computeEligible(bot) {
@@ -464,6 +541,22 @@ async function syncWebsite(bot, options = {}) {
         });
     }
 
+    // Scholarships
+    let scholarshipResult = null;
+    if (SCHOLARSHIPS_SYNC_ENABLED) {
+        log('Computing eligible scholarships...');
+        emit({ phase: 'computing', table: 'scholarships' });
+        const scholarshipEligible = computeEligibleScholarships(bot);
+        const scholarshipRowsRaw = scholarshipEligible.map(({ scholarship }) => scholarshipToWebsiteRow(bot, scholarship));
+        const scholarshipRows = scholarshipRowsRaw.filter(Boolean);
+        const scholarshipSkippedNoUrl = scholarshipEligible.length - scholarshipRows.length;
+        log(`Scholarships: ${scholarshipEligible.length} eligible, ${scholarshipRows.length} mappable, ${scholarshipSkippedNoUrl} skipped (no URL)`);
+        scholarshipResult = await syncOneTable(bot, {
+            tableName: WEBSITE_SCHOLARSHIPS_TABLE, rows: scholarshipRows, label: 'scholarships', emit, log, startMs,
+            skippedInfo: { noUrl: scholarshipSkippedNoUrl }
+        });
+    }
+
     // Summary
     const durationMs = Date.now() - startMs;
     const eventsSynced = eventResult.syncedCount;
@@ -472,43 +565,51 @@ async function syncWebsite(bot, options = {}) {
     const jobsSynced = jobResult ? jobResult.syncedCount : 0;
     const jobsFailed = jobResult ? jobResult.failedCount : 0;
     const jobsPruned = jobResult ? jobResult.prunedCount : 0;
+    const scholarshipsSynced = scholarshipResult ? scholarshipResult.syncedCount : 0;
+    const scholarshipsFailed = scholarshipResult ? scholarshipResult.failedCount : 0;
+    const scholarshipsPruned = scholarshipResult ? scholarshipResult.prunedCount : 0;
 
     const summary = {
-        ok: eventsFailed === 0 && jobsFailed === 0,
+        ok: eventsFailed === 0 && jobsFailed === 0 && scholarshipsFailed === 0,
         dryRun: DRY_RUN,
         durationMs,
-        syncedCount: eventsSynced + jobsSynced,
-        failedCount: eventsFailed + jobsFailed,
-        prunedCount: eventsPruned + jobsPruned,
+        syncedCount: eventsSynced + jobsSynced + scholarshipsSynced,
+        failedCount: eventsFailed + jobsFailed + scholarshipsFailed,
+        prunedCount: eventsPruned + jobsPruned + scholarshipsPruned,
         events: eventResult,
         jobs: jobResult,
-        errors: [...eventResult.errors, ...((jobResult && jobResult.errors) || [])]
+        scholarships: scholarshipResult,
+        errors: [...eventResult.errors, ...((jobResult && jobResult.errors) || []), ...((scholarshipResult && scholarshipResult.errors) || [])]
     };
 
     log(`${DRY_RUN ? '[DRY RUN] ' : ''}Complete — events: ${eventsSynced} synced/${eventsPruned} pruned/${eventsFailed} failed` +
-        (jobResult ? ` • jobs: ${jobsSynced}/${jobsPruned}/${jobsFailed}` : '') + ` — ${durationMs}ms`);
+        (jobResult ? ` • jobs: ${jobsSynced}/${jobsPruned}/${jobsFailed}` : '') +
+        (scholarshipResult ? ` • scholarships: ${scholarshipsSynced}/${scholarshipsPruned}/${scholarshipsFailed}` : '') +
+        ` — ${durationMs}ms`);
 
     auditLog('website_sync',
         DRY_RUN
-            ? `[DRY RUN] Would sync ${eventsSynced} events + ${jobsSynced} jobs`
-            : `Synced ${eventsSynced} events + ${jobsSynced} jobs (${eventsPruned + jobsPruned} pruned, ${eventsFailed + jobsFailed} failed)`,
+            ? `[DRY RUN] Would sync ${eventsSynced} events + ${jobsSynced} jobs + ${scholarshipsSynced} scholarships`
+            : `Synced ${eventsSynced} events + ${jobsSynced} jobs + ${scholarshipsSynced} scholarships (${eventsPruned + jobsPruned + scholarshipsPruned} pruned, ${eventsFailed + jobsFailed + scholarshipsFailed} failed)`,
         summary, summary.ok ? 'info' : 'warn');
 
     if (!DRY_RUN && bot.sendLogMessage) {
         const parts = [
-            `🌐 Website sync: ${eventsSynced} events + ${jobsSynced} jobs synced`,
-            (eventsPruned + jobsPruned) > 0 ? `${eventsPruned + jobsPruned} pruned` : null,
-            (eventsFailed + jobsFailed) > 0 ? `⚠️ ${eventsFailed + jobsFailed} failed` : null,
+            `🌐 Website sync: ${eventsSynced} events + ${jobsSynced} jobs + ${scholarshipsSynced} scholarships synced`,
+            (eventsPruned + jobsPruned + scholarshipsPruned) > 0 ? `${eventsPruned + jobsPruned + scholarshipsPruned} pruned` : null,
+            (eventsFailed + jobsFailed + scholarshipsFailed) > 0 ? `⚠️ ${eventsFailed + jobsFailed + scholarshipsFailed} failed` : null,
             eventResult.pruneAborted ? '🚨 events prune aborted' : null,
-            jobResult && jobResult.pruneAborted ? '🚨 jobs prune aborted' : null
+            jobResult && jobResult.pruneAborted ? '🚨 jobs prune aborted' : null,
+            scholarshipResult && scholarshipResult.pruneAborted ? '🚨 scholarships prune aborted' : null
         ].filter(Boolean);
         bot.sendLogMessage(parts.join(' — ')).catch(() => {});
     }
 
-    if (!DRY_RUN && (eventsSynced > 0 || eventsPruned > 0 || jobsSynced > 0 || jobsPruned > 0)) {
+    if (!DRY_RUN && (eventsSynced > 0 || eventsPruned > 0 || jobsSynced > 0 || jobsPruned > 0 || scholarshipsSynced > 0 || scholarshipsPruned > 0)) {
         const tags = [];
         if (eventsSynced > 0 || eventsPruned > 0) tags.push('events', 'sidebar');
         if (jobsSynced > 0 || jobsPruned > 0) tags.push('jobs');
+        if (scholarshipsSynced > 0 || scholarshipsPruned > 0) tags.push('scholarships');
         if (tags.length > 0) await triggerRevalidation(tags);
     }
 
@@ -542,13 +643,30 @@ async function checkWebsiteSyncHealth(bot) {
         };
     }
 
+    let scholarshipsHealth = null;
+    if (SCHOLARSHIPS_SYNC_ENABLED) {
+        const eligibleScholarships = computeEligibleScholarships(bot);
+        const expectedScholKeys = new Set(eligibleScholarships.map(({ scholarship }) => getScholarshipWebsiteDedupKey(scholarship)));
+        const { data: existingSchol } = await websiteSupabase
+            .from(WEBSITE_SCHOLARSHIPS_TABLE).select('bot_dedup_key').like('origin', 'scraper:%');
+        const existingScholKeys = new Set((existingSchol || []).map((r) => r.bot_dedup_key).filter(Boolean));
+        scholarshipsHealth = {
+            expected: expectedScholKeys.size,
+            existing: existingScholKeys.size,
+            missing: [...expectedScholKeys].filter((k) => !existingScholKeys.has(k)).length,
+            orphan: [...existingScholKeys].filter((k) => !expectedScholKeys.has(k)).length
+        };
+    }
+
     return {
-        ok: missing.length === 0 && orphans.length === 0 && (!jobsHealth || (jobsHealth.missing === 0 && jobsHealth.orphan === 0)),
+        ok: missing.length === 0 && orphans.length === 0
+            && (!jobsHealth || (jobsHealth.missing === 0 && jobsHealth.orphan === 0))
+            && (!scholarshipsHealth || (scholarshipsHealth.missing === 0 && scholarshipsHealth.orphan === 0)),
         expectedCount: expectedKeys.size,
         existingCount: existingKeys.size,
         missingCount: missing.length,
         orphanCount: orphans.length,
-        missing, orphans, jobs: jobsHealth
+        missing, orphans, jobs: jobsHealth, scholarships: scholarshipsHealth
     };
 }
 
@@ -569,7 +687,9 @@ function scheduleSync(bot, delayMs = 30000) {
 module.exports = {
     WEBSITE_TABLE,
     WEBSITE_JOBS_TABLE,
+    WEBSITE_SCHOLARSHIPS_TABLE,
     JOBS_SYNC_ENABLED,
+    SCHOLARSHIPS_SYNC_ENABLED,
     DRY_RUN,
     BATCH_SIZE,
     isConfigured,
@@ -578,11 +698,15 @@ module.exports = {
     checkWebsiteSyncHealth,
     computeEligible,
     computeEligibleJobs,
+    computeEligibleScholarships,
     passesWebsiteGates,
     passesJobGates,
+    passesScholarshipGates,
     eventToWebsiteRow,
     jobToWebsiteRow,
+    scholarshipToWebsiteRow,
     getJobWebsiteDedupKey,
+    getScholarshipWebsiteDedupKey,
     triggerRevalidation,
     scheduleSync
 };

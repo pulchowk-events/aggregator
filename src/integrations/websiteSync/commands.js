@@ -53,8 +53,16 @@ function formatFinalResult(r) {
             (jb.failedCount > 0 ? `, ⚠️ ${jb.failedCount} failed` : '') +
             (jb.pruneAborted ? ` 🚨 prune aborted (${jb.pruneAbortReason})` : '')
         : 'Jobs: sync disabled';
+    const sb = r.scholarships;
+    const sbLine = sb
+        ? `Scholarships: ${sb.syncedCount} synced` +
+            (sb.skipped && sb.skipped.noUrl ? `, ${sb.skipped.noUrl} no URL` : '') +
+            (sb.prunedCount > 0 ? `, ${sb.prunedCount} pruned` : '') +
+            (sb.failedCount > 0 ? `, ⚠️ ${sb.failedCount} failed` : '') +
+            (sb.pruneAborted ? ` 🚨 prune aborted (${sb.pruneAbortReason})` : '')
+        : 'Scholarships: sync disabled';
     const errs = r.errors.length > 0 ? `\n\nErrors:\n${r.errors.slice(0, 5).join('\n')}` : '';
-    return `${icon}${mode} Sync complete.\n${evLine}\n${jbLine}\nDuration: ${r.durationMs}ms${errs}`;
+    return `${icon}${mode} Sync complete.\n${evLine}\n${jbLine}\n${sbLine}\nDuration: ${r.durationMs}ms${errs}`;
 }
 
 async function handleNow(bot, interaction) {
@@ -85,9 +93,10 @@ async function handleStatus(bot, interaction) {
             { name: 'Mode', value: engine.DRY_RUN ? '🧪 dry-run' : '🔴 live', inline: true },
             { name: 'Events table', value: `\`${engine.WEBSITE_TABLE}\``, inline: true },
             { name: 'Jobs table', value: engine.JOBS_SYNC_ENABLED ? `\`${engine.WEBSITE_JOBS_TABLE}\`` : '⚪ disabled', inline: true },
+            { name: 'Scholarships table', value: engine.SCHOLARSHIPS_SYNC_ENABLED ? `\`${engine.WEBSITE_SCHOLARSHIPS_TABLE}\`` : '⚪ disabled', inline: true },
             { name: 'Batch size', value: String(engine.BATCH_SIZE), inline: true },
             { name: 'Last sync', value: lastSyncAt ? `<t:${Math.floor(lastSyncAt / 1000)}:R>` : 'never this session', inline: true },
-            { name: 'Last result', value: lastSyncResult ? `${lastSyncResult.events.syncedCount}E + ${(lastSyncResult.jobs && lastSyncResult.jobs.syncedCount) || 0}J synced` : 'N/A', inline: true }
+            { name: 'Last result', value: lastSyncResult ? `${lastSyncResult.events.syncedCount}E + ${(lastSyncResult.jobs && lastSyncResult.jobs.syncedCount) || 0}J + ${(lastSyncResult.scholarships && lastSyncResult.scholarships.syncedCount) || 0}S synced` : 'N/A', inline: true }
         )
         .setColor(0x3ECF8E);
     await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
@@ -101,6 +110,7 @@ async function handleHealth(bot, interaction) {
             `Events: expected ${health.expectedCount}, existing ${health.existingCount}, missing ${health.missingCount}, orphans ${health.orphanCount}`
         ];
         if (health.jobs) lines.push(`Jobs: expected ${health.jobs.expected}, existing ${health.jobs.existing}, missing ${health.jobs.missing}, orphans ${health.jobs.orphan}`);
+        if (health.scholarships) lines.push(`Scholarships: expected ${health.scholarships.expected}, existing ${health.scholarships.existing}, missing ${health.scholarships.missing}, orphans ${health.scholarships.orphan}`);
         const okLine = health.ok ? '✅ In sync' : '⚠️ Drift detected';
         await interaction.editReply({
             content: `${okLine}\n\n${lines.join('\n')}` + (health.ok ? '' : '\n\nRun `/website-sync now` to reconcile.')
