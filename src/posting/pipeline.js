@@ -170,6 +170,15 @@ function reconcilePendingAgainstMarkers(bot, channelIds) {
 // Classify and route every scraped item. Caller must already hold the
 // cache mutex (bot.scrapeAndNotify wraps this).
 function processScrapedEvents(bot, events, errors) {
+    // Defensive: filter out null/undefined/non-object entries ONCE at
+    // function entry. Some callers may pass arrays from a source whose
+    // .filter(Boolean) step was missed. Multiple downstream loops iterate
+    // over `events` and read `e.id` — a single null would crash the whole
+    // scrape pipeline (caught only by the audit log, not visible to
+    // operators until they check /status).
+    if (!Array.isArray(events)) events = [];
+    events = events.filter((e) => e && typeof e === 'object');
+
     // ---- recentEvents tracking ----
     const existingIds = new Set(bot.cache.recentEvents.map((e) => e.id));
     const newScraped = events.filter((e) => !existingIds.has(e.id));
@@ -186,6 +195,11 @@ function processScrapedEvents(bot, events, errors) {
 
     const newEvents = [];
     for (const e of events) {
+        // Defensive: some callers may pass arrays containing null/undefined
+        // (a failed extractor's .filter(Boolean) somewhere might be missed).
+        // Skip rather than crash the whole pipeline.
+        if (!e || typeof e !== 'object') continue;
+
         const key = getEventDedupKey(e);
         let classification;
         if (postedKeys.has(key)) classification = 'already-posted';
@@ -221,11 +235,16 @@ function processScrapedEvents(bot, events, errors) {
 
         if (classification === 'new') {
             newEvents.push(e);
+            // Track this key so a second item in the SAME batch with the same
+            // canonical key is caught by the 'already-pending' branch. Without
+            // this, duplicate items within one scrape slip through.
+            pendingKeys.add(key);
         } else if (classification === 'new-possible-duplicate') {
             e.dataQualityWarnings = (e.dataQualityWarnings || []).concat([
                 `Possible duplicate: title is very similar ("${Math.round(fuzzyMatch.similarity * 100)}%" match) to "${fuzzyMatch.candidate.title}" (source: ${fuzzyMatch.candidate.source || 'unknown'}) on the same date — flagged for manual review, not auto-merged.`
             ]);
             newEvents.push(e);
+            pendingKeys.add(key);
         }
     }
 
