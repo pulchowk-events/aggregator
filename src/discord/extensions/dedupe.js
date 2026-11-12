@@ -40,7 +40,10 @@ function liveChannelIds(bot) {
 // Extract the "## <emoji> Title" line as plain title text.
 function extractTitleFromMessage(content) {
     const firstLine = (content || '').split('\n')[0] || '';
-    const match = firstLine.match(/^##\s*(?:<a?:\w+:\d+>\s*)?(.+)$/);
+    // Emoji name allows word chars, hyphens, dots, underscores —
+    // Discord's custom-emoji naming rules. `\w+` alone fails on
+    // `<:my-emoji:123>` and treats the whole line as the title.
+    const match = firstLine.match(/^##\s*(?:<a?:[\w.-]+:\d+>\s*)?(.+)$/);
     if (!match) return null;
     return match[1].trim();
 }
@@ -123,6 +126,10 @@ async function fetchBotMessages(bot, channel, amount) {
         const arr = [...batch.values()];
         collected.push(...arr);
         before = arr[arr.length - 1].id;
+        // Defensive: an empty batch would leave `before` undefined, the
+        // next fetch would have no cursor, and this loop would refetch
+        // page 1 forever. Break instead.
+        if (!before) break;
         if (batch.size < fetchLimit) break;
         await sleep(PUBLISH_PREVIOUS_PAGINATION_PAUSE_MS);
     }

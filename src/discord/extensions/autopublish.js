@@ -28,7 +28,16 @@ function isAutopublishEnabled(bot) {
 }
 
 async function tryCrosspost(bot, channelId, message, auditContext = {}) {
-    if (!message.crosspostable) return false;
+    // Log non-crosspostable skips so operators can distinguish "not
+    // an announcement channel" from "crosspost failed" from "already
+    // published." Without this, /publish-previous counts them as
+    // "skipped" with no audit trail.
+    if (!message.crosspostable) {
+        auditLog('autopublish_skipped', `Message ${message.id} in ${channelId} is not crosspostable`, {
+            channelId, messageId: message.id, reason: 'not_crosspostable', ...auditContext
+        }, 'info');
+        return false;
+    }
     try {
         await message.crosspost();
         auditLog('autopublish', `Crossposted ${message.id} in ${channelId}`, { channelId, messageId: message.id, ...auditContext });
