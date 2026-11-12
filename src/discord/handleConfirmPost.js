@@ -13,6 +13,10 @@ async function handleConfirmPost(bot, interaction) {
         return interaction.reply({ content: '❌ You need Administrator permissions.', flags: MessageFlags.Ephemeral });
     }
 
+    // Force is set by the `confirm_post_force:` customId prefix only. Normal
+    // `confirm_post:` must respect dedup.
+    const isForce = interaction.customId.startsWith('confirm_post_force:');
+
     const parts = interaction.customId.split(':');
     const [, mode, categoryKey, ...eventIdParts] = parts;
     const eventId = eventIdParts.join(':');
@@ -23,7 +27,11 @@ async function handleConfirmPost(bot, interaction) {
     }
 
     await interaction.deferUpdate();
-    const result = await bot.postEventToCategory(event, mode, categoryKey, true);
+    // Honour the force flag from the customId: `confirm_post_force:` means
+    // the human saw the "already posted" warning and chose to override. A
+    // normal `confirm_post:` click must NOT bypass dedup — if another
+    // instance raced and posted concurrently, this click should lose.
+    const result = await bot.postEventToCategory(event, mode, categoryKey, isForce);
 
     if (result.ok) {
         if (mode === 'test') {

@@ -152,7 +152,16 @@ function removeFromPending(bot, eventId) {
 // dedup key, its name, its id. Every tracking array is capped at CACHE_CAP
 // (oldest dropped) so cache.json can't grow unbounded.
 function markEventPosted(bot, event) {
-    bot.cache.postedEvents.push(event);
+    // Idempotent: a crash between removeFromPending and this call leaves the
+    // event in pending, and startup reconciliation will re-markEventPosted
+    // after finding the confirmed marker. Without this guard the postedEvents
+    // array would accumulate duplicate entries. postedEventKeys is the
+    // canonical "already posted" set; check that first.
+    const key = getEventDedupKey(event);
+    if (!bot.cache.postedEventKeys.includes(key)) {
+        bot.cache.postedEvents.push(event);
+        bot.cache.postedEventKeys.push(key);
+    }
 
     const name = normalizeEventName(event.title || '');
     if (name && !bot.cache.postedEventNames.includes(name)) {
@@ -161,15 +170,22 @@ function markEventPosted(bot, event) {
     if (event.id && !bot.cache.lastEventIds.includes(event.id)) {
         bot.cache.lastEventIds.push(event.id);
     }
-    const key = getEventDedupKey(event);
-    if (!bot.cache.postedEventKeys.includes(key)) {
-        bot.cache.postedEventKeys.push(key);
-    }
 
     if (bot.cache.postedEventNames.length > CACHE_CAP) bot.cache.postedEventNames = bot.cache.postedEventNames.slice(-CACHE_CAP);
     if (bot.cache.lastEventIds.length > CACHE_CAP)     bot.cache.lastEventIds     = bot.cache.lastEventIds.slice(-CACHE_CAP);
     if (bot.cache.postedEvents.length > CACHE_CAP)     bot.cache.postedEvents     = bot.cache.postedEvents.slice(-CACHE_CAP);
     if (bot.cache.postedEventKeys.length > CACHE_CAP)  bot.cache.postedEventKeys  = bot.cache.postedEventKeys.slice(-CACHE_CAP);
+}
+
+// Cap-enforced push to skippedEvents. Used by /skip and the blacklist
+// filter, both of which can accumulate unbounded entries in a long-running
+// deployment.
+function pushToSkipped(bot, event) {
+    bot.cache.skippedEvents = bot.cache.skippedEvents || [];
+    bot.cache.skippedEvents.push(event);
+    if (bot.cache.skippedEvents.length > CACHE_CAP) {
+        bot.cache.skippedEvents = bot.cache.skippedEvents.slice(-CACHE_CAP);
+    }
 }
 
 module.exports = {
@@ -180,5 +196,6 @@ module.exports = {
     flushCacheToDisk,
     quarantineCorruptCacheFile,
     removeFromPending,
-    markEventPosted
+    markEventPosted,
+    pushToSkipped
 };

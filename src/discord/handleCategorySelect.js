@@ -96,7 +96,17 @@ async function handleCategorySelect(bot, interaction) {
     bot.sanitizeEventFields(event);
 
     const category = bot.CATEGORIES[categoryKey];
-    const channelId = mode === 'main' ? category && category.main : category && category.test;
+    if (!category) {
+        // Guard against stale select-menu interactions — the customId was
+        // built when a category existed that has since been removed, or the
+        // interaction payload was tampered with. Fail with a clear message
+        // instead of silently rendering "unknown" and then failing on post.
+        return interaction.update({
+            content: `❌ Unknown category "${categoryKey}" — the command may be stale. Run \`/pending\` again.`,
+            components: []
+        });
+    }
+    const channelId = mode === 'main' ? category.main : category.test;
     let channelName = 'unknown';
     if (channelId) {
         try {

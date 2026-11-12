@@ -56,7 +56,7 @@ async function handleButton(bot, interaction) {
     if (action === 'skip') {
         await interaction.deferUpdate();
         bot.removeFromPending(eventId);
-        bot.cache.skippedEvents.push(event);
+        require('../core/cache').pushToSkipped(bot, event);
         bot.saveCache();
         return interaction.editReply({ content: `⏭️ Item "${event.title}" skipped.` });
     }
