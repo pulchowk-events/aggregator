@@ -301,62 +301,158 @@ Two independent config layers, both loaded at boot.
 
 Full env var reference, tuning constants, and per-file forking notes: [`docs/operations.md#configuration-reference`](docs/operations.md#configuration-reference).
 
+
 ## Repository layout
+
+Two views of the same thing: a grouped tree for orientation, then a dependency diagram showing how the layers connect. The tree lists files grouped by **what they do**, not alphabetically — a flat 40-file list has no shape, but grouping by concern makes the pattern visible.
+
+### Directory tree
+
+`src/` contains the seven application layers. Each has a single responsibility — see [`docs/architecture.md#module-boundaries`](docs/architecture.md#module-boundaries) for the rules about what each layer can touch.
 
 ```text
 src/
-├── index.js                  entry — constructs EventsBot, attaches extensions, starts
-├── bot.js                    EventsBot class (composition root)
-├── config/
-│   ├── env.js                env loader, channel map, startup validation
-│   ├── constants.js          tunables, keyword dictionaries, defaults
-│   ├── emojis.js             emoji IDs (server-specific, edit to fork)
-│   └── roles.js              ping role IDs (server-specific, edit to fork)
-├── core/                     pure, framework-free primitives
-│   ├── auditLogger.js        local-first JSONL, best-effort Discord mirror
-│   ├── mutex.js              promise-based critical-section lock
-│   ├── dateUtils.js          parse, isPast, isTooSoon, canonical-date
-│   ├── cronParser.js         5-field next/previous-run resolver
-│   ├── normalize.js          string normalization, similarity, validators
-│   ├── sanitize.js           field-level cleanup + data-quality warnings
-│   ├── deadlineText.js       human-readable deadline text extraction
-│   ├── markers.js            durable posted-channel markers
-│   ├── shape.js              job/scholarship → event-shape normalizer
-│   ├── formatting.js         event/job/scholarship message renderers
-│   ├── cache.js              load/save/quarantine + common cache mutations
-│   └── validation.js         /api/add-event input validation
-├── scrapers/
-│   ├── browser.js            shared puppeteer-extra + stealth browser
-│   ├── page.js               stealth page setup, __resolveImageSrc helper
-│   ├── retry.js              exponential-backoff retry wrapper
-│   ├── text.js               markdown stripper, description trim
-│   ├── progress.js           percent complete + self-correcting ETA
-│   ├── sanitize.js           scraper-side field cleanup
-│   ├── selectors.js          fallback-chain DOM extraction
-│   ├── diagnostics.js        block / drift / empty classifier
-│   ├── alerts.js             source-failure alert subsystem
-│   ├── jobs.js               job-specific parsers + sanitizer
-│   ├── scholarships.js       scholarship-specific deadline + builder
-│   ├── registry.js           filesystem plugin discovery
-│   ├── scrapeAll.js          top-level parallel orchestration
-│   ├── extractors/           site-specific DOM extraction (one file per source)
-│   └── sources/              thin orchestration wrappers (one file per source)
-├── posting/                  post pipeline, autopost tracks, scheduling
-├── discord/                  command handlers, bot extensions
-├── web/                      express /api/* routes
-└── integrations/             supabase.js, websiteSync/
-scripts/
-├── verify-source.js          run one scraper in isolation (the "unit test")
-├── setup/                    interactive setup wizard (Discord, Supabase, .env)
-├── wizard/                   interactive new-source wizard (LLM prompt generator)
-├── shared/                   cross-wizard helpers (clipboard, URL open, ...)
-└── maintenance/              one-shot migration and cleanup tools
-docs/
-├── architecture.md           mental model, module boundaries, chokepoints
-├── scrapers.md               scraper plugin system + drift playbook
-└── operations.md             deployment, config, troubleshooting, backups
-data/                         runtime state (gitignored): cache, audit log, markers
+├── index.js                entry — constructs EventsBot, attaches extensions, starts
+├── bot.js                  EventsBot class (composition root)
+│
+├── config/                 static data (read by every layer)
+│   env · constants · roles · emojis
+│
+├── core/                   pure primitives (no bot instance)
+│   ├── state & IO            auditLogger · markers · cache
+│   ├── math & text           dateUtils · cronParser · normalize · deadlineText
+│   ├── field cleanup         sanitize · shape
+│   └── output & control      formatting · validation · mutex
+│
+├── scrapers/               puppeteer boundary (produces {items, meta})
+│   ├── plumbing              browser · page · retry · text · progress
+│   ├── quality               selectors · diagnostics · alerts
+│   ├── domain                jobs · scholarships
+│   ├── orchestration         registry · scrapeAll
+│   ├── sources/              one 5-line wrapper per source (committed)
+│   └── extractors/           one DOM file per source (committed)
+│
+├── posting/                only layer that mutates cache
+│   ├── pure predicates       dedup · category · gates
+│   ├── post pipeline         reconcile · post
+│   ├── scheduling            autopost · schedule
+│   └── pipeline + drift      pipeline · consistency
+│
+├── discord/                thin transport adapters
+│   ├── admin · onReady · interaction · customId
+│   ├── handle{Button,CategorySelect,ConfirmPost,ModalSubmit}.js
+│   ├── scrapeAndNotify · sendPendingEventsMessage
+│   ├── commands/             7 base slash commands + register
+│   └── extensions/           ~9 extension modules + index
+│
+├── web/                    HTTP surface
+│   └── server.js             express + /api/*
+│
+└── integrations/           outbound async sinks
+    ├── supabase.js           bot archival sync
+    └── websiteSync/          public-site sync
+        engine · commands · index
 ```
+
+Supporting directories, outside `src/`:
+
+```text
+scripts/
+├── verify-source.js        run one scraper in isolation (the "unit test")
+├── setup/                  interactive setup wizard
+│   index · adapters · discord · discord-create
+│   env-writer · supabase · validators
+├── wizard/                 new-source wizard (LLM prompt generator)
+│   index · dump · detect · prompt · templates
+│   tui · interactive · browser
+├── shared/platform.js      cross-wizard helpers (clipboard, URL open)
+└── maintenance/            one-shot migration + cleanup tools
+
+docs/
+├── architecture.md         mental model, module boundaries, chokepoints
+├── scrapers.md             scraper plugin system + drift playbook
+└── operations.md           deployment, config, troubleshooting, backups
+
+data/                       runtime state (gitignored)
+                            cache.json · audit-log.jsonl · posted-channel-markers/
+```
+
+### How the layers depend on each other
+
+Every import flows downward. A layer only imports from the layers below it, never from the layers above. `config/` is read by every layer and imports from none, so it doesn't appear in the graph.
+
+```mermaid
+flowchart TB
+    Entry["index.js<br/>bot.js"]
+
+    subgraph Core["core/ (pure primitives)"]
+        c1["auditLogger · markers · cache"]
+        c2["dateUtils · cronParser · normalize"]
+        c3["sanitize · shape · formatting"]
+        c4["validation · mutex · deadlineText"]
+    end
+
+    subgraph Scrapers["scrapers/ (puppeteer boundary)"]
+        s1["registry · scrapeAll"]
+        s2["browser · page · retry · progress"]
+        s3["sources/ · extractors/"]
+        s4["diagnostics · alerts · selectors"]
+    end
+
+    subgraph Posting["posting/ (only cache mutator)"]
+        p1["dedup · category · gates"]
+        p2["reconcile · post"]
+        p3["autopost · schedule"]
+        p4["pipeline · consistency"]
+    end
+
+    subgraph Surf["discord/ + web/ (thin handlers)"]
+        u1["commands/ · extensions/"]
+        u2["handle*.js · scrapeAndNotify"]
+        u3["web/server.js"]
+    end
+
+    subgraph Sink["integrations/ (async sinks)"]
+        i1["supabase.js"]
+        i2["websiteSync/"]
+    end
+
+    Entry --> Core
+    Entry --> Scrapers
+    Entry --> Posting
+    Entry --> Surf
+    Entry --> Sink
+
+    Core --> Scrapers
+    Core --> Posting
+    Core --> Surf
+    Core --> Sink
+
+    Scrapers --> Posting
+    Posting --> Surf
+    Posting --> Sink
+```
+
+Two consequences worth noting:
+
+- **`scrapers/` only talks to `posting/` through `scrapeAll`'s return value.** A scraper returns `{items, meta}`; it never calls into `posting/` and never touches cache. This is what makes `verify-source.js` possible — the whole scrapers layer can be run in isolation from the posting layer.
+- **`discord/` and `web/` are entirely thin.** Every mutation they trigger goes through a `posting/` function; every read goes through a `core/` or a `bot.*` accessor. There's no cache write, no marker reservation, no dedup decision inside a handler. That's why both can be tested by booting the bot and clicking buttons — the handler is just a transport, the logic is elsewhere.
+
+### Where a specific file lives
+
+| You're looking for… | Open |
+|---|---|
+| The single function that sends Discord posts | `posting/post.js` |
+| The dedup key computation | `posting/dedup.js` |
+| The scrape orchestrator | `scrapers/scrapeAll.js` |
+| The plugin registry | `scrapers/registry.js` |
+| The audit-trail writer | `core/auditLogger.js` |
+| The marker reserve/confirm cycle | `core/markers.js` |
+| The autopost tick loop | `posting/autopost.js` |
+| The slash command dispatcher | `discord/commands/index.js` |
+| The extension router (post hooks, buttons) | `discord/extensions/index.js` |
+| The Supabase archival sync | `integrations/supabase.js` |
+| The website sync engine | `integrations/websiteSync/engine.js` |
 
 ## Documentation
 
