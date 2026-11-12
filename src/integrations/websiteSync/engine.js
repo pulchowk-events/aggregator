@@ -28,6 +28,7 @@
 
 const crypto = require('crypto');
 const { auditLog } = require('../../core/auditLogger');
+const { normalizeScholarshipToEventShape } = require('../../core/shape');
 const env = require('../../config/env');
 
 const WEBSITE_URL = env.WEBSITE_SUPABASE_URL;
@@ -134,6 +135,12 @@ function scholarshipToWebsiteRow(bot, scholarship) {
     const firstSeen = scholarship.firstSeenAt
         ? new Date(scholarship.firstSeenAt)
         : (scholarship.scrapedAt ? new Date(scholarship.scrapedAt) : new Date());
+    // Re-derive deadlineDisplay at row-build time. Cache items from before
+    // the deadlineText.js / shape.js fix have the chrome string ("♡ Save &
+    // track") baked into scholarship.deadlineDisplay. Reading it directly
+    // would sync the stale value; calling normalizeScholarshipToEventShape()
+    // here recomputes it from deadlineRaw/deadlineParsed and drops the chrome.
+    const shape = normalizeScholarshipToEventShape(scholarship);
     return {
         id: deterministicUUID(dedupKey),
         bot_dedup_key: dedupKey,
@@ -143,7 +150,7 @@ function scholarshipToWebsiteRow(bot, scholarship) {
         provider: scholarship.provider || scholarship.organizer || null,
         deadline_parsed: scholarship.deadlineParsed || null,
         deadline_status: scholarship.deadlineStatus || null,
-        deadline_display: scholarship.deadlineDisplay || null,
+        deadline_display: shape.deadlineDisplay || null,
         deadline_raw: scholarship.deadlineRaw || null,
         funding_type: scholarship.fundingType || null,
         funding_amount: scholarship.fundingAmount || null,
