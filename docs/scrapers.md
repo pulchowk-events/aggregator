@@ -1,6 +1,6 @@
 # Scrapers
 
-The scraper layer turns third-party websites into structured `{items, meta}` reports. This doc is the reference for adding a source, diagnosing a broken one, and understanding why the abstraction exists.
+The scraper layer turns third-party websites into structured `{items, meta}` reports. This doc is the reference for adding a source, diagnosing a broken one with the CLI, and understanding why the abstraction exists.
 
 **Contents**
 - [Two layers: wrappers and extractors](#two-layers-wrappers-and-extractors)
@@ -9,6 +9,7 @@ The scraper layer turns third-party websites into structured `{items, meta}` rep
 - [Drift classification](#drift-classification)
 - [Fallback chains](#fallback-chains)
 - [Verifying a source](#verifying-a-source)
+- [Diagnosing a source](#diagnosing-a-source)
 - [Adding a source (guided)](#adding-a-source-guided)
 - [Adding a source (manual)](#adding-a-source-manual)
 - [When a source drifts](#when-a-source-drifts)
@@ -148,7 +149,7 @@ These feed `classifyOutcome`. Omitting them doesn't break the source, but it mak
 
 ## Drift classification
 
-After `extract()` returns, `classifyOutcome({items, meta})` decides what happened. The result drives `verify-source.js`'s verdict and the source-failure alert subsystem.
+After `extract()` returns, `classifyOutcome({items, meta})` decides what happened. The result drives `verify`'s verdict and the source-failure alert subsystem.
 
 The six statuses:
 
@@ -206,11 +207,11 @@ Not every field needs a fallback chain. Use one for the fields most likely to dr
 
 ## Verifying a source
 
-`node scripts/verify-source.js <name>` runs a single extractor against the live site with no bot, no Discord, no cron. It's the unit test for a scraper.
+`pulchowk-events verify <name>` (or `node scripts/verify-source.js <name>` without the CLI installed) runs a single extractor against the live site with no bot, no Discord, no cron. It's the unit test for a scraper. Output is identical between the two — the CLI is a thin subprocess wrapper around the script.
 
 ```bash
-node scripts/verify-source.js khalti
-node scripts/verify-source.js scholarshipsads
+pulchowk-events verify khalti
+pulchowk-events verify scholarshipsads
 ```
 
 Expected output:
@@ -253,22 +254,80 @@ What to look at:
 - **`warnings`** — if an item has data-quality warnings, they'll be listed in the `/pending` view when it goes live. Look for a pattern (e.g. "every image URL is a placeholder").
 - **`duration`** — if a source took 5+ minutes, it's scraping too much. Consider capping pagination.
 
-For sources that need a warm browser profile (Cloudflare, logged-in pages), `verify-source.js` must run on the machine that has that profile. On WSL2, `BROWSER_EXECUTABLE_PATH` pointing at a Windows path fails silently — verify from Windows instead.
+For sources that need a warm browser profile (Cloudflare, logged-in pages), the verify command must run on the machine that has that profile. On WSL2, `BROWSER_EXECUTABLE_PATH` pointing at a Windows path fails silently — verify from Windows instead.
+
+---
+
+## Diagnosing a source
+
+`pulchowk-events diagnose <name>` (or `node scripts/diagnose.js <name>`) goes one level deeper than verify. Where verify tells you *whether* the source is broken (the verdict), diagnose tells you *which selectors broke* and what alternatives currently match.
+
+```bash
+pulchowk-events diagnose sathijob
+pulchowk-events diagnose sathijob --full
+```
+
+The tool:
+
+1. Loads the source's listing page in a fresh browser (no bot, no Discord).
+2. Extracts every CSS-selector-shaped string from the extractor's source file.
+3. Reports count + first-match sample for each selector.
+4. For zero-match selectors, suggests common variations that DO match.
+5. Optionally (`--full`) runs the actual extractor and correlates the verdict.
+
+Modes:
+
+| Flag | What it does |
+|---|---|
+| (none) | Fast — selectors only |
+| `--full` | Also runs the extractor, correlates result |
+| `--url <url>` | Override the target URL |
+| `--json` | Machine-readable output |
+| `--fix` | Print a suggested patch (does not write) |
+| `--fix --apply` | Write the patch |
+| `--all` | Sweep every source |
+
+Read-only by default. Never mutates files without `--fix --apply` together. Exits 0 always — drift is a valid finding, not a failure.
+
+Output shape:
+
+```
+▶ diagnose: sathijob (jobs)
+
+=== page state ===
+  loaded: ok
+  looksBlocked: false
+
+=== selectors (from extractor source) ===
+  ✓ a[href*="/job/"]                                    14 matches
+    sample: "Software Engineer @ ..."
+  ✓ div[class*="job-card"]                              14 matches
+    sample: "<div class=\"job-card ...\">"
+  ✗ h1.job-title                                        0 matches  ← BROKEN
+    alternatives:
+      h1[class*="title"]                                14 matches
+      .job-header h1                                    14 matches
+
+=== extractor run ===
+  items: 0
+  verdict: dom_drift_detail
+  detailParseFailures: 14/14
+```
+
+The `← BROKEN` marker plus the `alternatives` list is the whole value. When the title selector stops matching, diagnose tells you that in one command — no need to open devtools, no need to read the extractor source by hand.
+
+`--json` output is the same data in a machine-readable shape, useful for the `fix` wizard (below) which parses it to decide whether a fix is unambiguous.
 
 ---
 
 ## Adding a source (guided)
 
-The `wizard/index.js` flow walks you through source creation end-to-end. It's a helper, not a replacement for understanding the extractor contract — read the sections above before running it.
+The `add` command walks you through source creation end-to-end. It's a helper, not a replacement for understanding the extractor contract — read the sections above before running it.
 
 ```bash
-node scripts/wizard/index.js <url> <name> <type>
-```
-
-Example:
-
-```bash
-node scripts/wizard/index.js https://example.com/events mynewsite events
+pulchowk-events add https://example.com/events --type events
+# or, without the CLI:
+# node scripts/wizard/index.js https://example.com/events mynewsite events
 ```
 
 The wizard:
@@ -281,7 +340,7 @@ The wizard:
    - `src/scrapers/sources/<type>/<name>.js` — the wrapper (ready to commit)
    - `src/scrapers/extractors/<type>/<name>.js` — a stub with TODO comments
    - `src/scrapers/extractors/<type>/<name>.md` — a prompt file for an LLM (see below)
-6. **Opens the interactive flow** — copies the prompt to your clipboard, offers to open DeepSeek, waits for you to paste the LLM's code back, writes it to the extractor, runs `verify-source.js`, and reports the verdict.
+6. **Opens the interactive flow** — copies the prompt to your clipboard, offers to open DeepSeek, waits for you to paste the LLM's code back, writes it to the extractor, runs `verify` on it, and reports the verdict.
 
 The prompt file contains: the site URL, the detected site type and evidence, the extractor contract, the item shape, one worked reference extractor (whichever of Khalti / KataJaam / NepVents matches the detected type), and the full dump from steps 2-3. It's a self-contained prompt — paste it into DeepSeek (or any code-capable LLM) and the response should be a working extractor for that site.
 
@@ -382,7 +441,8 @@ module.exports = {
 Commit both files, then verify:
 
 ```bash
-node scripts/verify-source.js mynewsite
+pulchowk-events verify mynewsite
+# or: node scripts/verify-source.js mynewsite
 ```
 
 When it returns `verdict: ok` with a sensible item count, the source is live. The registry discovers it on the next scrape run.
@@ -391,28 +451,46 @@ When it returns `verdict: ok` with a sensible item count, the source is live. Th
 
 ## When a source drifts
 
-The playbook, in order:
+The playbook, in order.
 
 **1. Confirm the failure mode.**
 
 ```bash
-node scripts/verify-source.js <name>
+pulchowk-events diagnose <name>
 ```
 
-Read the `verdict` line, don't guess from the item count alone.
+This reports every selector the extractor uses, which ones broke, and which alternatives currently match. If you also want the formal verdict, `pulchowk-events verify <name>` runs the extractor end-to-end and prints the classifier's verdict.
 
-**2. Match the verdict to a fix.**
+**2. Try the auto-fixer.**
 
-- **`dom_drift_listing`** — listing selector matched nothing. Open the extractor, find the listing selectors (usually a `pickAll` call or a `page.evaluate(() => document.querySelectorAll(...))`), inspect the current page in devtools, patch the primary selector to match current DOM, keep the old selector as a fallback.
+```bash
+pulchowk-events fix <name>
+# or: pulchowk-events fix          (interactive picker)
+# or: pulchowk-events fix all      (sweep every source)
+```
+
+The fix entry point lists every source with last-known status, lets you pick one, runs the diagnosis, and offers to apply the fix if it's unambiguous — one broken selector, one unambiguous alternative. After applying, it re-verifies. If the diagnosis is ambiguous (multiple alternatives match equally), it falls through to manual.
+
+Interactive by default. `--apply` skips the confirm prompt and applies non-interactively. `--full` also runs the extractor for correlation.
+
+**3. Match the verdict to a manual fix (if auto-fix couldn't).**
+
+- **`dom_drift_listing`** — listing selector matched nothing. Open the extractor, find the listing selectors (usually a `pickAll` call or a `page.evaluate(() => document.querySelectorAll(...))`), patch the primary selector to match current DOM, keep the old selector as a fallback.
 - **`dom_drift_detail`** — detail pages yielded no titles. Same procedure, but for the detail title selector. Usually the title is an `<h1>` with a specific class that got renamed.
-- **`blocked`** — the site served a captcha or Cloudflare challenge. Not a code fix. Set `BROWSER_EXECUTABLE_PATH` and `BROWSER_USER_DATA_DIR` to a profile that's manually solved the challenge once. On WSL2, this only works from Windows.
+- **`blocked`** — the site served a captcha or Cloudflare challenge. Not a code fix. Set `BROWSER_EXECUTABLE_PATH` and `BROWSER_USER_DATA_DIR` to a profile that has manually solved the challenge once. On WSL2, this only works from Windows.
 - **`empty`** — the site loaded, anchors were found, some detail pages yielded titles, but zero items came out. Either the site genuinely has no items right now, or a filter is rejecting everything. Check the console output — the extractor usually logs why items were skipped.
 
-**3. Patch, verify, commit.**
+**4. Patch, verify, commit.**
 
-After patching the extractor, re-run `node scripts/verify-source.js <name>`. Confirm `verdict: ok` and `items > 0`. Note the drift in the file's "Selector drift history" comment with the date and what changed. Commit.
+After patching (auto or manual), re-run:
 
-**4. If the fix is a rewrite, note what changed.**
+```bash
+pulchowk-events verify <name>
+```
+
+Confirm `verdict: ok` and `items > 0`. Note the drift in the file's "Selector drift history" comment with the date and what changed. Commit.
+
+**5. If the fix is a rewrite, note what changed.**
 
 Structural drift (site moved from listing-to-detail to single-page-cards, or switched from HTML to JSON-LD) means a full extractor rewrite. Update the file's top comment to describe the new structure, and update the source table below in this doc to reflect the new reality.
 
@@ -430,10 +508,10 @@ Structural drift (site moved from listing-to-detail to single-page-cards, or swi
 | **InternSathi** | jobs | Virtualized scroll + Load more / Next | Per-job detail page | Stat-grid extraction, slug-based fallback | Same structure as SathiJob. Slug encodes level/employment-type/mode, used as fallback. |
 | **MeroJob** | jobs | Real pagination (Next link) | Per-job detail page | Icon-based field extraction | Deadlines are relative ("15 days from now") — converted to absolute at scrape time. |
 | **KumariJob** | jobs | Real pagination (rel=next / Next link) | Per-job detail page | Label/value row extraction, badge classification | "Apply Now" often points offsite — only used as `registrationUrl` when it's a well-formed http(s) URL. |
-| **ScholarshipsAds** | scholarships | 2 category pages, paginated | Per-card detail visit for deadline lookup | Listing extraction + detail-page deadline scan | Page 1 only per category — page 2+ is Cloudflare-challenged. |
+| **ScholarshipsAds** | scholarships | 2 category pages, paginated | None — no detail visit; deadline read from listing card icon-calendar | Listing-only extraction | Page 1 only per category — page 2+ is Cloudflare-challenged. ~2/3 of listing cards have no deadline; those ship as estimated-year-only. |
 | **Erasmus Mundus** | scholarships | Single listing, paginated | Per-project detail page | Two-hop with year pre-filter | Deadlines intentionally `unknown` (project duration ≠ application deadline). No funding amount (total consortium grant ≠ per-student award). |
 
 Two sources are documented as structurally limited:
 
-- **ScholarshipsAds** scrapes only the first page of each category. Pages 2+ are behind Cloudflare's bot-detection wall, which a warm browser profile can't reliably bypass across many paginated requests. The extractor deliberately stops after page 1 rather than retrying — it captures the newest 20 items per category, which is enough for a community feed.
+- **ScholarshipsAds** scrapes only the first page of each category. Pages 2+ are behind Cloudflare's bot-detection wall, which a warm browser profile can't reliably bypass across many paginated requests. The extractor deliberately stops after page 1 rather than retrying — it captures the newest 20 items per category, which is enough for a community feed. Deadline coverage is partial by structure, not by bug: only the subset of listing cards with an icon-calendar have a parsed deadline (~1/3 on a typical run). The rest ship with an estimated-year-only deadline, which renders as a year rather than a specific date on the website. There's no fix without a warm browser profile that can survive the Cloudflare challenge per-card.
 - **Kgarira's** pagination returns the same 3 events on every page. The `MAX_PAGES = 3` loop therefore re-scrapes the same 3 events 3 times, producing 9 items before dedup (deduped to 3 by the downstream pipeline). Not a correctness issue, just throughput waste — no easy fix until the site's pagination mechanism changes.

@@ -89,6 +89,8 @@ Point the task's action at that batch file if you prefer. Right-click → Run st
 
 To kill it cleanly before an update: Task Scheduler → find the task → End. Or in PowerShell: `Get-Process node | Where-Object { $_.Path -like '*pulchowk-events*' } | Stop-Process`.
 
+**After pulling new commits to the Windows checkout, restart the task.** The running process keeps the old code in memory until restarted. Editing files on disk does nothing to the running process — `require()` already loaded them. This is the single most common "my fix didn't work" trap on Windows: the fix is committed and pulled, but the process is still running pre-fix code.
+
 ### pm2 (cross-platform alternative)
 
 Simpler than systemd but adds a dependency. Good for dev boxes or when you're not on Linux.
@@ -195,7 +197,7 @@ Supabase — website sync:
 | `WEBSITE_REVALIDATE_URL` | Optional. On-demand ISR webhook URL. |
 | `WEBSITE_REVALIDATE_SECRET` | Secret for `X-Revalidate-Secret` header. |
 
-Everything after this section assumes `.env` is populated. The setup wizard (`node scripts/setup/index.js`) can generate `.env` interactively — see [Setup wizard](#setup-wizard).
+Everything after this section assumes `.env` is populated. The setup wizard (`pulchowk-events setup`, or `node scripts/setup/index.js`) can generate `.env` interactively — see [Setup wizard](#setup-wizard).
 
 ### Server-specific config files
 
@@ -263,6 +265,8 @@ tail -200 data/audit-log.jsonl | jq -r 'select(.category=="scrape_all_complete")
 
 Expected: at least one entry per active scrape cron (every 6 hours by default). If the last entry is >12 hours old, the bot is stale or down.
 
+Note that `website_sync` runs on a separate hourly schedule and can fire even when `scrape_all_complete` hasn't run recently — sync writes from stale cache in that case. A fresh `website_sync` entry doesn't mean scrapes are healthy; the two are independent.
+
 **2. Source verdicts.** Every source reports its outcome:
 
 ```bash
@@ -282,7 +286,7 @@ for (const s of snap) console.log(s.source, 'failures:', s.consecutiveFailures, 
 "
 ```
 
-Sources with `consecutiveFailures >= 3` are actively broken. Investigate with `node scripts/verify-source.js <name>`.
+Sources with `consecutiveFailures >= 3` are actively broken. Investigate with `pulchowk-events diagnose <name>`, or jump straight to `pulchowk-events fix <name>` if the diagnosis is likely unambiguous.
 
 **4. Post failures.** Every failed post logs its reason:
 
@@ -343,7 +347,13 @@ If the marker exists with `postedAt` but the item was still re-posted, that's a 
 
 If the marker has a `reservedAt` but no `postedAt`, and it's older than 90 seconds, the marker is stale — reconciliation should have kicked in. Check `discord_reconciliation` entries for the story.
 
-**"A source is producing 0 items."** Run `node scripts/verify-source.js <name>`. Match the verdict to a fix:
+**"A source is producing 0 items."** Run:
+
+```bash
+pulchowk-events diagnose <name>
+```
+
+That reports every selector, which one broke, and what alternatives currently match. For a formal verdict that exercises the full extractor, `pulchowk-events verify <name>`. Then match the verdict to a fix:
 
 - `dom_drift_listing` → listing selectors stale
 - `dom_drift_detail` → detail selectors stale
@@ -351,7 +361,7 @@ If the marker has a `reservedAt` but no `postedAt`, and it's older than 90 secon
 - `empty` → site genuinely has nothing
 - `parse_failed` → runtime error, check console
 
-See [`scrapers.md`](scrapers.md) for the full drift playbook.
+`pulchowk-events fix <name>` automates the unambiguous cases. See [`scrapers.md`](scrapers.md) for the full drift playbook.
 
 **"The website is out of sync with Discord."**
 
@@ -361,7 +371,7 @@ See [`scrapers.md`](scrapers.md) for the full drift playbook.
 /website-sync now  # to reconcile
 ```
 
-The health command diffs the bot's eligible set against the website's rows. `missing` = should be on the site but isn't. `orphans` = on the site but shouldn't be. Both get reconciled by `now`.
+The health command diffs the bot's eligible set against the website's rows for each of the three tables (events, jobs, scholarships). `missing` = should be on the site but isn't. `orphans` = on the site but shouldn't be. Both get reconciled by `now`.
 
 **"Autopublish isn't crossposting new live posts."** The wrap fires on every successful live post, but only crossposts if the target channel is an Announcement channel and the just-posted message wasn't removed by the dedupe sweep. Check:
 
@@ -457,10 +467,12 @@ Verify no re-posting happened: the first full scrape after migration should prod
 For a fresh deployment from zero. If you already have a working `.env`, skip this.
 
 ```bash
-# Walk the flow with mock data (never touches .env, Discord, or Supabase)
-node scripts/setup/index.js --demo
+# Via the CLI (preferred)
+pulchowk-events setup --demo   # mock data, writes data/demo-setup.env
+pulchowk-events setup          # real
 
-# Real setup
+# Or directly, without the CLI installed
+node scripts/setup/index.js --demo
 node scripts/setup/index.js
 ```
 
@@ -535,10 +547,13 @@ Every one must end with `to guild <ID> only`. If any of them says `Registered N 
 ### "0 items scraped"
 
 ```bash
-node scripts/verify-source.js <name>
+pulchowk-events diagnose <name>
+pulchowk-events fix <name>
 ```
 
-Match the verdict to a fix. Full playbook in [`scrapers.md`](scrapers.md#when-a-source-drifts). The most common cause is selector drift — the site changed its DOM and the extractor's `pickOne`/`pickAll` chain didn't catch it.
+`diagnose` reports which selector broke and what currently matches instead. `fix` applies the fix automatically when the diagnosis is unambiguous, then re-verifies. If neither resolves it, `pulchowk-events verify <name>` gives the formal verdict — full playbook in [`scrapers.md`](scrapers.md#when-a-source-drifts).
+
+The most common cause is selector drift — the site changed its DOM and the extractor's `pickOne`/`pickAll` chain didn't catch it.
 
 ### "Post failed: no_image"
 
@@ -621,16 +636,18 @@ The alert means: this source has returned non-`ok` verdicts N scrapes in a row (
 What to do:
 
 ```bash
-# Identify the source from the alert text
-# Run the diagnostic
-node scripts/verify-source.js <source-name>
+# One command: diagnose and auto-fix if unambiguous
+pulchowk-events fix <source-name>
+
+# If it couldn't auto-fix, get the diagnosis for manual repair
+pulchowk-events diagnose <source-name>
 ```
 
 The verdict matches the alert's `Why:` line. Follow the corresponding fix in [`scrapers.md`](scrapers.md#when-a-source-drifts).
 
 Alerts have a 60-minute cooldown per source — an ongoing outage won't re-ping more than once per hour. The audit log records every failure, but the Discord alert is throttled to avoid noise during an extended outage.
 
-If the alert arrives but `verify-source.js` returns `verdict: ok` — the source may have recovered. Check the actual scrape log:
+If the alert arrives but `pulchowk-events verify <source-name>` returns `verdict: ok` — the source may have recovered. Check the actual scrape log:
 
 ```bash
 grep '<source-name>' data/audit-log.jsonl | tail -5 | jq .
@@ -678,6 +695,18 @@ Three options, in order of preference:
 - **`/cleanup item_type:<type>`** — force-remove from cache (drops the marker too, allowing a clean re-post)
 - **Manually delete the Discord message in the channel**, then retry `/undo` — this clears the scanned-channel state so the undo can proceed normally
 
+### "A fix was committed but the running bot doesn't reflect it"
+
+The running process has the old code in memory. `require()` loads modules once at boot; editing files on disk has no effect until restart.
+
+Confirm the running process is actually on the new commit:
+
+- **On WSL/dev**: `ps -ef | grep "node src/index.js"` gives the PID. `ls -l /proc/<pid>/cwd` confirms the checkout. `stat -c '%y' /proc/<pid>` gives boot time — compare with `git log -1 --format='%ci'` for the fix's commit time. If boot is before the commit, the running process is pre-fix.
+
+- **On Windows** (Task Scheduler): `Get-Process node | Select-Object Id, StartTime, Path`. Same comparison — `StartTime` vs the fix's commit time. If start is before, restart the task.
+
+Restart the process (systemd `systemctl restart`, Task Scheduler "End" then "Run", pm2 `restart`). Then re-verify the behavior.
+
 ---
 
 ## Alerts
@@ -699,7 +728,7 @@ Source-failure alerts are a separate subsystem from the audit log.
 - `DEFAULT_SOURCE_ALERT_THRESHOLD` in `constants.js` — streak count. Default 3.
 - `DEFAULT_SOURCE_ALERT_COOLDOWN_MINUTES` in `constants.js` — cooldown. Default 60.
 
-**When one arrives:** treat it as a paging-level signal. Run `node scripts/verify-source.js <source>`. If it's `blocked`, that's often transient (Cloudflare had a bad moment) — wait an hour and re-check. If it's `dom_drift_*`, the source needs a fix — schedule it. If it's `empty`, investigate whether the site changed or is genuinely between events.
+**When one arrives:** treat it as a paging-level signal. Run `pulchowk-events fix <source>` — it diagnoses and, if the diagnosis is unambiguous, applies the fix and re-verifies. If it can't fix, `pulchowk-events diagnose <source>` gives the selector-level detail for manual repair. If the verdict is `blocked`, that's often transient (Cloudflare had a bad moment) — wait an hour and re-check. If it's `dom_drift_*`, the source needs a fix — schedule it. If it's `empty`, investigate whether the site changed or is genuinely between events.
 
 **What they are NOT:** alerts for individual post failures, data-quality warnings, or transient Discord API errors. Those go to `audit-log.jsonl` and (for some) the logs channel. Alerts are specifically for source-level problems that need human attention.
 

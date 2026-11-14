@@ -111,15 +111,26 @@ The bot's behavior is dominated by interactions with external services (Discord 
 
 Each of those is verified manually, not by assertion.
 
-### Per-source testing: `verify-source.js`
+### Per-source testing: `pulchowk-events verify`
 
 ```bash
-node scripts/verify-source.js <name>
+pulchowk-events verify <name>
+# or, without the CLI installed:
+# node scripts/verify-source.js <name>
 ```
 
-This is the unit test for a scraper. It runs the extractor against the live site, prints item count, verdict, listing/detail counts, and a sample. If it returns `verdict: ok` with `items > 0`, the source works.
+This is the unit test for a scraper. It runs the extractor against the live site, prints item count, verdict, listing/detail counts, and a sample. If it returns `verdict: ok` with `items > 0`, the source works. Output is identical between the CLI and the raw script — the CLI is a subprocess wrapper.
 
 Run this after **every** extractor edit. Before every commit that touches `src/scrapers/extractors/`. Before every PR. It takes 30-90 seconds depending on the source.
+
+For selector-level diagnosis (which specific selector broke, and what currently matches instead), use:
+
+```bash
+pulchowk-events diagnose <name>
+# or: node scripts/diagnose.js <name>
+```
+
+`diagnose` reports every selector the extractor uses, marks the zero-match ones, and lists alternatives that currently match. Use it when `verify` returns a non-`ok` verdict and you need to know what to fix.
 
 ### Behavior testing: boot + interact
 
@@ -146,9 +157,23 @@ When reviewing a PR that touches `posting/` or `scrapers/`, the review question 
 
 ### Wizard testing: `--demo`
 
-For `scripts/setup/index.js` changes, run `node scripts/setup/index.js --demo`. It walks the full flow with mock data and writes only to `data/demo-setup.env`. Reset with `rm data/demo-setup.env` between runs.
+For setup wizard changes, run:
 
-For `scripts/wizard/index.js` changes, run it against `https://example.com` (which detects `unknown`, exercising the fallback path) and against a known source URL (which detects `single-page-cards` or `listing-to-detail`, exercising the main path).
+```bash
+pulchowk-events setup --demo
+# or: node scripts/setup/index.js --demo
+```
+
+It walks the full flow with mock data and writes only to `data/demo-setup.env`. Reset with `rm data/demo-setup.env` between runs.
+
+For source-wizard changes, run:
+
+```bash
+pulchowk-events add https://example.com --type events
+# or: node scripts/wizard/index.js https://example.com example events
+```
+
+against `https://example.com` (which detects `unknown`, exercising the fallback path) and against a known source URL (which detects `single-page-cards` or `listing-to-detail`, exercising the main path).
 
 ---
 
@@ -252,7 +277,7 @@ Two files: a 5-line wrapper and the extractor. Full walkthrough is in [`docs/scr
 
 **Before opening a PR that adds a source:**
 
-1. `node scripts/verify-source.js <name>` must return `verdict: ok` with `items > 0`
+1. `pulchowk-events verify <name>` (or `node scripts/verify-source.js <name>`) must return `verdict: ok` with `items > 0`
 2. The item sample must have reasonable data: title populated, dates parseable, images real URLs (not placeholders)
 3. If the source has category pages or pagination, the extractor must report `meta.listingHits` and `meta.detailPagesVisited` correctly
 4. `meta.looksBlocked` must be set true if the source is captcha-gated, and the extractor must respect `--profile` correctly
@@ -263,6 +288,8 @@ Two files: a 5-line wrapper and the extractor. Full walkthrough is in [`docs/scr
 **Meta counters.** Every extractor must set at least `pagesVisited`, `listingHits`, `detailPagesVisited`. Without them, `classifyOutcome` can't distinguish `dom_drift_listing` from `dom_drift_detail` and the next drift incident takes 3× as long to diagnose.
 
 **Drift history.** Every extractor file starts with a comment block documenting known drift events with dates. If you're adding a source, note the current site structure and the date it was verified. If you're fixing a drifted source, add a line documenting the change.
+
+When a source drifts, the fix workflow is `pulchowk-events diagnose <name>` for the selector-level diagnosis, then `pulchowk-events fix <name>` to apply the fix if it's unambiguous. `fix` prompts before writing and re-verifies after, so it's safe to run before you've decided to commit the change. Full playbook in [`docs/scrapers.md#when-a-source-drifts`](docs/scrapers.md#when-a-source-drifts).
 
 **Do not add a source that:**
 
@@ -331,12 +358,14 @@ Affected path: posting/reconcile.js::hasBeenPostedToChannel.
 **Testing evidence.** Every PR description includes the commands you ran and their output. Not "tested locally" — the actual command:
 
 ```
-$ node scripts/verify-source.js khalti
+$ pulchowk-events verify khalti
 ▶ Verifying source: khalti (type: events)
 === result ===
 items: 14
 verdict: ok
 ```
+
+`node scripts/verify-source.js khalti` produces identical output if the CLI isn't installed — either form is acceptable evidence.
 
 Or, for a `posting/` change:
 
@@ -353,7 +382,7 @@ A PR that says "tested" without the command and output is asking the reviewer to
 1. Does the change respect the four chokepoints above?
 2. Is the layer boundary correct? (Cache mutation in `posting/`, not `discord/`; no `require('../bot')` from `core/`; etc.)
 3. Does the change add an audit trail?
-4. Does the change test itself? (verify-source for scrapers, boot + interact for posting, `--demo` for wizard)
+4. Does the change test itself? (verify for scrapers, boot + interact for posting, `--demo` for wizard)
 5. Is the commit history clean? (One concern per commit, imperative messages)
 
 Reviewers will request changes if any of those are missing. That's not pedantry — it's the only enforcement mechanism for the invariants documented in `architecture.md`.
@@ -383,13 +412,14 @@ tail -100 data/audit-log.jsonl | jq 'select(.timestamp > "2026-11-11T18:00:00")'
 
 Attach `slice.json`. The audit log contains the full decision trail; if you trimmed it, trim it by timestamp, not by category. A bug report without the audit log is a bug report without the debugging surface.
 
-**3. The `verify-source` verdict**, if the bug is scraper-related.
+**3. The `diagnose` and `verify` output**, if the bug is scraper-related.
 
 ```bash
-node scripts/verify-source.js khalti
+pulchowk-events diagnose khalti
+pulchowk-events verify khalti
 ```
 
-Paste the full output. The verdict is the diagnosis; without it the maintainer will run the same command first thing, adding a full round-trip.
+Paste both. `diagnose` shows which specific selectors broke and what alternatives currently match; `verify` shows the formal verdict and item count. Together they're the complete scraper diagnosis — without them the maintainer will run the same two commands first thing, adding a full round-trip. `node scripts/diagnose.js khalti` and `node scripts/verify-source.js khalti` produce identical output if the CLI isn't installed.
 
 **4. The environment shape.** Not the full `.env` — the relevant keys:
 
