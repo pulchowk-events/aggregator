@@ -11,9 +11,11 @@ The scraper layer turns third-party websites into structured `{items, meta}` rep
 - [Verifying a source](#verifying-a-source)
 - [Diagnosing a source](#diagnosing-a-source)
 - [Adding a source (guided)](#adding-a-source-guided)
+- [Adding a source (batch)](#adding-a-source-batch)
 - [Adding a source (manual)](#adding-a-source-manual)
 - [When a source drifts](#when-a-source-drifts)
-- [Reference: the 10 current sources](#reference-the-10-current-sources)
+- [Reference: current sources](#reference-current-sources)
+- [Batch-generated sources](#batch-generated-sources)
 
 ---
 
@@ -52,11 +54,13 @@ module.exports = {
 
 Why this split exists:
 
-**The wrapper is boilerplate — you never edit it after creation.** It exists so the registry has a stable target to discover. `runSource` is the orchestrator, and it enforces every cross-cutting concern uniformly across all 10+ sources: retry on failure, browser lifecycle, common sanitization, description trimming, image URL validation, diagnostic classification.
+**The wrapper is boilerplate — you never edit it after creation.** It exists so the registry has a stable target to discover. `runSource` is the orchestrator, and it enforces every cross-cutting concern uniformly across all 62 sources: retry on failure, browser lifecycle, common sanitization, description trimming, image URL validation, image enrichment (see [Batch-generated sources](#batch-generated-sources)), and diagnostic classification.
 
 **The extractor is source-specific — you edit it whenever the site changes.** It contains nothing but DOM logic: `page.goto()`, `page.evaluate()`, link harvesting, field extraction. It does not retry, does not sanitize, does not log to the audit trail, does not decide what to do with failure. The orchestrator handles all of that.
 
 The practical consequence: when a source breaks, you open exactly one file. When you add a source, you write exactly one file (plus the 5-line wrapper). Everything else stays untouched.
+
+**Two origins of extractors.** 10 sources are hand-written and directly maintained (4 jobs, 4 events, 2 scholarships — see [Reference: current sources](#reference-current-sources)). The other 52 job extractors were produced by the batch pipeline (`pulchowk-events batch run`) and are maintained via `batch refine` rather than hand-edits. The wrapper/extractor split is identical for both — the batch pipeline just automates the extractor-writing step.
 
 ---
 
@@ -70,7 +74,8 @@ Called once per scrape run, with a live Puppeteer `Page` object and a context:
 
 ```js
 async extract(page, { progress, meta }) {
-    // page:     a Puppeteer Page, already set up with stealth config
+    // page:     a Puppeteer Page, already set up with stealth config.
+    //           null for browserless extractors (see below).
     // progress: a ScrapeProgressTracker instance (has .discovered(n), .unitDone(n))
     // meta:     an object you mutate to report what happened (see next section)
     return { items, meta };
@@ -85,13 +90,35 @@ async extract(page, { progress, meta }) {
 
 **Must update `meta` counters.** See the report section below.
 
+**Log once, not per-item.** `console.log('[name] extracted X/Y jobs')` once at the end of `extract()`. Do not `console.log` inside per-item loops — a 40-item page would emit 40 log lines per scrape cycle, burying real output. One summary line per run is the standard.
+
+### `browserless: true` — optional flag
+
+The extractor can declare `browserless: true` to skip Puppeteer entirely. Used by the three ATS templates (`workable`, `personio`, `smartrecruiters`) that query a public JSON/XML API. When set:
+
+- `page` is `null` in `extract()` — the extractor uses `fetch()` directly.
+- The orchestrator skips retry (a rate-limited API call retried 3× wastes 45s; fail fast and let the next scrape cycle retry).
+- The extractor is responsible for its own `AbortSignal.timeout()` on every fetch.
+
+```js
+module.exports = {
+    browserless: true,
+    async extract(page, { progress, meta }) {
+        const res = await fetch('https://api.example.com/jobs', {
+            signal: AbortSignal.timeout(15000)
+        });
+        // ... parse, push items, return { items, meta }
+    }
+};
+```
+
 ### `preprocessItem(item)` — optional
 
 Called once per item, after `extract()` returns, before the common sanitization pass. Signature is `(item) => item` — mutate and return.
 
 Use it for source-specific cleanup that shouldn't live in the shared sanitizer. Example: NepVents embeds a wall of boilerplate (social links, register button, detail table) inside its description field. `preprocessItem` strips that via `cleanNepVentsDescription()` before the common sanitizer ever sees it.
 
-Do not use it for the cross-cutting cleanups the common sanitizer already handles — image URL validation, description trimming, field-level mislabeling. Those are applied automatically to every source.
+Do not use it for the cross-cutting cleanups the common sanitizer already handles — image URL validation, description trimming, field-level mislabeling, image enrichment. Those are applied automatically to every source.
 
 ---
 
@@ -143,6 +170,8 @@ Why each field matters:
 - **`detailParseFailures`** — how many detail pages produced no title. A high count means the title selector is broken; a low count with zero items means the loop is filtering items out for another reason.
 - **`looksBlocked`** — set true when a captcha or Cloudflare challenge is detected. Overrides everything else: a blocked site that returns 0 items is a "blocked" failure, not a "drifted" failure.
 
+The orchestrator adds three more fields the extractor does not touch: `durationMs` (wall-clock), `imagesEnriched` (count of job items that got an image derived post-extraction), and, for ATS templates, `atsEmpty` (true when the API responded successfully with zero postings — a pass, not a failure).
+
 These feed `classifyOutcome`. Omitting them doesn't break the source, but it makes the difference between a diagnosable failure and an unexplained zero.
 
 ---
@@ -151,7 +180,7 @@ These feed `classifyOutcome`. Omitting them doesn't break the source, but it mak
 
 After `extract()` returns, `classifyOutcome({items, meta})` decides what happened. The result drives `verify`'s verdict and the source-failure alert subsystem.
 
-The six statuses:
+The statuses:
 
 | Status | Meaning | Common cause |
 |---|---|---|
@@ -164,6 +193,8 @@ The six statuses:
 | `parse_failed` | Nothing else matched | Runtime error, or an extractor returning a malformed result |
 
 The distinction between the four non-ok statuses is the whole point. `dom_drift_listing` means "fix the listing selector." `dom_drift_detail` means "fix the detail selector." `blocked` means "this is a network/bot-detection problem, not a code problem." `empty` means "the code is fine, the site has nothing right now." Each needs a different response, and the classifier is what tells you which.
+
+When `verify` or `batch verify` runs, that raw status is further subdivided into a reason code that the human-readable message catalogue (`src/core/messages.js`) maps to a full `{ label, explanation, fix }` entry. E.g. `dom_drift_listing` renders as *"Could not find the job listing — The page loaded fine, but the extractor's CSS selectors matched zero elements. The site probably restructured its HTML, or the extractor was written against a page shape that no longer exists. Next step: Run `pulchowk-events batch refine --only <site>`."*
 
 ---
 
@@ -256,6 +287,8 @@ What to look at:
 
 For sources that need a warm browser profile (Cloudflare, logged-in pages), the verify command must run on the machine that has that profile. On WSL2, `BROWSER_EXECUTABLE_PATH` pointing at a Windows path fails silently — verify from Windows instead.
 
+**When you have 3+ sources to verify at once, use `pulchowk-events batch verify --run <id>`** instead of running `verify` N times. Same pass/fail semantics, parallel execution, one summary. See [`batch.md`](batch.md#verify-refine-promote).
+
 ---
 
 ## Diagnosing a source
@@ -322,7 +355,7 @@ The `← BROKEN` marker plus the `alternatives` list is the whole value. When th
 
 ## Adding a source (guided)
 
-The `add` command walks you through source creation end-to-end. It's a helper, not a replacement for understanding the extractor contract — read the sections above before running it.
+The `add` command walks you through source creation end-to-end for a single source. It's a helper, not a replacement for understanding the extractor contract — read the sections above before running it.
 
 ```bash
 pulchowk-events add https://example.com/events --type events
@@ -332,9 +365,9 @@ pulchowk-events add https://example.com/events --type events
 
 The wizard:
 
-1. **Loads the URL through Puppeteer.** Opens the page, waits for `networkidle2`, waits 2.5 seconds.
-2. **Dumps the listing structure.** JSON-LD types, anchor groups (grouped by href pattern), pagination signals (Next link / page param / Load More), category chips, card group fingerprints.
-3. **Auto-picks a detail link** (if any anchor group suggests one) and dumps the detail page structure too.
+1. **Loads the URL through Puppeteer.** Opens the page, waits for `domcontentloaded`, waits 3 seconds for late content.
+2. **Dumps the listing structure.** JSON-LD types, anchor groups (grouped by href pattern), pagination signals (Next link / page param / Load More), category chips, card group fingerprints, plus the stricter `cardCandidates` / `detailLinkCandidates` fields.
+3. **Auto-picks a detail link** (if any anchor group suggests one) and dumps the detail page structure too, including a scored `mainContentHeuristic` (title tag, description selector, first non-logo image).
 4. **Classifies the site type:** `jsonld-first`, `listing-to-detail`, `single-page-cards`, or `unknown`.
 5. **Writes three files:**
    - `src/scrapers/sources/<type>/<name>.js` — the wrapper (ready to commit)
@@ -342,11 +375,34 @@ The wizard:
    - `src/scrapers/extractors/<type>/<name>.md` — a prompt file for an LLM (see below)
 6. **Opens the interactive flow** — copies the prompt to your clipboard, offers to open DeepSeek, waits for you to paste the LLM's code back, writes it to the extractor, runs `verify` on it, and reports the verdict.
 
-The prompt file contains: the site URL, the detected site type and evidence, the extractor contract, the item shape, one worked reference extractor (whichever of Khalti / KataJaam / NepVents matches the detected type), and the full dump from steps 2-3. It's a self-contained prompt — paste it into DeepSeek (or any code-capable LLM) and the response should be a working extractor for that site.
+The prompt file contains: the site URL, the detected site type and evidence, the extractor contract, the item shape, one worked reference extractor (whichever of Khalti / KataJaam / NepVents matches the detected type), the full dump from steps 2-3, and a required `VERDICT:` line the LLM emits before the code (see [`batch.md`](batch.md#the-two-way-loop) for why).
 
 If the LLM's output fails verification, the wizard offers to retry (paste new code) or regenerate the prompt with extra notes (`--notes "the cards are behind a Show More button"`).
 
 The wizard is a starting point, not a guarantee. Sites with unusual structure (multi-stage navigation, required scroll, login gates) will need manual edits after the wizard runs. The whole value is: the boilerplate (imports, contract, meta counters, progress reporting) is right, and you spend your time on the parts only you can figure out.
+
+**For three or more sources, use the batch pipeline instead.** `pulchowk-events batch run urls.txt --run mybatch` runs the same wizard flow across N URLs, verifies them in parallel, handles redirects and failures, and asks only for the paste round-trips. See [Adding a source (batch)](#adding-a-source-batch) below.
+
+---
+
+## Adding a source (batch)
+
+When you have more than two or three sources to onboard, the batch pipeline is faster than the wizard-per-source loop. It handles URL resolution, template detection, prompt generation, verification, and failure retry — you handle only the LLM paste step.
+
+```bash
+pulchowk-events batch run urls.txt --run mybatch
+```
+
+`urls.txt` is one URL per line. The batch:
+
+1. **Discovers.** Fetches every URL, follows career-page hints, detects ATS vendors, rejects dead links.
+2. **Generates.** Renders a template where the DOM shape matches one of the four known templates; writes LLM prompts for the rest.
+3. **Pastes.** Interactive clipboard loop through every prompt. Handles `NOT_CAREERS_PAGE` verdicts (skip) and `CAREERS_PAGE_REDIRECT` verdicts (follow inline) automatically.
+4. **Verifies.** Runs every generated extractor against the live site in parallel.
+5. **Refines.** LLM-origin failures get re-prompted with their own failure log. Bounded at 3 attempts.
+6. **Deploys.** Verified-passing extractors are copied into `src/scrapers/` with wrappers, then you commit.
+
+Full walkthrough: [`batch.md`](batch.md). The one-line answer for "should I use the wizard or the batch?" — wizard for 1-2 sources, batch for 3+.
 
 ---
 
@@ -433,10 +489,13 @@ module.exports = {
                 safeUnitDone(progress);
             }
         }
+        console.log(`  [mynewsite] extracted ${items.length}/${links.length} events`);
         return { items, meta };
     }
 };
 ```
+
+Note the single `console.log` at the end — one summary line per run. Do not log inside the per-item loop.
 
 Commit both files, then verify:
 
@@ -451,7 +510,9 @@ When it returns `verdict: ok` with a sensible item count, the source is live. Th
 
 ## When a source drifts
 
-The playbook, in order.
+The playbook depends on the source's origin — hand-written vs batch-generated. Both end at the same place (a working extractor) but the mechanism differs.
+
+### Hand-written sources
 
 **1. Confirm the failure mode.**
 
@@ -494,16 +555,61 @@ Confirm `verdict: ok` and `items > 0`. Note the drift in the file's "Selector dr
 
 Structural drift (site moved from listing-to-detail to single-page-cards, or switched from HTML to JSON-LD) means a full extractor rewrite. Update the file's top comment to describe the new structure, and update the source table below in this doc to reflect the new reality.
 
+### Batch-generated sources
+
+Do **not** hand-edit. The batch pipeline remembers the extractor's history (prompt, dump, verify attempts) and can regenerate with the failure evidence in front of the LLM.
+
+**1. Confirm the failure mode.**
+
+```bash
+pulchowk-events verify <name>
+```
+
+The verdict is one of the drift statuses (`dom_drift_listing`, `dom_drift_detail`, `parse_failed`, etc.) or `ok`. The raw code is in the output; the human-readable label and explanation come from `src/core/messages.js`.
+
+**2. Refine via the batch loop.**
+
+```bash
+# Find the run that produced this extractor
+git log --oneline --follow src/scrapers/extractors/jobs/<name>.js | head -3
+
+# Refine using that run's saved state
+pulchowk-events batch refine --run <run-id> --only <name>
+pulchowk-events batch paste  --run <run-id> --only <name>
+pulchowk-events batch verify --run <run-id> --only <name>
+```
+
+The refine step appends a `## Prior attempts` section to the prompt containing the failure log (item count, verdict, stderr tail). The LLM sees its own failure and usually produces a corrected extractor on the second try. Bounded at 3 attempts.
+
+**3. If the site has genuinely changed shape** (moved domains, switched to ATS, became single-page), the correct response is a fresh extractor, not a refine. Either:
+
+- Change the URL in `urls.txt`, re-init a new batch run, and let it generate a fresh prompt. Deploy the passing extractor.
+- If the site now uses a recognized ATS (Workable, Personio, SmartRecruiters), the batch classifies it as such automatically — the template output replaces the old extractor entirely.
+
+**4. Never patch batch-generated extractors by hand.** A hand-patched extractor loses the tie to its batch run and cannot be refined in the future. If a hand-patch is the only option (rare — usually means the site is genuinely un-scrapable and the batch keeps failing), document why in the extractor's header comment so the next person knows it's off the batch loop.
+
+### Both origins
+
+**`blocked`** is not a drift problem. Set `BROWSER_EXECUTABLE_PATH` + `BROWSER_USER_DATA_DIR` to a warm profile and run on Windows. The batch pipeline and the single-source wizard both handle warm profiles — the batch just needs `--profile` to be passed through `batch run`'s environment.
+
 ---
 
-## Reference: the 10 current sources
+## Reference: current sources
+
+The bot ships with **62 job sources** plus the small set of hand-written event and scholarship sources. Run `pulchowk-events batch status` for the live per-run source set, or `ls src/scrapers/extractors/jobs/` for the committed set. The list grows over time as new companies are onboarded through the batch pipeline.
+
+**Origin split**: 10 sources are hand-written and maintained directly (4 jobs + 4 events + 2 scholarships). The remaining 52 job sources were produced by the batch pipeline (`pulchowk-events batch run`) and are regenerated or refined on demand rather than hand-edited. See [Batch-generated sources](#batch-generated-sources) below for the operating model.
+
+### Hand-written sources (10)
+
+These are the sources the repository has always maintained directly. Each has a maintainer who understands the site and is expected to fix it by hand when it drifts.
 
 | Source | Type | Listing structure | Detail structure | Extraction strategy | Known limitations |
 |---|---|---|---|---|---|
 | **Khalti** | events | Single page, no pagination | None — all data on cards | Single `page.evaluate()` | Fastest source. Cards sometimes miss images. |
 | **KataJaam** | events | 9 category pages | Per-event detail page | HTML extraction, blur-up image filter | 9 categories × ~10 events each per run. Detail pages occasionally 404. |
 | **NepVents** | events | 3 category pages | Per-event detail page | JSON-LD-first, HTML fallback | Registration URL requires anchor-click discovery (some pages lack it). |
-| **Kgarira** | events | 3 paginated pages | Per-event detail page | JSON-LD-first, HTML `h1` fallback | Pagination currently returns the same 3 items on each page — deduped downstream, just wasteful. |
+| **Kgarira** | events | 3 paginated pages | Per-event detail page | JSON-LD-first, HTML `h1` fallback | Pagination returns the same 3 items on each page — deduped downstream, just wasteful. |
 | **SathiJob** | jobs | Virtualized scroll + Load More | Per-job detail page | Stat-grid label/value extraction | Scroll loop caps at 40 steps per load; jobs with unusual layouts may miss fields. |
 | **InternSathi** | jobs | Virtualized scroll + Load more / Next | Per-job detail page | Stat-grid extraction, slug-based fallback | Same structure as SathiJob. Slug encodes level/employment-type/mode, used as fallback. |
 | **MeroJob** | jobs | Real pagination (Next link) | Per-job detail page | Icon-based field extraction | Deadlines are relative ("15 days from now") — converted to absolute at scrape time. |
@@ -513,5 +619,28 @@ Structural drift (site moved from listing-to-detail to single-page-cards, or swi
 
 Two sources are documented as structurally limited:
 
-- **ScholarshipsAds** scrapes only the first page of each category. Pages 2+ are behind Cloudflare's bot-detection wall, which a warm browser profile can't reliably bypass across many paginated requests. The extractor deliberately stops after page 1 rather than retrying — it captures the newest 20 items per category, which is enough for a community feed. Deadline coverage is partial by structure, not by bug: only the subset of listing cards with an icon-calendar have a parsed deadline (~1/3 on a typical run). The rest ship with an estimated-year-only deadline, which renders as a year rather than a specific date on the website. There's no fix without a warm browser profile that can survive the Cloudflare challenge per-card.
-- **Kgarira's** pagination returns the same 3 events on every page. The `MAX_PAGES = 3` loop therefore re-scrapes the same 3 events 3 times, producing 9 items before dedup (deduped to 3 by the downstream pipeline). Not a correctness issue, just throughput waste — no easy fix until the site's pagination mechanism changes.
+- **ScholarshipsAds** scrapes only the first page of each category. Pages 2+ are behind Cloudflare's bot-detection wall, which a warm browser profile can't reliably bypass across many paginated requests. The extractor deliberately stops after page 1 — it captures the newest 20 items per category, which is enough for a community feed. Deadline coverage is partial by structure, not by bug: only the subset of listing cards with an icon-calendar have a parsed deadline (~1/3 on a typical run). The rest ship with an estimated-year-only deadline, which renders as a year rather than a specific date on the website. There's no fix without a warm browser profile that can survive the Cloudflare challenge per-card.
+- **Kgarira's** pagination returns the same 3 events on every page. The `MAX_PAGES = 3` loop therefore re-scrapes the same 3 events 3 times, producing 9 items before dedup (deduped to 3 by the downstream pipeline). Not a correctness issue, just throughput waste.
+
+### Batch-generated sources
+
+The remaining 52 job sources in `src/scrapers/extractors/jobs/` were produced by the batch pipeline. They fit one of two shapes:
+
+**Template output** — rendered from `scripts/batch/templates/*.js`:
+
+- `workable.js` — Workable ATS API (JSON)
+- `personio.js` — Personio ATS feed (XML)
+- `smartrecruiters.js` — SmartRecruiters ATS API (JSON)
+- `html-cards-listing.js` — single-page HTML card listings
+
+Templates are deterministic: given a site's DOM shape, the same input always produces the same extractor. No LLM involved. Proven against the live site before being committed.
+
+**LLM output** — the wizard writes a prompt describing the site's DOM dump; a human pastes it into DeepSeek (or another code LLM); the LLM writes the extractor; the batch pipeline verifies it against the live site. Every job extractor not in the hand-written set was produced this way. `git log --oneline --follow src/scrapers/extractors/jobs/<name>.js` shows the batch run that produced the file.
+
+Three differences from hand-written sources:
+
+1. **Do not edit by hand when the site drifts.** Use `pulchowk-events batch refine --only <name>` to feed the failure log back to the LLM for a regenerated extractor. Manual edits work but lose the loop's ability to retry with context.
+
+2. **Image enrichment is runtime, not extraction.** Jobs typically have no per-item image. The orchestrator (`sources/_orchestrate.js`) derives a per-site image from `<meta og:image>` (cached in `data/og-image-cache.json`) or a generated placeholder PNG (`scripts/generate-placeholders.js`) when neither is present. Do not add `companyLogoUrl` extraction to individual extractors — enrichment handles it uniformly for every job.
+
+3. **Prompt shape is locked.** `scripts/batch/lib/prompt-structure.js` validates every generated prompt against a canonical structure. If you change `scripts/wizard/prompt.js`, update the validator in the same commit — `pulchowk-events batch check` will fail otherwise. The lock exists so a prompt edit can't silently degrade every future extractor.

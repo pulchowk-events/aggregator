@@ -7,6 +7,7 @@ Day-2 operations: keeping the bot running, tuning it, diagnosing it, backing it 
 - [Configuration reference](#configuration-reference)
 - [Tuning constants](#tuning-constants)
 - [Monitoring](#monitoring)
+- [Batch pipeline operations](#batch-pipeline-operations)
 - [Backups](#backups)
 - [Migration from a legacy deployment](#migration-from-a-legacy-deployment)
 - [Setup wizard](#setup-wizard)
@@ -91,6 +92,8 @@ To kill it cleanly before an update: Task Scheduler → find the task → End. O
 
 **After pulling new commits to the Windows checkout, restart the task.** The running process keeps the old code in memory until restarted. Editing files on disk does nothing to the running process — `require()` already loaded them. This is the single most common "my fix didn't work" trap on Windows: the fix is committed and pulled, but the process is still running pre-fix code.
 
+**Also restart after every `batch deploy`.** New extractors only get discovered at boot — a running process won't see them until it re-loads the registry. See [Batch pipeline operations](#batch-pipeline-operations) below.
+
 ### pm2 (cross-platform alternative)
 
 Simpler than systemd but adds a dependency. Good for dev boxes or when you're not on Linux.
@@ -153,7 +156,7 @@ Optional:
 | `ALERTS_PING_ROLE_ID` | — | Role to ping on alerts. If unset, alerts post without a ping. |
 | `JOBS_PING_ROLE_ID` | — | Role pinged on live job posts. `null` = no ping. |
 | `SCHOLARSHIPS_PING_ROLE_ID` | — | Role pinged on live scholarship posts. `null` = no ping. |
-| `WEB_PORT` | `3001` | Express dashboard API port. |
+| `WEB_PORT` | `3001` | Express dashboard API port. Also used to construct placeholder-image URLs (`http://127.0.0.1:<port>/placeholders/<name>.png`). |
 | `DASHBOARD_API_KEY` | — | If set, mutating `/api/*` routes require `X-API-Key: <key>`. Unset = those routes are unauthenticated. **Set this in production.** |
 | `DASHBOARD_ALLOWED_ORIGINS` | — | Comma-separated list of origins for CORS. Unset = open CORS (any origin allowed). **Set this in production.** |
 | `BROWSER_EXECUTABLE_PATH` | — | Windows only. Path to Brave/Chrome binary. Used by scrapers so they launch from a real browser profile rather than bundled Chromium. |
@@ -253,7 +256,35 @@ Changing constants in `constants.js` requires restarting the process. Changing a
 
 ## Monitoring
 
-The bot's operational state lives in three places: `data/audit-log.jsonl`, `data/cache.json`, and the Discord logs channel.
+The bot's operational state lives in four places: `data/audit-log.jsonl`, `data/cache.json`, the Discord logs channel, and the terminal output of the running process.
+
+### What you see during a scrape
+
+Since the styled-output refactor, `scrapeAll` prints one line per source as it completes, not a silent 30-second wait followed by a summary. Expected format:
+
+```
+▶ Scrape cycle
+────────────────────────────────────────────────────────────────
+  62 source(s) running in parallel
+
+  ✓ PASS  aarambhait                3 items  ok                 8.2s
+  ✓ PASS  cloudfactory             68 items  ok                25.3s
+  · SKIP  adex                      0 items  empty              4.1s
+  ⚠ WARN  itonics-innovation        0 items  timeout           45.0s
+  ...
+
+──────────────────────────── Scrape summary ────────────────────────
+
+  pass       58
+  empty       3
+  fail        1 -- see failures above
+  items     210
+  duration  182.4s
+```
+
+Sources run in parallel; the lines appear in whatever order they finish. A source that takes longer than 3 seconds prints "still running" heartbeats so you can see the scrape is progressing, not hung.
+
+The same styled output lands in the logs channel if `LOGS_CHANNEL_ID` is set.
 
 ### What to check daily
 
@@ -273,7 +304,7 @@ Note that `website_sync` runs on a separate hourly schedule and can fire even wh
 tail -1000 data/audit-log.jsonl | jq -r 'select(.category=="scrape_all_complete") | .data.perSource | to_entries[] | "\(.key)\t\(.value.verdict)\t\(.value.itemCount)"' | sort | uniq -c
 ```
 
-Expected: mostly `ok` verdicts. Any `dom_drift_*`, `blocked`, or repeated `empty` needs investigation.
+Expected: mostly `ok` verdicts. Any `dom_drift_*`, `blocked`, or repeated `empty` needs investigation. For each failing source, `src/core/messages.js` has a human-readable explanation and fix. `pulchowk-events verify <name>` renders the label + explanation + fix directly.
 
 **3. Source-failure streaks.** Alert state per source:
 
@@ -296,11 +327,13 @@ tail -500 data/audit-log.jsonl | jq -r 'select(.category=="post_event_outcome" a
 
 Common reasons and what they mean:
 
-- `already_posted` — dedup caught a duplicate. This is the system working correctly, not a bug.
+- `already_posted` — dedup caught a duplicate. The system working correctly, not a bug.
 - `no_image` — live gate blocked an imageless item. Post to Test, or add an image via Customize.
 - `data_quality_warning` — live gate blocked a flagged item. Fix the field via Customize, or force-post.
 - `category_paused` — a `/category pause` is active.
 - `send_failed` — actual Discord API error. Check `discord_api_error` entries for the full trace.
+
+Every reason has a `{ label, explanation, fix }` entry in `src/core/messages.js`. `postEventToCategory` prints one human-readable line per attempt — check the console or logs channel for what just happened.
 
 **5. Marker consistency.** The daily maintenance cron (3 AM by default) runs `consistency_check`:
 
@@ -309,6 +342,14 @@ tail -1000 data/audit-log.jsonl | jq -r 'select(.category=="consistency_check") 
 ```
 
 Expected: `No discrepancies between cache.postedEvents and marker files`. Discrepancies require investigation but aren't urgent — they usually reflect a very rare crash-recovery scenario and the next startup reconciliation will resolve them.
+
+**6. Image enrichment coverage.** Every job that scrapes with a null image tries to derive one from `<meta og:image>` or a placeholder. Check the audit log for how often enrichment fires:
+
+```bash
+tail -500 data/audit-log.jsonl | jq -r 'select(.category=="sanitize_scraped_event" and (.data.image == null)) | "\(.data.source)\t\(.data.title)"' | head -20
+```
+
+If a source consistently fails enrichment, the site has no `og:image` meta and no favicon. That's expected for some sites — `data/placeholder-images/<source>.png` should cover them. If a source shows null images *and* has no placeholder PNG, run `node scripts/generate-placeholders.js --only <name>` to generate one.
 
 ### What to check when something feels wrong
 
@@ -363,6 +404,8 @@ That reports every selector, which one broke, and what alternatives currently ma
 
 `pulchowk-events fix <name>` automates the unambiguous cases. See [`scrapers.md`](scrapers.md) for the full drift playbook.
 
+If the source is batch-generated (not one of the 10 hand-written), see [Batch pipeline operations](#batch-pipeline-operations) below — the fix path is `batch refine`, not hand-edits.
+
 **"The website is out of sync with Discord."**
 
 ```bash
@@ -390,17 +433,145 @@ What you might see:
 
 ---
 
+## Batch pipeline operations
+
+The batch pipeline onboards many sources at once. It runs entirely under `scripts/batch/` and writes only to `data/batch/<run-id>/` until the deploy step, which copies verified-passing extractors into `src/scrapers/`. Full walkthrough is in [`batch.md`](batch.md); this section is the operator's view.
+
+### When you run a batch
+
+Typical operator workflow for onboarding 30 new job sources:
+
+```bash
+# 1. Prepare URLs (one per line)
+cat > /tmp/new-companies.txt << 'EOF'
+https://company-a.com/careers
+https://company-b.com/jobs
+...
+EOF
+
+# 2. Run the whole pipeline (init → discover → generate → check → paste → auto → deploy → report)
+pulchowk-events batch run /tmp/new-companies.txt --run 2026-11-15-companies
+
+# 3. Review + commit the deployed extractors
+git status src/scrapers/
+git add src/scrapers/extractors/jobs/ src/scrapers/sources/jobs/
+git commit -m "feat(scrapers): add N batch-generated job sources"
+
+# 4. Restart the bot so it picks up the new sources
+# (systemd / Task Scheduler / pm2 — see Keeping the process alive)
+```
+
+Wall-clock for 30 sources: ~5 min machine time, ~30 min interactive paste, ~5 min auto loop. Total ~40 min for 20-25 committed sources.
+
+### What you see during a batch run
+
+Batches share the styled output with `scrapeAll`:
+
+```
+▶ Batch Verify
+────────────────────────────────────────────────────────────────
+31 extractor(s) · 10 worker(s) · 60s timeout/site · est ~50s
+
+  ░░░░░░░░░░░░░░░░░░░░░░░░  starting
+
+  ▸ 10 worker(s) · dynamic queue · 31 site(s) · 60s timeout/site
+
+  [+  0.0s] → dispatch aarambhait
+  [+  0.0s] → dispatch aegishms
+  ...
+  [+ 12.4s]   PASS   aarambhait                3 items · ok               8.9s
+  [+ 14.3s]   PASS   dlytica                   9 items · ok               8.2s
+  [+ 16.8s]   FAIL   itonics-innovation        0 items · Took too long    45.0s
+             The extractor did not finish within the per-site timeout.
+             This usually means the site is slow, or the extractor is
+             doing too many page loads. Next step: Run
+             `pulchowk-events batch refine --only itonics-innovation`.
+```
+
+Per-source rows appear in real time as workers finish. Failures get the full human-readable explanation from `src/core/messages.js`, not a raw reason code.
+
+### When a deployed batch-generated source drifts
+
+Batch-generated extractors have a different fix path than hand-written ones. Do **not** hand-edit.
+
+```bash
+# 1. Confirm the failure
+pulchowk-events verify <name>
+
+# 2. Find which batch run produced it
+git log --oneline --follow src/scrapers/extractors/jobs/<name>.js | head -3
+
+# 3. Refine in the original run
+pulchowk-events batch refine --run <run-id> --only <name>
+pulchowk-events batch paste  --run <run-id> --only <name>
+pulchowk-events batch verify --run <run-id> --only <name>
+
+# 4. If it passes, redeploy
+pulchowk-events batch deploy --run <run-id> --only <name>
+git add src/scrapers/
+git commit -m "fix(scrapers): refine <name> after drift"
+
+# 5. Restart the bot
+```
+
+The refine step appends the failure log to the prompt so the LLM sees its own error. Bounded at 3 attempts per site; if all three fail, the extractor should not be relied on. Either drop the source from the production set (delete `src/scrapers/extractors/jobs/<name>.js` and its wrapper) or investigate the site manually.
+
+### Inspecting a batch run
+
+```bash
+# Everything waiting on you
+pulchowk-events batch status --run <run-id>
+
+# Per-site audit trail
+tail -50 data/batch/<run-id>/audit.jsonl | jq .
+
+# Verify results per site
+for f in data/batch/<run-id>/results/*.json; do
+  jq -r '"\(.pass) \(.reason) \(.name)"' "$f"
+done
+
+# What templated vs pasted
+jq -r 'to_entries[] | select(.value.templatedBy) | "\(.key) \(.value.templatedBy)"' data/batch/<run-id>/classes.json
+```
+
+### Batch deploy: safety
+
+`batch deploy` will not overwrite existing extractors unless `--force`. If a source is already in `src/scrapers/`, either the batch is trying to deploy a site that was previously hand-committed (review the situation manually) or you're re-deploying a refined extractor (use `--force` deliberately).
+
+The deploy step runs `node --check` on every file before copying. A malformed extractor never reaches `src/`.
+
+### Batch run directory size
+
+Each run stores raw HTML for every URL. For 76 URLs that's roughly 50–100 MB. Run directories are not auto-pruned. Clean up old runs periodically:
+
+```bash
+# Delete runs older than 30 days
+find data/batch -maxdepth 1 -type d -mtime +30 -not -name batch -not -name latest.txt -exec rm -rf {} \;
+```
+
+Keep the most recent few runs — they're the reference state for `batch refine` when a deployed extractor drifts.
+
+### Restart after deploy is mandatory
+
+`batch deploy` copies files into `src/scrapers/` but the running bot has already loaded the old registry. New extractors will not fire until the process restarts. Restart the supervisor's task after every deploy (systemd restart, Task Scheduler End+Run, pm2 restart).
+
+---
+
 ## Backups
 
-The bot's entire state is in `data/`. Three files matter:
+The bot's entire state is in `data/`. Four files/directories matter:
 
 | File | Contains | Can be regenerated? |
 |---|---|---|
 | `data/cache.json` | pending/posted/skipped/expired events, settings | **No** — losing it means re-scraping everything and re-posting it |
 | `data/posted-channel-markers/` | authoritative "was this posted" truth | **No** — losing it means re-posting previously-posted items |
 | `data/audit-log.jsonl` | forensic record | No, but it's append-only and less critical |
+| `data/og-image-cache.json` | derived per-domain og:image / favicon URLs | Yes, on next scrape (30-day TTL, cache rebuilds automatically) |
+| `data/placeholder-images/` | generated placeholder PNGs | Yes, `node scripts/generate-placeholders.js` |
 
-Back them up together, on a schedule. Simplest reliable approach: a daily cron on the same host.
+Back up the first three on a schedule. The last two are convenient but regenerable.
+
+Simplest reliable approach: a daily cron on the same host.
 
 ```bash
 # /etc/cron.daily/pulchowk-events-backup
@@ -410,7 +581,11 @@ BACKUP_DIR=/var/backups/pulchowk-events
 mkdir -p "$BACKUP_DIR"
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 cd /path/to/repo
-tar -czf "$BACKUP_DIR/data-$STAMP.tar.gz" data/cache.json data/posted-channel-markers
+tar -czf "$BACKUP_DIR/data-$STAMP.tar.gz" \
+    data/cache.json \
+    data/posted-channel-markers \
+    data/og-image-cache.json \
+    data/placeholder-images
 
 # Keep 30 days
 find "$BACKUP_DIR" -name 'data-*.tar.gz' -mtime +30 -delete
@@ -503,6 +678,8 @@ Use demo mode to train the flow, or to inspect the wizard before running it on a
 
 **Undo:** delete `.env` (or restore from `.env.bak.<timestamp>`), then delete any channels/roles the wizard created. The wizard doesn't tag anything, so identify its output by name — `⚽┃sports`, `💼┃jobs-internships`, etc. — matching the defaults in `CATEGORY_SPEC`.
 
+**After setup completes:** the bot ships with 62 job sources plus the hand-written event and scholarship sources. None of the job sources need manual setup — they're committed as `src/scrapers/extractors/jobs/*.js` and `sources/jobs/*.js`, and the registry discovers them on first boot. If you want to add more, see [Batch pipeline operations](#batch-pipeline-operations) or [`batch.md`](batch.md).
+
 ---
 
 ## Troubleshooting
@@ -553,14 +730,27 @@ pulchowk-events fix <name>
 
 `diagnose` reports which selector broke and what currently matches instead. `fix` applies the fix automatically when the diagnosis is unambiguous, then re-verifies. If neither resolves it, `pulchowk-events verify <name>` gives the formal verdict — full playbook in [`scrapers.md`](scrapers.md#when-a-source-drifts).
 
-The most common cause is selector drift — the site changed its DOM and the extractor's `pickOne`/`pickAll` chain didn't catch it.
+The most common cause is selector drift — the site changed its DOM and the extractor's `pickOne`/`pickAll` chain didn't catch it. If the source is batch-generated, see [When a deployed batch-generated source drifts](#when-a-deployed-batch-generated-source-drifts) instead — `batch refine` is the right fix path, not hand-editing.
 
 ### "Post failed: no_image"
 
-Live posts require a valid image URL. Scholarships are exempt.
+Live posts require a valid image URL. Scholarships are exempt. Jobs are usually covered automatically by image enrichment (og:image derivation), but a site with neither og:image nor a favicon needs a placeholder PNG.
 
-- Open `/pending`, find the item, click **Customize**, paste a valid image URL
-- Or click **Post to Test** to skip the live gate
+Check if the placeholder exists:
+
+```bash
+ls data/placeholder-images/<source>.png
+```
+
+If not:
+
+```bash
+node scripts/generate-placeholders.js --only <source>
+```
+
+Then retry the post. If the placeholder exists but `hasValidImage` still rejects it, the bot can't fetch its own Express route — check that `WEB_PORT` is set and the Express server is running (it starts at boot after the Discord login).
+
+Manual fallback: open `/pending`, find the item, click **Customize**, paste any valid image URL. Or click **Post to Test** to skip the live gate.
 
 ### "Post failed: data_quality_warning"
 
@@ -622,7 +812,7 @@ Neither guard is a failure — both are refusals to delete, which is the correct
 
 Eligible item gates:
 
-- `hasValidImage` — no image → excluded
+- `hasValidImage` — no image → excluded (jobs usually pass via og:image derivation, but a source without a placeholder PNG gets filtered)
 - data-quality warnings — flagged → excluded
 - blacklisted — matches `/blacklist` rules → excluded
 - user-collision — a user-submitted event on the same date shares at least one substantive word (≥4 chars, word-boundary, not a stopword like "nepal"/"the"/"event") with the bot event → excluded. Titles that share only stopwords or only short common words like "AI" do NOT collide.
@@ -643,7 +833,7 @@ pulchowk-events fix <source-name>
 pulchowk-events diagnose <source-name>
 ```
 
-The verdict matches the alert's `Why:` line. Follow the corresponding fix in [`scrapers.md`](scrapers.md#when-a-source-drifts).
+The verdict matches the alert's `Why:` line. Follow the corresponding fix in [`scrapers.md`](scrapers.md#when-a-source-drifts), or for batch-generated sources, [`batch.md`](batch.md#verify-refine-promote).
 
 Alerts have a 60-minute cooldown per source — an ongoing outage won't re-ping more than once per hour. The audit log records every failure, but the Discord alert is throttled to avoid noise during an extended outage.
 
@@ -677,7 +867,7 @@ Two causes:
 tail -1000 data/audit-log.jsonl | jq -r 'select(.category=="post_event_outcome" and .data.ok==false) | .data.reason' | sort | uniq -c | sort -rn
 ```
 
-If most failures are the same reason (`no_image`, `data_quality_warning`), that's the actual problem — items are being scraped badly, not failing to post.
+If most failures are the same reason (`no_image`, `data_quality_warning`), that's the actual problem — items are being scraped badly, not failing to post. Every reason now has a `{ label, explanation, fix }` entry in `src/core/messages.js`; check the console output for the full human-readable text of the most common one.
 
 2. **Autopost isn't running.** Check `/autopost status`. All tracks off = nothing will post automatically; `/pending` manual posting still works.
 
@@ -707,6 +897,72 @@ Confirm the running process is actually on the new commit:
 
 Restart the process (systemd `systemctl restart`, Task Scheduler "End" then "Run", pm2 `restart`). Then re-verify the behavior.
 
+### "Placeholder image URL returns 404"
+
+The bot serves placeholder PNGs from its own Express server at `http://127.0.0.1:<WEB_PORT>/placeholders/<name>.png`. If that URL 404s:
+
+1. **Check the PNG exists on disk:**
+
+```bash
+ls data/placeholder-images/<name>.png
+```
+
+2. **Check the file is a valid PNG:**
+
+```bash
+file data/placeholder-images/<name>.png
+# should say: PNG image data, 1024 x 1024
+```
+
+3. **Check the Express server is running.** If the bot is running (Task Scheduler / systemd shows active), the server should be up. Test with `curl -sI http://127.0.0.1:6234/placeholders/<name>.png | head -3` — expect `HTTP/1.1 200 OK`.
+
+4. **If the PNG doesn't exist**, regenerate it: `node scripts/generate-placeholders.js --only <name>`.
+
+5. **If the Express server isn't running**, restart the bot. The `/placeholders/:name` route only exists after `server.js` registers — a stale process from before the route was added won't serve it.
+
+If the bot is running with a `WEB_PORT` you didn't expect, `curl` on the wrong port returns "Cannot GET". Check `.env` for the actual port.
+
+### "Batch run says 'run dir already exists'"
+
+Expected behavior. `batch init` refuses to overwrite an existing run directory — it would corrupt the run's state (dumps, generated extractors, results). Two options:
+
+```bash
+# Pick a different run-id
+pulchowk-events batch run urls.txt --run <new-id>
+
+# Or delete the old run if it's truly abandoned
+rm -rf data/batch/<old-id>
+pulchowk-events batch run urls.txt --run <old-id>
+```
+
+Before deleting, check if the old run has `generated/*.js` files worth keeping — those are verified extractors. If they're already committed to `src/scrapers/`, the run is disposable.
+
+### "Batch paste is stuck on 'waiting for clipboard'"
+
+The poller is waiting for a reply that passes three checks: JS syntax (`node --check`), identity (`does the code reference the current site?`), and (for negative verdicts) verdict parser. If you're stuck:
+
+- **Check the warning line.** If it says "does not reference `<name>`" — the clipboard has a previous site's reply. Copy the correct one.
+- **Check that the clipboard is not still holding the prompt.** The poller waits for a change; if you never pasted the reply, it stays silent forever.
+- **Check the timeout.** Default 300s per prompt. If you took longer, it skipped the site. Re-run `batch paste --only <name>`.
+- **Ctrl+C aborts cleanly.** No state is lost; re-run resumes at the same site.
+
+### "Batch verify exit code 1 but report shows 0 hard failures"
+
+`batch verify` exits 1 whenever at least one site failed verify. `batch report` returns 0 only when every site is PASS, REJECT-URL, or REJECT-BLOCKED. The two exits disagreeing means verify found failures that report classifies as `LLM-NOT-CAREERS` or `LLM-REDIRECT` — those are "not extractor failures, they're next-step-pending", but batch verify doesn't know that yet.
+
+Check the report's bucket counts. If all failures are in `LLM-NOT-CAREERS` or `LLM-REDIRECT`, run `batch follow` or update `urls.txt`; verify's exit code doesn't reflect the semantic state.
+
+### "Batch deploy refuses to overwrite"
+
+`batch deploy` won't overwrite existing extractors in `src/scrapers/` unless `--force`. This is deliberate — a site already committed means a human put it there, and silently rewriting would clobber that decision.
+
+Two cases:
+
+- **Redeploying after `batch refine`** — use `--force` (the human just decided to regenerate)
+- **Trying to deploy a site that was hand-committed** — stop. The batch shouldn't be overwriting hand-maintained sources. Either the run-id is wrong or `urls.txt` includes a source it shouldn't.
+
+If you're not sure which case, `git log --oneline --follow src/scrapers/extractors/jobs/<name>.js` shows the commit history. A single commit from a batch means "safe to `--force`"; multiple commits or a hand-edit means "leave it".
+
 ---
 
 ## Alerts
@@ -728,7 +984,9 @@ Source-failure alerts are a separate subsystem from the audit log.
 - `DEFAULT_SOURCE_ALERT_THRESHOLD` in `constants.js` — streak count. Default 3.
 - `DEFAULT_SOURCE_ALERT_COOLDOWN_MINUTES` in `constants.js` — cooldown. Default 60.
 
-**When one arrives:** treat it as a paging-level signal. Run `pulchowk-events fix <source>` — it diagnoses and, if the diagnosis is unambiguous, applies the fix and re-verifies. If it can't fix, `pulchowk-events diagnose <source>` gives the selector-level detail for manual repair. If the verdict is `blocked`, that's often transient (Cloudflare had a bad moment) — wait an hour and re-check. If it's `dom_drift_*`, the source needs a fix — schedule it. If it's `empty`, investigate whether the site changed or is genuinely between events.
+**When one arrives:** treat it as a paging-level signal. Run `pulchowk-events fix <source>` — it diagnoses and, if the diagnosis is unambiguous, applies the fix and re-verifies. If it can't fix, `pulchowk-events diagnose <source>` gives the selector-level detail for manual repair. If the source is batch-generated (see [`scrapers.md`](scrapers.md#batch-generated-sources)), use `batch refine` instead — the fix path is different.
+
+If the verdict is `blocked`, that's often transient (Cloudflare had a bad moment) — wait an hour and re-check. If it's `dom_drift_*`, the source needs a fix — schedule it. If it's `empty`, investigate whether the site changed or is genuinely between events.
 
 **What they are NOT:** alerts for individual post failures, data-quality warnings, or transient Discord API errors. Those go to `audit-log.jsonl` and (for some) the logs channel. Alerts are specifically for source-level problems that need human attention.
 
@@ -736,7 +994,7 @@ Source-failure alerts are a separate subsystem from the audit log.
 
 ## Log rotation
 
-Three log surfaces, each with its own rotation behavior.
+Three log surfaces, each with its own rotation behavior. Plus batch run directories, which are not logs but have a similar footprint concern.
 
 ### `data/audit-log.jsonl`
 
@@ -748,15 +1006,26 @@ For permanent retention: `/backup` downloads `cache.json`, not the audit log. If
 
 Rotates naturally — Discord's own message history is the rotation. No code-level management; the channel just accumulates. If it grows too noisy, archive it periodically (Discord supports archiving to a new channel).
 
-The logs channel is separate from the audit channel. Logs = human-facing curated feed. Audit = exhaustive record mirror (which also truncates each entry to 1500 chars in the Discord embed — the local file has the full entry).
+The logs channel is separate from the audit channel. Logs = human-facing curated feed, styled via `src/core/ui.js` (banners, per-source rows, summaries). Audit = exhaustive record mirror (which also truncates each entry to 1500 chars in the Discord embed — the local file has the full entry).
 
 ### `data/cache.json`
 
 Not a log, but rotation-adjacent: capped at 1000 entries per array (`pendingEvents`, `postedEvents`, `skippedEvents`, `expiredEvents`, `needsAttentionExpiredEvents`). When an array exceeds the cap, the oldest entries are silently dropped. This is why `republish-all` can only re-upload the most recent 1000 posted items, not the entire history.
 
+### `data/batch/<run-id>/`
+
+Not a log either, but worth flagging because it accumulates. Each batch run stores raw HTML for every URL. For 76 URLs that's roughly 50–100 MB. Run directories are never auto-pruned. Clean up old runs periodically:
+
+```bash
+# Delete runs older than 30 days
+find data/batch -maxdepth 1 -type d -mtime +30 -not -name batch -not -name latest.txt -exec rm -rf {} \;
+```
+
+Before deleting, check if `generated/*.js` in the run has extractors that aren't already committed to `src/scrapers/`. A run whose passers are all deployed is disposable; a run whose passers haven't been deployed is the only copy of those extractors.
+
 ### Console output / supervisor logs
 
-The bot writes to stdout and stderr liberally — scrape progress, per-item extraction logs, error traces. Under systemd this goes to `journalctl`; under Task Scheduler it goes to whatever file you redirected to; under pm2 it goes to `pm2 logs`.
+The bot writes to stdout and stderr liberally — scrape progress (now styled with `src/core/ui.js`), per-source completion lines, post outcomes with human-readable reason labels, error traces. Under systemd this goes to `journalctl`; under Task Scheduler it goes to whatever file you redirected to; under pm2 it goes to `pm2 logs`.
 
 None of this is persisted by the bot itself. Rotation is entirely the supervisor's responsibility:
 
@@ -765,6 +1034,14 @@ None of this is persisted by the bot itself. Rotation is entirely the supervisor
 - pm2: `pm2 install pm2-logrotate` provides automatic rotation
 
 The bot doesn't care — it just writes; the supervisor handles retention.
+
+### `data/og-image-cache.json`
+
+Not a log, but rotation-adjacent. Contains one entry per hostname (og:image URL, favicon URL, fetch timestamp). Cache TTL is 30 days per entry; stale entries are re-fetched on the next scrape. File size is bounded by the number of unique hostnames across all sources (~60-70 entries, ~10 KB total). No manual rotation needed.
+
+### `data/placeholder-images/`
+
+Not a log. One PNG per source, generated by `scripts/generate-placeholders.js`. Total size is ~1–2 MB for 62 sources. Regenerate with `--force` if a source's display name changes; otherwise static.
 
 ### Marker files
 
