@@ -280,7 +280,22 @@ async function runOrFallback(ctx) {
     return { ok: false, reason: 'non_tty' };
 }
 
-module.exports = { runInteractive, runStandalone, runOrFallback };
+module.exports = {
+    runInteractive,
+    runStandalone,
+    runOrFallback,
+    // Helpers re-exported for scripts/batch/paste.js. Same clipboard/browser/
+    // code-validation primitives the interactive wizard uses, so the batch
+    // paste loop behaves identically to the single-site wizard flow.
+    copyToClipboard,
+    readFromClipboard,
+    openUrl,
+    stripMarkdownFences,
+    looksLikeExtractorCode,
+    previewLines,
+    runVerify,
+    LLM_PROVIDERS
+};
 
 if (require.main === module) {
     const [name, type] = process.argv.slice(2);

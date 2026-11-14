@@ -42,6 +42,7 @@ function printHelp() {
     console.log(`  ${pad(`${CYAN}diagnose${R} <name>`)} Run selector + extractor diagnosis for one source`);
     console.log(`  ${pad(`${CYAN}verify${R} <name>`)}   Run one source's extractor against the live site`);
     console.log(`  ${pad(`${CYAN}setup${R}`)}            Bootstrap a deployment (.env, Discord channels, Supabase)`);
+    console.log(`  ${pad(`${CYAN}batch${R}`)}            Batch-add many sources (init / discover / generate / verify / report)`);
     console.log(`  ${pad(`${CYAN}help${R}`)}             Show this help`);
     console.log(`  ${pad(`${CYAN}version${R}`)}          Print the version and exit`);
     console.log('');
@@ -133,6 +134,12 @@ function cmdVerify(args) {
     return runScript('verify-source.js', args);
 }
 
+function cmdBatch(args) {
+    // `batch` is a sub-CLI: init/discover/generate/verify/report/status.
+    // Args are forwarded unchanged; the sub-CLI parses them itself.
+    return runScript('batch/index.js', args);
+}
+
 function cmdSetup(args) {
     return runScript('setup/index.js', args);
 }
@@ -161,6 +168,7 @@ function main() {
         case 'fix':      return cmdFix(rest);
         case 'diagnose': return cmdDiagnose(rest);
         case 'verify':   return cmdVerify(rest);
+        case 'batch':    return cmdBatch(rest);
         case 'setup':    return cmdSetup(rest);
         default:
             console.error(`${RED}✗ unknown command${R}: "${command}"`);

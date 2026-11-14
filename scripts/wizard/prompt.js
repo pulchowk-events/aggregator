@@ -150,6 +150,41 @@ ${JSON.stringify(detail, null, 2)}
 \`\`\`
 ` : ''}
 
+## Verdict (required)
+
+Before writing code, look at the evidence dump and decide whether the
+Entry URL above is actually a careers/jobs listing page. The batch uses
+your verdict to decide whether to verify the extractor or ask a human
+to fix the URL.
+
+Emit ONE of these three as the first non-blank line of your response,
+BEFORE the code block:
+
+\`\`\`
+VERDICT: CAREERS_PAGE
+VERDICT: NOT_CAREERS_PAGE -- <one-line reason>
+VERDICT: CAREERS_PAGE_REDIRECT -- <absolute URL>
+\`\`\`
+
+Rules:
+- CAREERS_PAGE -- the entry URL is a jobs listing, or a page that leads
+  to one via normal navigation on the same site. Proceed to write the
+  extractor normally.
+- NOT_CAREERS_PAGE -- the entry URL is a homepage, marketing page,
+  Facebook/Instagram page, login wall, or 404. Reason MUST be <= 120
+  chars. Skip writing extractor code entirely.
+- CAREERS_PAGE_REDIRECT -- the entry URL is not itself the careers
+  listing, but the listing exists elsewhere on the SAME site. Provide
+  the absolute target URL. The batch will follow (max 3 hops, same-
+  domain only), re-dump, and re-prompt. Skip writing extractor code
+  on this turn.
+
+Examples:
+  VERDICT: CAREERS_PAGE
+  VERDICT: NOT_CAREERS_PAGE -- homepage with no visible careers section
+  VERDICT: NOT_CAREERS_PAGE -- redirects to facebook.com login
+  VERDICT: CAREERS_PAGE_REDIRECT -- https://foo.com/about/careers
+
 ## What to output
 
 One code block, ready to paste over

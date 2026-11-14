@@ -49,10 +49,17 @@ async function runSource(name, type, { withPage, progress }) {
 
     let items = [];
     try {
-        const result = await withRetry(
-            () => withPage((page) => extractor.extract(page, { progress, meta })),
-            { label: `${name} scrape` }
-        );
+        // Browserless extractors (ATS API calls) don't retry. ATS APIs
+        // return 429/503 when rate-limited; a 3-attempt retry at 15s
+        // AbortSignal each plus backoff = 51s wasted. One attempt, fail
+        // fast. The AbortSignal inside each ATS template already bounds
+        // the single attempt at 15s.
+        const result = extractor.browserless
+            ? await extractor.extract(null, { progress, meta })
+            : await withRetry(
+                () => withPage((page) => extractor.extract(page, { progress, meta })),
+                { label: `${name} scrape` }
+              );
         if (result && Array.isArray(result.items)) {
             items = result.items;
             if (result.meta) Object.assign(meta, result.meta);

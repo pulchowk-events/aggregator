@@ -61,7 +61,9 @@ if (!sourceType) {
 
     const t0 = Date.now();
     try {
-        const result = await withPage((page) => extractor.extract(page, { progress, meta }));
+        const result = extractor.browserless
+            ? await extractor.extract(null, { progress, meta })
+            : await withPage((page) => extractor.extract(page, { progress, meta }));
         const durationMs = Date.now() - t0;
         const verdict = classifyOutcome(result);
 
