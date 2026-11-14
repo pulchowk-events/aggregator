@@ -15,6 +15,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { auditLog } = require('../core/auditLogger');
+const ui = require('../core/ui');
 const env = require('../config/env');
 
 const SUPABASE_URL = env.SUPABASE_URL;
@@ -174,7 +175,7 @@ async function uploadItemsToTable(items, table, rowMapper, bot) {
     return { uploaded, errors, syncedKeys, uploadedRows };
 }
 
-async function syncPostedEvents(bot, { force = false } = {}) {
+async function _syncPostedEventsInner(bot, { force = false } = {}) {
     if (!isConfigured()) return { ok: false, reason: 'not_configured' };
 
     return bot.cacheMutex.runExclusive(async () => {
@@ -229,6 +230,31 @@ async function syncPostedEvents(bot, { force = false } = {}) {
 
         return { ok: errors.length === 0, uploaded, events: eventsCount, jobs: jobsCount, scholarships: scholarshipsCount, errors };
     });
+}
+
+// Public wrapper. One row per sync call. Inner function owns the
+// gates, batch uploads, marker state, audit -- unchanged. This only
+// prints the outcome for the human.
+async function syncPostedEvents(bot, opts = {}) {
+    const started = Date.now();
+    let result;
+    try {
+        result = await _syncPostedEventsInner(bot, opts);
+    } catch (e) {
+        const dur = ((Date.now() - started) / 1000).toFixed(1);
+        console.log(`  ${ui.tag('fail')}  ${ui.colors.B}supabase${ui.colors.R}  ${ui.colors.GRAY}threw after ${dur}s: ${(e && e.message) || 'unknown'}${ui.colors.R}`);
+        throw e;
+    }
+
+    const dur = ((Date.now() - started) / 1000).toFixed(1);
+    const n = result && (result.events || 0) + (result.jobs || 0) + (result.scholarships || 0);
+    const errs = (result && Array.isArray(result.errors)) ? result.errors.length : 0;
+    const tagKind = result && result.ok ? 'pass' : 'warn';
+    const detail = result && result.ok
+        ? `${n} row(s) · ${(result.events || 0)}E/${(result.jobs || 0)}J/${(result.scholarships || 0)}S · ${dur}s`
+        : `${errs} error(s) · ${dur}s`;
+    console.log(`  ${ui.tag(tagKind)}  ${ui.colors.B}supabase${ui.colors.R}  ${ui.colors.GRAY}${detail}${ui.colors.R}`);
+    return result;
 }
 
 async function republishAllPosted(bot) {

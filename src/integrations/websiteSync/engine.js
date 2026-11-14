@@ -28,6 +28,7 @@
 
 const crypto = require('crypto');
 const { auditLog } = require('../../core/auditLogger');
+const ui = require('../../core/ui');
 const { normalizeScholarshipToEventShape } = require('../../core/shape');
 const env = require('../../config/env');
 
@@ -501,6 +502,17 @@ async function syncOneTable(bot, { tableName, rows, label, emit, log, startMs, s
     };
 }
 
+// Optional-table result lines for the sync summary. Return null when
+// the table was skipped (sync disabled), so the caller can filter.
+function jobsResultLine(r) {
+    if (!r) return null;
+    return ['jobs', `${r.syncedCount || 0} synced · ${r.prunedCount || 0} pruned · ${r.failedCount || 0} failed`];
+}
+function scholarshipsResultLine(r) {
+    if (!r) return null;
+    return ['scholarships', `${r.syncedCount || 0} synced · ${r.prunedCount || 0} pruned · ${r.failedCount || 0} failed`];
+}
+
 // ---------- Main entry ----------
 async function syncWebsite(bot, options = {}) {
     const { onProgress } = options;
@@ -511,7 +523,10 @@ async function syncWebsite(bot, options = {}) {
     if (!isConfigured()) return { ok: false, reason: 'not_configured' };
 
     const startMs = Date.now();
-    log(`Sync starting (mode: ${DRY_RUN ? 'DRY-RUN' : 'LIVE'})`);
+    ui.banner({
+        title: 'Website sync',
+        sub: `${DRY_RUN ? 'DRY-RUN' : 'LIVE'} · events + jobs + scholarships`
+    });
 
     // Events
     log('Computing eligible events...');
@@ -589,10 +604,23 @@ async function syncWebsite(bot, options = {}) {
         errors: [...eventResult.errors, ...((jobResult && jobResult.errors) || []), ...((scholarshipResult && scholarshipResult.errors) || [])]
     };
 
-    log(`${DRY_RUN ? '[DRY RUN] ' : ''}Complete — events: ${eventsSynced} synced/${eventsPruned} pruned/${eventsFailed} failed` +
-        (jobResult ? ` • jobs: ${jobsSynced}/${jobsPruned}/${jobsFailed}` : '') +
-        (scholarshipResult ? ` • scholarships: ${scholarshipsSynced}/${scholarshipsPruned}/${scholarshipsFailed}` : '') +
-        ` — ${durationMs}ms`);
+    // Summary block, styled like the batch phase reports.
+    ui.blank();
+    ui.divider('Website sync summary');
+    ui.blank();
+    const totalSynced = eventsSynced + jobsSynced + scholarshipsSynced;
+    const totalFailed = eventsFailed + jobsFailed + scholarshipsFailed;
+    const totalPruned = eventsPruned + jobsPruned + scholarshipsPruned;
+    const durSec = (durationMs / 1000).toFixed(1);
+    ui.summary([
+        ['mode',        DRY_RUN ? 'DRY-RUN' : 'LIVE'],
+        ['events',      `${eventsSynced} synced · ${eventsPruned} pruned · ${eventsFailed} failed`],
+        jobsResultLine(jobResult),
+        scholarshipsResultLine(scholarshipResult),
+        ['total',       `${totalSynced} synced · ${totalPruned} pruned · ${totalFailed} failed`],
+        ['duration',    `${durSec}s`]
+    ].filter(Boolean));
+    ui.blank();
 
     auditLog('website_sync',
         DRY_RUN
