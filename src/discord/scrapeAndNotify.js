@@ -18,7 +18,7 @@ const { auditLog } = require('../core/auditLogger');
 
 const PROGRESS_UPDATE_INTERVAL_MS = 4000;
 
-async function scrapeAndNotify(bot, site = 'all') {
+async function scrapeAndNotify(bot, site = 'all', type = null) {
     if (bot.isScraping) {
         console.warn('⚠️ scrapeAndNotify called while a scrape is already running — skipping.');
         return { newEvents: 0, errors: 0, skipped: true };
@@ -43,7 +43,7 @@ async function scrapeAndNotify(bot, site = 'all') {
 
         let result;
         try {
-            result = await scrapeAll(bot, { sites: site, progress: bot.scrapeProgress });
+            result = await scrapeAll(bot, { sites: site, type, progress: bot.scrapeProgress });
         } finally {
             clearInterval(progressInterval);
             await updateProgressMessage(bot, progressMessage, true);

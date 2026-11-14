@@ -6,6 +6,16 @@ const definition = new SlashCommandBuilder()
     .setName('scrape')
     .setDescription('Manually trigger event/job/scholarship scraping')
     .addStringOption((option) => option
+        .setName('type')
+        .setDescription('Restrict to one item type (leave empty for all)')
+        .setRequired(false)
+        .addChoices(
+            { name: 'All Types', value: 'all' },
+            { name: 'Events', value: 'events' },
+            { name: 'Jobs', value: 'jobs' },
+            { name: 'Scholarships', value: 'scholarships' }
+        ))
+    .addStringOption((option) => option
         .setName('site')
         .setDescription('Which site to scrape (leave empty for all)')
         .setRequired(false)
@@ -21,11 +31,13 @@ async function handle(bot, interaction) {
         return interaction.reply({ content: '⏳ A scrape is already in progress. Please wait for it to finish.', flags: MessageFlags.Ephemeral });
     }
     const site = interaction.options.getString('site') || 'all';
-    await interaction.reply({ content: `🔄 Starting manual scrape for **${site}**...`, flags: MessageFlags.Ephemeral });
+    const type = interaction.options.getString('type') || 'all';
+    const scopeLabel = (type && type !== 'all') ? `${site} (${type} only)` : site;
+    await interaction.reply({ content: `🔄 Starting manual scrape for **${scopeLabel}**...`, flags: MessageFlags.Ephemeral });
     try {
-        const summary = await require('../scrapeAndNotify').scrapeAndNotify(bot, site);
+        const summary = await require('../scrapeAndNotify').scrapeAndNotify(bot, site, type);
         try {
-            await interaction.editReply({ content: `✅ Scrape completed for **${site}**. Found ${summary.newEvents} new item(s), ${summary.errors} error(s). Check the logs channel for details.` });
+            await interaction.editReply({ content: `✅ Scrape completed for **${scopeLabel}**. Found ${summary.newEvents} new item(s), ${summary.errors} error(s). Check the logs channel for details.` });
         } catch (editError) {
             console.warn('⚠️ Could not update the /scrape reply (likely expired) — result was still logged to the logs channel.');
         }

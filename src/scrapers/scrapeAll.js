@@ -36,20 +36,30 @@ const TYPE_LABEL = { events: 'events', jobs: 'jobs', scholarships: 'scholarships
 //   'all'                 → every plugin across all types
 //   ['khalti', 'merojob'] → matching plugins across all types (by name)
 //   'khalti'              → single source by name
-function resolveSources(sites) {
+function resolveSources(sites, type = null) {
     const all = getAllSources();
+    // Type filter: 'all', null, and undefined all mean "no filter".
+    // 'events' / 'jobs' / 'scholarships' narrow the set to that type only.
+    const typeFilter = (type && type !== 'all') ? type : null;
 
     if (sites === 'all' || sites == null) {
-        return all.map((p) => ({ type: p.type, name: p.name, plugin: p }));
+        const filtered = typeFilter ? all.filter((p) => p.type === typeFilter) : all;
+        return filtered.map((p) => ({ type: p.type, name: p.name, plugin: p }));
     }
 
     const names = Array.isArray(sites) ? sites : [sites];
     const byName = new Map();
     for (const p of all) {
-        if (names.includes(p.name)) byName.set(p.name, { type: p.type, name: p.name, plugin: p });
+        if (!names.includes(p.name)) continue;
+        if (typeFilter && p.type !== typeFilter) {
+            console.warn('[scrapeAll] Site "' + p.name + '" is type "' + p.type + '", not "' + typeFilter + '" -- skipping.');
+            continue;
+        }
+        byName.set(p.name, { type: p.type, name: p.name, plugin: p });
     }
     if (byName.size === 0) {
-        console.warn(`⚠️ [scrapeAll] No plugins matched site filter ${JSON.stringify(sites)} — was the name misspelled?`);
+        const suffix = typeFilter ? ' + type "' + typeFilter + '"' : '';
+        console.warn('[scrapeAll] No plugins matched site filter ' + JSON.stringify(sites) + suffix + ' -- was the name misspelled, or is the site not that type?');
     }
     return Array.from(byName.values());
 }
@@ -64,9 +74,11 @@ function normalizeByType(item, type) {
     return item;
 }
 
-async function scrapeAll(bot, { sites = 'all', progress = null } = {}) {
+async function scrapeAll(bot, { sites = 'all', type = null, progress = null } = {}) {
     const startedAt = Date.now();
-    const sources = resolveSources(sites);
+    const sources = resolveSources(sites, type);
+    const typeFilter = (type && type !== 'all') ? type : null;
+    const typeSuffix = typeFilter ? ' (' + typeFilter + ' only)' : '';
 
     if (sources.length === 0) {
         return {
