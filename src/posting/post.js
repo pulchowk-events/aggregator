@@ -38,6 +38,8 @@ const { sanitizeEventFields } = require('../core/sanitize');
 const { buildPostContent } = require('../core/formatting');
 const { hasValidImage, shouldPingForEvent, hasDataQualityWarnings } = require('./gates');
 const { hasBeenPostedToChannel, lastPostedToChannelAt } = require('./reconcile');
+const ui = require('../core/ui');
+const messages = require('../core/messages');
 const { getPingMention } = require('../config/roles');
 
 const IMAGE_FETCH_TIMEOUT_MS = 15000;
@@ -70,7 +72,7 @@ function resolveChannelId(bot, categoryKey, mode) {
 //   { ok: false, reason: 'already_posted_or_racing' }
 //   { ok: false, reason: 'category_paused' }
 //   { ok: false, reason: 'send_failed', error }
-async function postEventToCategory(bot, event, mode, categoryKeyOverride = null, force = false) {
+async function _postEventToCategoryInner(bot, event, mode, categoryKeyOverride = null, force = false) {
     // Re-sanitize before any gate. Customize may have fixed the issue,
     // and this also ensures freshly-rendered messages use clean fields.
     sanitizeEventFields(event);
@@ -224,6 +226,41 @@ async function postEventToCategory(bot, event, mode, categoryKeyOverride = null,
         // cache.json on the next save.
         if (event._pingCategoryKey) delete event._pingCategoryKey;
     }
+}
+
+// Public wrapper. Every caller goes through this -- it delegates to
+// _postEventToCategoryInner (unchanged gates/markers/sends/audit) and
+// prints one human-readable row per attempt. Behavior identical; output
+// gains one styled line per post outcome.
+//
+// Row format matches scrapeAll's per-source rows so the bot has one
+// visual voice: tag, title, mode, category, duration, human reason label.
+async function postEventToCategory(bot, event, mode, categoryKeyOverride = null, force = false) {
+    const started = Date.now();
+    const titleRaw = (event && event.title) || '(untitled)';
+    const title = titleRaw.length > 40 ? titleRaw.slice(0, 39) + '\u2026' : titleRaw;
+    const cat = categoryKeyOverride || (event && event.category) || '-';
+
+    let result;
+    try {
+        result = await _postEventToCategoryInner(bot, event, mode, categoryKeyOverride, force);
+    } catch (e) {
+        const dur = ((Date.now() - started) / 1000).toFixed(1);
+        console.log(`  ${ui.tag('fail')}  ${ui.colors.B}${title}${ui.colors.R}  ${ui.colors.GRAY}${mode} \u00b7 ${cat} \u00b7 ${dur}s \u00b7 threw: ${(e && e.message) || 'unknown'}${ui.colors.R}`);
+        throw e;
+    }
+
+    const dur = ((Date.now() - started) / 1000).toFixed(1);
+    const ok = result && result.ok === true;
+    const reason = (result && result.reason) || (ok ? 'ok' : 'unknown');
+    const sev = messages.severity(reason);
+    const tagKind = ok ? 'pass'
+        : sev === 'skip' ? 'skip'
+        : sev === 'warn' ? 'warn'
+        : 'fail';
+    const label = messages.label(reason);
+    console.log(`  ${ui.tag(tagKind)}  ${ui.colors.B}${title}${ui.colors.R}  ${ui.colors.GRAY}${mode} \u00b7 ${cat} \u00b7 ${dur}s \u00b7 ${label}${ui.colors.R}`);
+    return result;
 }
 
 module.exports = { postEventToCategory, isCategoryPaused, resolveChannelId };
