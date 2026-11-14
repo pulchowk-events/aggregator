@@ -248,10 +248,19 @@ function passesJobGates(bot, job) {
 }
 
 function computeEligibleJobs(bot) {
-    const pending = (bot.cache.pendingEvents || []).filter((e) => passesJobGates(bot, e));
+    // Jobs are posted-only. Unlike events (which are time-sensitive and
+    // benefit from pre-review website visibility during the autopost delay
+    // + human review window), a job's freshness is measured in days, not
+    // hours. The cost of waiting for human review is near-zero; the cost
+    // of unreviewed / low-quality job data reaching a public site is real.
+    //
+    // This was the specific bug that let ~220 unreviewed job items — with
+    // missing descriptions, closed positions, and boilerplate text — reach
+    // the website the moment scraping finished, before any human looked at
+    // them. Events and scholarships still read pending+posted; only jobs
+    // changed.
     const posted = (bot.cache.postedEvents || []).filter((e) => passesJobGates(bot, e));
     const byKey = new Map();
-    for (const j of pending) byKey.set(getJobWebsiteDedupKey(j), { job: j, bucket: 'pending' });
     for (const j of posted) byKey.set(getJobWebsiteDedupKey(j), { job: j, bucket: 'posted' });
     return Array.from(byKey.values());
 }
