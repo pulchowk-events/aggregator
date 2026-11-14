@@ -14,7 +14,7 @@
 
 | Sources | Categories | Delivery |
 |---|---|---|
-| **62** scraped<br/><sub>4 events · 56 jobs · 2 scholarships<br/>10 hand-written · 52 batch-generated</sub> | **9** routed<br/><sub>sports, software, hardware, gaming, music, business, misc, jobs, scholarships</sub> | **3** targets<br/><sub>Discord test · Discord live · Supabase website</sub> |
+| **many** scraped<br/><sub>events, jobs, and scholarships from Nepali and international sites<br/>see [Sources supported](#sources-supported)</sub> | **9** routed<br/><sub>sports, software, hardware, gaming, music, business, misc, jobs, scholarships</sub> | **3** targets<br/><sub>Discord test · Discord live · Supabase website</sub> |
 
 [Architecture](#architecture) · [Quickstart](#quickstart) · [CLI](#command-line-tool) · [Setup wizard](#setup-wizard) · [Adding a source](#adding-a-source) · [Batch onboarding](#batch-onboarding) · [Docs](#documentation) · [Issues](https://github.com/pulchowk-events/aggregator/issues)
 
@@ -44,17 +44,17 @@
 
 ## Overview
 
-Events, jobs, and scholarship calls are posted across dozens of sites in Nepal — Khalti, KataJaam, NepVents, Kgarira, SathiJob, InternSathi, MeroJob, KumariJob, ScholarshipsAds, EACEA, plus the careers pages of fifty more companies — each with its own page structure, its own taxonomy, its own idea of what "date" means. Keeping a Discord server and a website current against all of them by hand is not tractable.
+Events, jobs, and scholarship calls are posted across dozens of sites in Nepal — Khalti, KataJaam, NepVents, Kgarira, SathiJob, InternSathi, MeroJob, KumariJob, ScholarshipsAds, EACEA, plus the careers pages of dozens of companies — each with its own page structure, its own taxonomy, its own idea of what "date" means. Keeping a Discord server and a website current against all of them by hand is not tractable.
 
 This bot automates the whole loop. On a cron it scrapes every configured source in parallel through a headless browser, classifies each item into a category, deduplicates against a durable on-disk marker per (item, channel) pair, queues new items for human review, posts them on demand or on an autopost schedule, archives posted items to a Supabase project, mirrors a curated subset to the public website's Supabase, and audits every decision into an append-only local JSONL file.
 
-The **batch pipeline** (`scripts/batch/`) exists because 62 sources can't be hand-written. Ten are directly maintained — the ones with unusual structural quirks that need a human who understands the site. The other 52 were produced by the batch pipeline in runs of 30–80 URLs at a time: discover, classify, generate (template or LLM prompt), verify, refine, deploy. The batch is a source-code generator — it writes files into `src/scrapers/` at deploy time and never participates in the runtime item lifecycle.
+The **batch pipeline** (`scripts/batch/`) exists because the source set keeps growing and hand-writing every extractor doesn't scale. Sources are maintained in one of two ways — hand-maintained (a human who understands the site fixes it by hand when it drifts) or batch-maintained (produced by the pipeline, regenerated via `batch refine` when it drifts). Both origins produce identical two-file sources and run through the same `runSource()` orchestrator; the split only matters for which repair path to use. New sources can be onboarded in batches of 30–80 URLs at a time: discover, classify, generate (template or LLM prompt), verify, refine, deploy. The batch is a source-code generator — it writes files into `src/scrapers/` at deploy time and never participates in the runtime item lifecycle.
 
 ## Features
 
-- **A source is two files.** Adding a website to scrape is: create `src/scrapers/sources/<type>/<name>.js` (five-line wrapper), then `src/scrapers/extractors/<type>/<name>.js` and implement `extract()`. The registry discovers both at boot. Nothing in `src/core/`, `src/posting/`, or `src/discord/` needs to know the source exists. The batch pipeline produces the same two files — the wrapper and extractor are identical whether hand-written or generated.
+- **A source is two files.** Adding a website to scrape is: create `src/scrapers/sources/<type>/<name>.js` (five-line wrapper), then `src/scrapers/extractors/<type>/<name>.js` and implement `extract()`. The registry discovers both at boot. Nothing in `src/core/`, `src/posting/`, or `src/discord/` needs to know the source exists. The batch pipeline produces the same two files — the wrapper and extractor are identical whether hand-maintained or batch-maintained.
 
-- **A batch pipeline for onboarding dozens of sources.** `pulchowk-events batch run urls.txt --run mybatch` fetches every URL, classifies the site shape, renders deterministic templates for the four supported ATS families (Workable, Personio, SmartRecruiters) and single-page HTML listings, writes LLM prompts for everything else, verifies the generated extractors against the live site in parallel, and refines LLM-origin failures with their own failure logs. The only human step is the paste round-trip: `paste` copies each prompt to the clipboard, you paste into DeepSeek, copy the reply back, and the loop advances. A 76-site batch runs in about two hours of interactive paste time and produces 55–60 committed extractors.
+- **A batch pipeline for onboarding dozens of sources.** `pulchowk-events batch run urls.txt --run mybatch` fetches every URL, classifies the site shape, renders deterministic templates for the four supported ATS families (Workable, Personio, SmartRecruiters) and single-page HTML listings, writes LLM prompts for everything else, verifies the generated extractors against the live site in parallel, and refines LLM-origin failures with their own failure logs. The only human step is the paste round-trip: `paste` copies each prompt to the clipboard, you paste into DeepSeek, copy the reply back, and the loop advances.
 
 - **Two-way LLM loop.** Every prompt asks the LLM to declare a verdict before writing code: `CAREERS_PAGE`, `NOT_CAREERS_PAGE`, or `CAREERS_PAGE_REDIRECT -- <url>`. A redirect verdict is followed inline — the batch dumps the target URL, regenerates the prompt, and continues the site's loop without the user needing to do anything. A not-careers verdict is recorded and the site lands in a terminal bucket with the reason. Failure-mode classification for verification is not a raw code — every reason (`dom_drift_listing`, `low_precision`, `empty-wizard`, `no_image`, `already_posted`) has a `{ label, explanation, fix }` entry that renders in plain English at the terminal.
 
@@ -64,13 +64,13 @@ The **batch pipeline** (`scripts/batch/`) exists because 62 sources can't be han
 
 - **Drift detection in the scraper layer.** Every source reports `{ items, meta }` where `meta` carries `listingHits`, `detailPagesVisited`, `detailParseFailures`, and `looksBlocked`. When a run returns zero items, the classifier (`classifyOutcome` in `src/scrapers/diagnostics.js`) distinguishes between "genuinely empty" (fine), "the listing selector is stale" (drift at listing), "the detail selector is stale" (drift at detail), and "the site blocked us" (captcha / Cloudflare). Silent zeros become actionable signals.
 
-- **Empty-vs-drift discrimination.** A `dom_drift_listing` failure normally means the extractor couldn't find the page it expected. But "the site has no jobs this week" produces the same zero-item outcome. The batch verifier compares the extractor's output against the discovery-time dump: if the dump showed no plausible job group, the extractor returning zero is correct behavior and the site passes as `empty-wizard`. Only if the dump *did* show job content does the extractor's zero become a real drift failure. This is why a "58 pass" report reflects real working extractors.
+- **Empty-vs-drift discrimination.** A `dom_drift_listing` failure normally means the extractor couldn't find the page it expected. But "the site has no jobs this week" produces the same zero-item outcome. The batch verifier compares the extractor's output against the discovery-time dump: if the dump showed no plausible job group, the extractor returning zero is correct behavior and the site passes as `empty-wizard`. Only if the dump *did* show job content does the extractor's zero become a real drift failure.
 
-- **Resilient selectors, not brittle ones.** Field extractions known to be unstable go through `pickOne` / `pickAll` (`src/scrapers/selectors.js`) with a fallback chain. When KataJaam changed its card class, one selector stopped matching and the bot returned zero events with no error. The current design logs a drift warning the moment a fallback fires, and continues working through minor class shuffles.
+- **Resilient selectors, not brittle ones.** Field extractions known to be unstable go through `pickOne` / `pickAll` (`src/scrapers/selectors.js`) with a fallback chain. When a site changes its card class, one selector stops matching and the bot logs a drift warning the moment a fallback fires, then continues working through minor class shuffles.
 
-- **Image enrichment for jobs.** Job postings rarely carry a per-item image. The orchestrator derives a per-site image from `<meta og:image>` (cached for 30 days per domain in `data/og-image-cache.json`), falls back to the site favicon, and finally to a generated placeholder PNG (`scripts/generate-placeholders.js`: black background, white company name, auto-shrinking font for long names). Placeholders are served from the bot's own Express server at `127.0.0.1:${WEB_PORT}/placeholders/<name>.png`. No job extractor needs to handle image extraction — it's uniform across all 56 job sources.
+- **Image enrichment for jobs.** Job postings rarely carry a per-item image. The orchestrator derives a per-site image from `<meta og:image>` (cached for 30 days per domain in `data/og-image-cache.json`), falls back to the site favicon, and finally to a generated placeholder PNG (`scripts/generate-placeholders.js`: black background, white company name, auto-shrinking font for long names). Placeholders are served from the bot's own Express server at `127.0.0.1:${WEB_PORT}/placeholders/<name>.png`. No job extractor needs to handle image extraction — it's uniform across every job source.
 
-- **Human-readable everything.** Every reason code in the pipeline maps to a `{ label, explanation, fix }` entry in `src/core/messages.js`. Every phase that prints status — scrape, post outcomes, sync batches, batch verify — uses the shared `src/core/ui.js` primitives (banners, tags, result rows, summaries) so the terminal reads as one coherent voice. A user reading a failure sees *"Page layout not recognized — When discovery first visited this page, it could not confidently identify a list of job listings. Next step: Run `batch refine --only <site>`"*. Not `dom_drift_unknown_shape`.
+- **Human-readable everything.** Every reason code in the pipeline maps to a `{ label, explanation, fix }` entry in `src/core/messages.js`. Every phase that prints status — scrape, post outcomes, sync batches, batch verify — uses the shared `src/core/ui.js` primitives (banners, tags, result rows, summaries) so the terminal reads as one coherent voice. A user reading a failure sees *"Page layout not recognized — When discovery first visited this page, it could not confidently identify a list of job listings. Next step: Run `batch refine --only <site>`."* Not `dom_drift_unknown_shape`.
 
 - **Audit-first.** `auditLog()` writes a line to `data/audit-log.jsonl` unconditionally. The Discord mirror is best-effort and never blocks the caller. A Discord outage can never mean zero record exists. Every dedup decision, every post outcome, every Discord API error is logged with the full payload — the local file is the forensic source of truth, not Discord. The batch pipeline has its own audit surface (`data/batch/<run-id>/audit.jsonl`) with the same append-only discipline, tuned for pipeline debugging.
 
@@ -82,9 +82,13 @@ The **batch pipeline** (`scripts/batch/`) exists because 62 sources can't be han
 
 ## Sources supported
 
-The bot ships with 62 job sources plus a small set of hand-written event and scholarship sources. Ten are hand-written and directly maintained — the ones with unusual structural quirks worth documenting individually. The other 52 are job sources produced by the batch pipeline and regenerated or refined on demand via `batch refine`.
+For the live count, run `ls src/scrapers/extractors/jobs/*.js | wc -l` (or `ls src/scrapers/extractors/events/*.js | wc -l`, `.../scholarships/...`). For a per-run view of sources not yet deployed, `pulchowk-events batch status`. The list grows over time; nothing in this document should be read as a fixed count.
 
-### Hand-written sources (10)
+Every source is either **hand-maintained** or **batch-maintained**. The distinction matters for exactly one thing: how to repair the source when it drifts. Both origins produce identical two-file sources, run through the same `runSource()` orchestrator, and fail the same way. See [`docs/scrapers.md#reference-current-sources`](docs/scrapers.md#reference-current-sources) for the full per-source deep dive.
+
+### Hand-maintained sources
+
+These sources are maintained directly — a human who understands the site's structural quirks fixes them by hand when they drift. The repair path is `pulchowk-events diagnose <name>` → `pulchowk-events fix <name>` → `pulchowk-events verify <name>`.
 
 | Type | Source | Site | Notes |
 |---|---|---|---|
@@ -99,9 +103,9 @@ The bot ships with 62 job sources plus a small set of hand-written event and sch
 | Scholarships | ScholarshipsAds | `scholarshipsads.com` | Listing cards carry everything including deadline (icon-calendar on ~1/3 of cards, no detail visit). Cloudflare-challenged past page 1 of each category; extractor deliberately stops after page 1. |
 | Scholarships | Erasmus Mundus | `eacea.ec.europa.eu` | Two-hop scrape. Deadlines are intentionally `unknown` (project duration ≠ application deadline). |
 
-### Batch-generated sources (52)
+### Batch-maintained sources
 
-The 52 job sources in `src/scrapers/extractors/jobs/` that aren't in the hand-written set were produced by the batch pipeline. They fit one of two shapes:
+The rest of the job sources were produced by the batch pipeline. They fit one of two shapes:
 
 - **Template output** — rendered deterministically from `scripts/batch/templates/{workable,personio,smartrecruiters,html-cards-listing}.js`. No LLM involved. The template's input is the site's DOM shape, its output is the extractor.
 - **LLM output** — a prompt describes the site's DOM dump, a human pastes it into DeepSeek, the LLM writes the extractor, the batch pipeline verifies it against the live site. `git log --oneline --follow src/scrapers/extractors/jobs/<name>.js` shows the batch run that produced the file.
@@ -211,7 +215,7 @@ pulchowk-events setup
 
 Every step asks before doing anything. Every side effect is opt-in. `.env` is never written without showing a diff and confirming. The demo mode writes to `data/demo-setup.env` (gitignored) so you can inspect the output without committing anything.
 
-After setup completes, the 62 job sources (plus the 10 hand-written event and scholarship sources) are already committed in `src/scrapers/` — nothing more to install. The registry discovers them on first boot. To onboard more sources later, see [Batch onboarding](#batch-onboarding).
+After setup completes, every committed source in `src/scrapers/` is available to the bot — nothing more to install. The registry discovers them on first boot. To onboard more sources later, see [Batch onboarding](#batch-onboarding).
 
 Full walkthrough of every step, what it writes, and how to undo: [`docs/operations.md#setup-wizard`](docs/operations.md#setup-wizard).
 
@@ -300,8 +304,6 @@ git commit -m "feat(scrapers): add N batch-generated job sources"
 
 # 4. Restart the bot so it picks up the new sources
 ```
-
-Wall-clock for 30 sources: ~5 min machine time, ~30 min interactive paste, ~5 min auto loop. Total ~40 min for 20–25 committed sources.
 
 The pipeline runs these phases in order, skipping any whose work is already done:
 
@@ -612,7 +614,7 @@ Five docs, each scoped to one audience.
 | Doc | Audience | What's inside |
 |---|---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Anyone modifying the code | System overview diagram, lifecycle of one item, startup sequence, module boundaries, the four chokepoints, why the batch pipeline is outside the runtime |
-| [`docs/scrapers.md`](docs/scrapers.md) | Anyone touching a scraper | Plugin system, extractor contract (including `browserless` and image enrichment), drift classification, fallback chains, `verify-source.js`, `wizard/index.js`, drift-fixing playbook, per-source reference (10 hand-written + 52 batch-generated) |
+| [`docs/scrapers.md`](docs/scrapers.md) | Anyone touching a scraper | Plugin system, extractor contract (including `browserless` and image enrichment), drift classification, fallback chains, `verify-source.js`, `wizard/index.js`, drift-fixing playbook, per-source reference for hand-maintained and batch-maintained sources |
 | [`docs/batch.md`](docs/batch.md) | Anyone onboarding many sources | State machine, phase commands, template vs prompt selection, two-way LLM loop (verdicts, redirects, refine, promote), deploy safety, run directory layout, failure modes |
 | [`docs/operations.md`](docs/operations.md) | Anyone running the bot | Process supervision, full env var reference, tuning constants, monitoring queries, batch pipeline operations, backups, migration, setup wizard, troubleshooting matrix, alerts, log rotation |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Anyone opening a PR | The four load-bearing invariants, code style, testing philosophy, commit and PR conventions, how to file a useful bug report |
@@ -637,7 +639,7 @@ Read them in the order that matches what you're about to do. If you're modifying
 
 **Batch pipeline**
 
-- The paste step is linear and human-paced. 76 sources take about 1–1.5 hours of interactive paste regardless of machine speed. Multi-prompt-in-one-chat was considered and rejected — DeepSeek output caps at ~4K–8K tokens, a single extractor is 250–400 lines, and truncating an extractor produces a syntax error that loses the whole reply.
+- The paste step is linear and human-paced. Multi-prompt-in-one-chat was considered and rejected — DeepSeek output caps at ~4K–8K tokens, a single extractor is 250–400 lines, and truncating an extractor produces a syntax error that loses the whole reply.
 - Template coverage varies by batch. In the companies-76 run, 13 of 76 sites templated (17%). Templates excel when the DOM structure is common — Workable / Personio / SmartRecruiters ATS, or single-page card listings. They fall down on multi-stage navigation and culture-card false positives.
 - `refine` stops at 3 attempts per site. A site that genuinely needs a fourth round is not retried automatically — it gets a terminal state and requires `--force` to continue.
 - Batch state is per-run — no cross-run reuse. Re-adding a site from a previous batch re-runs discover, generate, and paste for it. There is no "resume from previous run's extractor" optimization.

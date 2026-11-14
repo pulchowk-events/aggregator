@@ -44,9 +44,9 @@ Every phase is idempotent. Every phase writes per-site files into the run direct
 
 | Sources | Machine time | Interactive time | Committed extractors (typical) |
 |---|---|---|---|
-| 3 sources | ~5 min | ~5 min | 2–3 |
-| 30 sources | ~15 min | ~25 min | 18–25 |
-| 76 sources | ~30 min | ~1–1.5 h | 50–60 |
+| 3 sources | ~5 min | ~5 min | most of them |
+| 30 sources | ~15 min | ~25 min | roughly 2/3 |
+| 76 sources | ~30 min | ~1–1.5 h | roughly 3/4 |
 
 Interactive time is dominated by the paste round-trip. Machine time is discover + generate + verify + refine. The ratio gets worse as batch size grows because refine cycles multiply.
 
@@ -54,7 +54,7 @@ Interactive time is dominated by the paste round-trip. Machine time is discover 
 
 ## What a real batch looks like
 
-A recent 76-URL batch (companies-76) hit these outcomes:
+The companies-76 run is the reference case. It was a 76-URL batch against Nepali tech company career pages, and its outcomes are recorded here because they illustrate every bucket the pipeline produces:
 
 | Bucket | Count | Meaning |
 |---|---|---|
@@ -63,21 +63,23 @@ A recent 76-URL batch (companies-76) hit these outcomes:
 | LLM-NOT-CAREERS | 9 | LLM read the page and said "no job listings" |
 | FAIL-TIMEOUT | 1 | Ran past 60s timeout even after 3 refine attempts |
 
-Breakdown of the 58 PASS:
+Breakdown of the 58 PASS in that run:
 
 - 50 with `items > 0` — real working extractors with real jobs
 - 8 with `items == 0` — passed as "No jobs right now" via empty-vs-drift discrimination (deployed anyway; they'll produce items when the site has openings)
 
-Breakdown of the origin split:
+Breakdown of the origin split in that run:
 
 - 13 templated (Workable / Personio / SmartRecruiters / html-cards-listing)
 - 45 LLM-generated (paste round-trip)
 
-Wall clock: ~2 hours total (15s discover, 4min generate, ~80min paste, ~30min auto loop, 5min deploy+commit).
+Wall clock for that run: ~2 hours total (15s discover, 4min generate, ~80min paste, ~30min auto loop, 5min deploy+commit).
 
-The 9 LLM-NOT-CAREERS sites in that batch ranged from "agency homepage, no careers section" to "URL resolves to a 404." Those aren't failures — they're the LLM saving the pipeline from writing extractors for pages that don't have jobs. All 9 are surfaced in the report with the LLM's reason, so the operator can fix `urls.txt` and re-run if the site really does have openings elsewhere.
+The 9 LLM-NOT-CAREERS sites ranged from "agency homepage, no careers section" to "URL resolves to a 404." Those aren't failures — they're the LLM saving the pipeline from writing extractors for pages that don't have jobs. All 9 are surfaced in the report with the LLM's reason, so the operator can fix `urls.txt` and re-run if the site really does have openings elsewhere.
 
 The 8 REJECT-URL sites were caught before any LLM work — either genuinely dead URLs (empty response) or homepages with no careers link. Two full seconds of discover per site was the entire cost.
+
+These are historical measurements from one specific run, not current state. Every batch produces a different mix. The point of the table is to make the bucket taxonomy concrete, not to predict any future run's results.
 
 ---
 
@@ -99,7 +101,7 @@ The 8 REJECT-URL sites were caught before any LLM work — either genuinely dead
 
 - **Safe deploy.** `batch deploy` refuses to overwrite an existing extractor in `src/scrapers/` unless `--force`. Runs `node --check` on every file before copying. Prints the exact git commands for the human step, but does not run git itself. The pipeline commits nothing on your behalf.
 
-- **Image enrichment, not extraction.** Jobs typically have no per-item image. The orchestrator (`src/scrapers/sources/_orchestrate.js`) derives a per-site image from `<meta og:image>` (cached for 30 days in `data/og-image-cache.json`) or a generated placeholder PNG (`scripts/generate-placeholders.js`) when neither is present. This is uniform across every batch-generated extractor — no extractor needs to handle image extraction itself. See [`scrapers.md#batch-generated-sources`](scrapers.md#batch-generated-sources).
+- **Image enrichment, not extraction.** Jobs typically have no per-item image. The orchestrator (`src/scrapers/sources/_orchestrate.js`) derives a per-site image from `<meta og:image>` (cached for 30 days in `data/og-image-cache.json`) or a generated placeholder PNG (`scripts/generate-placeholders.js`) when neither is present. This is uniform across every job extractor — no extractor needs to handle image extraction itself. See [`scrapers.md#batch-maintained-sources`](scrapers.md#batch-maintained-sources).
 
 ---
 
@@ -346,7 +348,7 @@ Three failure-origin categories:
 | `parsed.items == 0` AND `parsed.listingHits == 0` | Extractor found nothing at all |
 | `dump.maxJobTitleRatio < 0.3` | Discovery also found no plausible job group |
 
-If both are true, the site is treated as `empty-wizard` — a pass with reason "No jobs right now". Only if the dump showed real job content does the extractor's zero become `dom_drift_listing` and fail. This check is why a 58-pass report reflects 58 real working extractors, not an inflated count.
+If both are true, the site is treated as `empty-wizard` — a pass with reason "No jobs right now". Only if the dump showed real job content does the extractor's zero become `dom_drift_listing` and fail. This check is why a report's PASS count reflects real working extractors, not an inflated count.
 
 **Refine** takes `verify-summary.json`, and for every LLM-origin failure appends a `## Prior attempts` section to the prompt containing the failure evidence (item count, verdict, stderr tail). The next paste round gives the LLM its own failure to work from. Bounded at 3 attempts per site; attempts count is stored in `classes.json` under `llmAttempts`.
 
@@ -401,7 +403,7 @@ Two files are load-bearing:
 - **`src-snapshot.json`** — frozen `src/scrapers/` state at init. Naming collisions between new URLs and existing sources are resolved against this snapshot, not the live filesystem. An interrupted `verify` leaving orphans in `src/scrapers/` cannot shift naming on a subsequent `discover` for the same run.
 - **`verify-summary.json`** — merged, not overwritten. A partial run (`batch verify --only a,b`) merges its results with the existing summary. Without this, a partial verify would wipe previously-passing sites out of the summary and `batch report` would show them as NOT-GENERATED.
 
-Run directories are never auto-pruned. For 76 URLs the raw HTML alone is ~50–100 MB. See [`operations.md#batch-pipeline-operations`](operations.md#batch-pipeline-operations) for cleanup guidance.
+Run directories are never auto-pruned. Raw HTML per URL dominates the size; a few dozen URLs means tens of megabytes. See [`operations.md#batch-pipeline-operations`](operations.md#batch-pipeline-operations) for cleanup guidance.
 
 ---
 
@@ -440,7 +442,7 @@ Run directories are never auto-pruned. For 76 URLs the raw HTML alone is ~50–1
 
 **Verify reports `dom_drift_listing` for a site the LLM claims is a real jobs page.** Open the site manually first. If it genuinely has jobs, `batch refine --only <site>` gives the LLM its previous failure plus the current dump. If the site has no jobs, the empty-vs-drift discrimination should already pass it — but if it doesn't, check that `dumps/<site>.json` shows `maxJobTitleRatio >= 0.3`.
 
-**A source fails after being deployed.** Run `pulchowk-events verify <name>` (the single-source verify). If it fails, `batch refine --only <name>` on the original run dir. Do not edit the extractor by hand — refine preserves the ability to retry with evidence. See [`scrapers.md#batch-generated-sources`](scrapers.md#batch-generated-sources) for the full reasoning.
+**A source fails after being deployed.** Run `pulchowk-events verify <name>` (the single-source verify). If it fails, `batch refine --only <name>` on the original run dir. Do not edit the extractor by hand — refine preserves the ability to retry with evidence. See [`scrapers.md#batch-maintained-sources`](scrapers.md#batch-maintained-sources) for the full reasoning.
 
 **`batch report` exit code 2.** Not a failure. It means some sites still need action: paste pending, or LLM redirect verdicts unresolved. Run `batch paste` or `batch follow` accordingly.
 
@@ -500,13 +502,13 @@ No LLM API key needed. Paste is fully manual via clipboard; there is no programm
 
 **Scale**
 
-- The paste step is linear and human-paced. 76 sources takes about 1–1.5 hours of interactive time regardless of how fast the machine-side phases run. Multi-prompt-in-one-chat was considered and rejected: DeepSeek output caps at ~4K–8K tokens, a single extractor is 250–400 lines (~3–4K tokens), and truncating an extractor produces a syntax error that loses the whole reply. Per-tab tracking of multiple DeepSeek chats risks account termination.
+- The paste step is linear and human-paced. Multi-prompt-in-one-chat was considered and rejected: DeepSeek output caps at ~4K–8K tokens, a single extractor is 250–400 lines (~3–4K tokens), and truncating an extractor produces a syntax error that loses the whole reply. Per-tab tracking of multiple DeepSeek chats risks account termination.
 - The batch runs serial pastes, not parallel. Same constraint.
 - A full run's wall clock is dominated by paste (~50%) plus refine cycles (~25%) plus everything else (~25%). Optimizing the 30-minute machine time before the 90-minute human time is backwards.
 
 **Method**
 
-- Template coverage varies by batch. In the companies-76 run, 13 of 76 sites templated (17%). Templates excel when the DOM structure is common — Workable / Personio / SmartRecruiters ATS, or single-page card listings. They fall down on multi-stage navigation, culture-card false positives, and generic `div` selectors. The `jobTitleRatio` gate catches the worst of that, at the cost of rejecting some legitimate card groups.
+- Template coverage varies by batch. In the companies-76 run, 13 of 76 sites templated (17%). That's a historical measurement from one batch, not a stable rate. Templates excel when the DOM structure is common — Workable / Personio / SmartRecruiters ATS, or single-page card listings. They fall down on multi-stage navigation, culture-card false positives, and generic `div` selectors. The `jobTitleRatio` gate catches the worst of that, at the cost of rejecting some legitimate card groups.
 - The empty-vs-drift discrimination uses `jobTitleRatio < 0.3` as its threshold. It is empirical. A site that renames "Software Engineer" to "Solutions Ninja" would push the ratio down and get classified as empty. In that case the human sees "No jobs right now" for a site that does have jobs. `batch refine --only <site>` gives the LLM a chance to fix it; a hand-override via `force: true` is available if needed.
 - `refine` stops at 3 attempts. A site that genuinely needs a fourth round (LLM produced wrong code three times, fourth would be right) is not retried automatically. The user gets a terminal state and must `--force` the refine.
 

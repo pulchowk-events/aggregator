@@ -31,6 +31,8 @@ Four functions are load-bearing safety guarantees. Bypassing any of them breaks 
 
 If you're about to modify any of these, say so in the PR description and explain the migration path for existing data. If there is no migration path, the change is probably wrong.
 
+**The batch pipeline deliberately touches none of these four.** `scripts/batch/` writes extractor source files to `src/scrapers/` at deploy time and nothing else — no Discord login, no cache mutations, no marker reserves, no audit writes to `data/audit-log.jsonl`. A change that makes the batch pipeline into a runtime participant (e.g. "post each generated extractor's output to a test channel for spot-checking") would need to route through `bot.postEventToCategory` like every other caller and would then inherit all four invariants. The current separation exists so that can't happen by accident. See [`docs/architecture.md#batch-pipeline-entry-path`](docs/architecture.md#batch-pipeline-entry-path) for the full reasoning.
+
 ---
 
 ## Code style
@@ -46,6 +48,8 @@ The layer rules in [`docs/architecture.md`](docs/architecture.md#module-boundari
 - **`src/discord/`** and **`src/web/`** — thin adapters. No business logic, no cache mutations, no direct `postEventToCategory` bypass.
 - **`src/integrations/`** — reads cache, writes to external services. Never mutates cache. All external calls wrapped in try/catch; failures logged, never thrown to callers.
 
+`scripts/batch/` sits outside `src/` and is deliberately constrained: it imports `src/scrapers/` (to run extractors during verify) and `src/core/` (for `ui`, `messages`, `sanitize`), but never imports from `src/posting/`, `src/discord/`, `src/integrations/`, or `src/bot.js`. Its only output into `src/` is the deploy step, which writes extractor source files.
+
 If you're not sure which layer a new module belongs in, ask in the PR. Moving it later is cheap; wrong-layer mutations cause bugs that only show up under load.
 
 ### Naming
@@ -57,7 +61,7 @@ If you're not sure which layer a new module belongs in, ask in the PR. Moving it
 
 ### No new dependencies without asking
 
-Every dependency added is another thing that can break a fork. `package.json` has 11 direct dependencies; that's already a lot. Before adding a 12th, open an issue explaining:
+Every dependency added is another thing that can break a fork. `package.json` has a small handful of direct dependencies; that's already a lot. Before adding another, open an issue explaining:
 
 1. What the dependency does
 2. What the alternative is (usually: 15 lines of code)
@@ -77,7 +81,7 @@ Most things that look like they need a dependency don't. `readline` handles prom
 
 `src/` files should stay under ~400 lines. Over that, split. `src/bot.js` was 6900 lines in a previous life; every time it got touched, some method's `this` binding broke in a way that took an hour to find. The current `bot.js` is ~600 lines of mostly delegation, and that's still too long — anything that can become a free function in `core/` or `posting/` should.
 
-`src/scrapers/extractors/<type>/<name>.js` is exempt — those are allowed to be long because they're one file per site and the shape is dictated by the site.
+`src/scrapers/extractors/<type>/<name>.js` is exempt — those are allowed to be long because they're one file per site and the shape is dictated by the site. This applies whether the extractor is hand-maintained or batch-maintained; both produce the same shape.
 
 ### Comments
 
@@ -123,6 +127,8 @@ This is the unit test for a scraper. It runs the extractor against the live site
 
 Run this after **every** extractor edit. Before every commit that touches `src/scrapers/extractors/`. Before every PR. It takes 30-90 seconds depending on the source.
 
+For batch-produced extractors, the equivalent is `pulchowk-events batch verify --run <id> --only <name>` — same pass/fail semantics, same verdict, but it uses the batch run's staged extractor (not the committed one) so you're testing the version under review. Once the batch deploys to `src/scrapers/`, `pulchowk-events verify <name>` is the same command as for a hand-maintained source.
+
 For selector-level diagnosis (which specific selector broke, and what currently matches instead), use:
 
 ```bash
@@ -155,6 +161,8 @@ The audit log is the closest thing to a test assertion this project has. Every d
 
 When reviewing a PR that touches `posting/` or `scrapers/`, the review question is: *does the audit trail reflect the change?* If the change adds a new filter but doesn't audit it, the change is incomplete.
 
+Batch pipeline changes have their own audit surface: `data/batch/<run-id>/audit.jsonl`. Same discipline — every batch decision writes through `scripts/batch/lib/audit.js`, and the review question is whether the batch run's audit log reflects the change.
+
 ### Wizard testing: `--demo`
 
 For setup wizard changes, run:
@@ -174,6 +182,18 @@ pulchowk-events add https://example.com --type events
 ```
 
 against `https://example.com` (which detects `unknown`, exercising the fallback path) and against a known source URL (which detects `single-page-cards` or `listing-to-detail`, exercising the main path).
+
+### Batch pipeline testing
+
+For changes to `scripts/batch/`, the test is a small end-to-end run against a handful of known URLs:
+
+```bash
+pulchowk-events batch run /tmp/smoke.txt --run smoke-<date> --skip-deploy
+```
+
+Where `/tmp/smoke.txt` contains 3-5 URLs that cover the branches you touched (one ATS site, one HTML-cards site, one wizard-fallback site). `--skip-deploy` runs everything except the final copy into `src/scrapers/`, so you can inspect `report` and `verify-summary` without touching the production tree. Delete `data/batch/smoke-<date>/` when done.
+
+The batch pipeline's equivalent of the audit-log assertion is `batch report` — if the bucket counts match what the URLs should produce, the change is correct. If a URL that should pass is in `NOT-GENERATED`, or a URL that should reject is in `PASS`, the change has a bug.
 
 ---
 
@@ -273,9 +293,14 @@ Then add the prefix to the `isExtButtonId` check and the corresponding handler t
 
 ## Adding a scraper source
 
-Two files: a 5-line wrapper and the extractor. Full walkthrough is in [`docs/scrapers.md`](docs/scrapers.md#adding-a-source-manual) — read that first, then come back here for the review expectations.
+Every source is two files: a 5-line wrapper (`src/scrapers/sources/<type>/<name>.js`) and the extractor (`src/scrapers/extractors/<type>/<name>.js`). Both origins — **hand-maintained** and **batch-maintained** — produce identical files and run through the same `runSource()` orchestrator. The wrapper/extractor split is the same either way. The origin distinction matters for exactly one thing: how to repair the source when the site drifts.
 
-**Before opening a PR that adds a source:**
+- **Hand-maintained sources** are fixed by hand. `pulchowk-events diagnose <name>` → `pulchowk-events fix <name>` → `pulchowk-events verify <name>`. Use this path when the extractor was written by a human.
+- **Batch-maintained sources** are regenerated via `pulchowk-events batch refine --only <name>` on the original run directory. The batch pipeline preserves the extractor's history (prompt, DOM dump, prior verify attempts) so the LLM can retry with the failure evidence in front of it. Do not hand-edit a batch-maintained source — the manual edit loses the tie to the batch run and the ability to refine in the future.
+
+For 1-2 sources, the manual pattern below is fastest. For 3+ sources, use `pulchowk-events batch run urls.txt --run <id>` — same two files per source, produced by the pipeline instead of written by hand. Full walkthrough of both: [`docs/scrapers.md`](docs/scrapers.md#adding-a-source-manual). Full batch pipeline reference: [`docs/batch.md`](docs/batch.md).
+
+**Before opening a PR that adds a source (either origin):**
 
 1. `pulchowk-events verify <name>` (or `node scripts/verify-source.js <name>`) must return `verdict: ok` with `items > 0`
 2. The item sample must have reasonable data: title populated, dates parseable, images real URLs (not placeholders)
@@ -283,13 +308,17 @@ Two files: a 5-line wrapper and the extractor. Full walkthrough is in [`docs/scr
 4. `meta.looksBlocked` must be set true if the source is captcha-gated, and the extractor must respect `--profile` correctly
 5. The wrapper's `name` must match the filename stem
 
-**Selector durability.** Reviewers will check: are the selectors likely to survive minor site changes? Prefer `pickOne`/`pickAll` with fallback chains for anything likely to drift (title, listing card, primary image). Use plain `querySelector` for stable fields. If a selector is a two-character class name or a deeply nested chain (`div > div > span:nth-child(3)`), flag it in a comment as fragile.
+For batch-maintained sources, item 1 is run against the batch's staged extractor via `pulchowk-events batch verify --run <id> --only <name>` *before* deploy, then against `src/scrapers/` via `pulchowk-events verify <name>` *after* deploy. Both should return the same pass verdict — if they diverge, the deploy step wrote something different than what the batch verified.
+
+**Selector durability.** Reviewers will check: are the selectors likely to survive minor site changes? Prefer `pickOne`/`pickAll` with fallback chains for anything likely to drift (title, listing card, primary image). Use plain `querySelector` for stable fields. If a selector is a two-character class name or a deeply nested chain (`div > div > span:nth-child(3)`), flag it in a comment as fragile. This review applies to hand-written and LLM-generated extractors equally.
 
 **Meta counters.** Every extractor must set at least `pagesVisited`, `listingHits`, `detailPagesVisited`. Without them, `classifyOutcome` can't distinguish `dom_drift_listing` from `dom_drift_detail` and the next drift incident takes 3× as long to diagnose.
 
 **Drift history.** Every extractor file starts with a comment block documenting known drift events with dates. If you're adding a source, note the current site structure and the date it was verified. If you're fixing a drifted source, add a line documenting the change.
 
-When a source drifts, the fix workflow is `pulchowk-events diagnose <name>` for the selector-level diagnosis, then `pulchowk-events fix <name>` to apply the fix if it's unambiguous. `fix` prompts before writing and re-verifies after, so it's safe to run before you've decided to commit the change. Full playbook in [`docs/scrapers.md#when-a-source-drifts`](docs/scrapers.md#when-a-source-drifts).
+When a hand-maintained source drifts, the fix workflow is `pulchowk-events diagnose <name>` for the selector-level diagnosis, then `pulchowk-events fix <name>` to apply the fix if it's unambiguous. `fix` prompts before writing and re-verifies after, so it's safe to run before you've decided to commit the change.
+
+When a batch-maintained source drifts, use `pulchowk-events batch refine --only <name>` on the original run directory (find it via `git log --oneline --follow src/scrapers/extractors/jobs/<name>.js`), then `batch paste` to re-prompt and `batch verify` to confirm. If it passes, `batch deploy --force` to overwrite the old extractor. Full playbook in [`docs/scrapers.md#when-a-source-drifts`](docs/scrapers.md#when-a-source-drifts) and [`docs/batch.md#verify-refine-promote`](docs/batch.md#verify-refine-promote).
 
 **Do not add a source that:**
 
@@ -375,14 +404,25 @@ post_event_outcome    Post outcome for "Test Event": success
 dedup_decision        "Test Event" classified as new
 ```
 
+Or, for a batch pipeline change:
+
+```
+$ pulchowk-events batch report --run smoke-2026-11-15
+▶ report: /path/to/data/batch/smoke-2026-11-15
+  sources: 4
+  bucket counts:
+      3  PASS
+      1  REJECT-URL
+```
+
 A PR that says "tested" without the command and output is asking the reviewer to trust you. Don't ask for trust; show the evidence.
 
 **What reviewers check:**
 
 1. Does the change respect the four chokepoints above?
-2. Is the layer boundary correct? (Cache mutation in `posting/`, not `discord/`; no `require('../bot')` from `core/`; etc.)
-3. Does the change add an audit trail?
-4. Does the change test itself? (verify for scrapers, boot + interact for posting, `--demo` for wizard)
+2. Is the layer boundary correct? (Cache mutation in `posting/`, not `discord/`; no `require('../bot')` from `core/`; batch doesn't import from `posting/`/`discord/`/`integrations/`; etc.)
+3. Does the change add an audit trail? (Runtime changes → `data/audit-log.jsonl`. Batch changes → `data/batch/<run-id>/audit.jsonl`.)
+4. Does the change test itself? (verify for scrapers, boot + interact for posting, `--demo` for wizard, `batch run --skip-deploy` for batch pipeline.)
 5. Is the commit history clean? (One concern per commit, imperative messages)
 
 Reviewers will request changes if any of those are missing. That's not pedantry — it's the only enforcement mechanism for the invariants documented in `architecture.md`.
@@ -421,6 +461,8 @@ pulchowk-events verify khalti
 
 Paste both. `diagnose` shows which specific selectors broke and what alternatives currently match; `verify` shows the formal verdict and item count. Together they're the complete scraper diagnosis — without them the maintainer will run the same two commands first thing, adding a full round-trip. `node scripts/diagnose.js khalti` and `node scripts/verify-source.js khalti` produce identical output if the CLI isn't installed.
 
+If the bug is in a batch-maintained source, also paste `pulchowk-events batch report --run <run-id>` and, if the source failed verify, the per-site result via `jq . data/batch/<run-id>/results/<name>.json`. Those two artifacts replace the manual `diagnose`/`verify` pair for batch-produced extractors.
+
 **4. The environment shape.** Not the full `.env` — the relevant keys:
 
 ```
@@ -442,7 +484,7 @@ If the bug is "Cloudflare blocks me" and `BROWSER_EXECUTABLE_PATH` is unset, the
 - Full tracebacks without the error line highlighted. Highlight the actual error message.
 - "The bot is broken." It isn't; some part of it is. Narrow it down.
 
-If you're not sure whether something is a bug or expected behavior, check [`docs/operations.md`](docs/operations.md#troubleshooting) first. The troubleshooting matrix covers the 15 most common "is this a bug" cases. If your scenario isn't there, file it — that tells the maintainer the docs are missing a case.
+If you're not sure whether something is a bug or expected behavior, check [`docs/operations.md`](docs/operations.md#troubleshooting) first. The troubleshooting matrix covers the most common "is this a bug" cases. If your scenario isn't there, file it — that tells the maintainer the docs are missing a case.
 
 ---
 

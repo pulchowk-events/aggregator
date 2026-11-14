@@ -260,12 +260,12 @@ The bot's operational state lives in four places: `data/audit-log.jsonl`, `data/
 
 ### What you see during a scrape
 
-Since the styled-output refactor, `scrapeAll` prints one line per source as it completes, not a silent 30-second wait followed by a summary. Expected format:
+Since the styled-output refactor, `scrapeAll` prints one line per source as it completes, not a silent wait followed by a summary. Expected format:
 
 ```
 ▶ Scrape cycle
 ────────────────────────────────────────────────────────────────
-  62 source(s) running in parallel
+  N source(s) running in parallel
 
   ✓ PASS  aarambhait                3 items  ok                 8.2s
   ✓ PASS  cloudfactory             68 items  ok                25.3s
@@ -404,7 +404,7 @@ That reports every selector, which one broke, and what alternatives currently ma
 
 `pulchowk-events fix <name>` automates the unambiguous cases. See [`scrapers.md`](scrapers.md) for the full drift playbook.
 
-If the source is batch-generated (not one of the 10 hand-written), see [Batch pipeline operations](#batch-pipeline-operations) below — the fix path is `batch refine`, not hand-edits.
+If the source is batch-maintained, see [Batch pipeline operations](#batch-pipeline-operations) below — the repair path is `batch refine`, not hand-edits.
 
 **"The website is out of sync with Discord."**
 
@@ -461,8 +461,6 @@ git commit -m "feat(scrapers): add N batch-generated job sources"
 # (systemd / Task Scheduler / pm2 — see Keeping the process alive)
 ```
 
-Wall-clock for 30 sources: ~5 min machine time, ~30 min interactive paste, ~5 min auto loop. Total ~40 min for 20-25 committed sources.
-
 ### What you see during a batch run
 
 Batches share the styled output with `scrapeAll`:
@@ -490,9 +488,9 @@ Batches share the styled output with `scrapeAll`:
 
 Per-source rows appear in real time as workers finish. Failures get the full human-readable explanation from `src/core/messages.js`, not a raw reason code.
 
-### When a deployed batch-generated source drifts
+### When a deployed batch-maintained source drifts
 
-Batch-generated extractors have a different fix path than hand-written ones. Do **not** hand-edit.
+Batch-maintained and hand-maintained sources are structurally identical — same two-file shape, same `runSource()` orchestrator, same failure modes, same `{items, meta}` contract. The distinction matters only for **how you repair them**. Hand-maintained sources get fixed by hand; batch-maintained sources get regenerated with `batch refine` (do not hand-edit — refine preserves the ability to retry with the LLM in the loop).
 
 ```bash
 # 1. Confirm the failure
@@ -536,7 +534,7 @@ jq -r 'to_entries[] | select(.value.templatedBy) | "\(.key) \(.value.templatedBy
 
 ### Batch deploy: safety
 
-`batch deploy` will not overwrite existing extractors unless `--force`. If a source is already in `src/scrapers/`, either the batch is trying to deploy a site that was previously hand-committed (review the situation manually) or you're re-deploying a refined extractor (use `--force` deliberately).
+`batch deploy` will not overwrite existing extractors unless `--force`. If a source is already in `src/scrapers/`, either the batch is trying to deploy a site that was previously hand-maintained (review the situation manually) or you're re-deploying a refined extractor (use `--force` deliberately).
 
 The deploy step runs `node --check` on every file before copying. A malformed extractor never reaches `src/`.
 
@@ -678,7 +676,7 @@ Use demo mode to train the flow, or to inspect the wizard before running it on a
 
 **Undo:** delete `.env` (or restore from `.env.bak.<timestamp>`), then delete any channels/roles the wizard created. The wizard doesn't tag anything, so identify its output by name — `⚽┃sports`, `💼┃jobs-internships`, etc. — matching the defaults in `CATEGORY_SPEC`.
 
-**After setup completes:** the bot ships with 62 job sources plus the hand-written event and scholarship sources. None of the job sources need manual setup — they're committed as `src/scrapers/extractors/jobs/*.js` and `sources/jobs/*.js`, and the registry discovers them on first boot. If you want to add more, see [Batch pipeline operations](#batch-pipeline-operations) or [`batch.md`](batch.md).
+**After setup completes:** every committed source under `src/scrapers/` is available to the bot — nothing more to install. The registry discovers them on first boot. To onboard more, see [Batch pipeline operations](#batch-pipeline-operations) or [`batch.md`](batch.md).
 
 ---
 
@@ -730,7 +728,7 @@ pulchowk-events fix <name>
 
 `diagnose` reports which selector broke and what currently matches instead. `fix` applies the fix automatically when the diagnosis is unambiguous, then re-verifies. If neither resolves it, `pulchowk-events verify <name>` gives the formal verdict — full playbook in [`scrapers.md`](scrapers.md#when-a-source-drifts).
 
-The most common cause is selector drift — the site changed its DOM and the extractor's `pickOne`/`pickAll` chain didn't catch it. If the source is batch-generated, see [When a deployed batch-generated source drifts](#when-a-deployed-batch-generated-source-drifts) instead — `batch refine` is the right fix path, not hand-editing.
+The most common cause is selector drift — the site changed its DOM and the extractor's `pickOne`/`pickAll` chain didn't catch it. If the source is batch-maintained, see [When a deployed batch-maintained source drifts](#when-a-deployed-batch-maintained-source-drifts) instead — `batch refine` is the right repair path, not hand-editing.
 
 ### "Post failed: no_image"
 
@@ -833,7 +831,7 @@ pulchowk-events fix <source-name>
 pulchowk-events diagnose <source-name>
 ```
 
-The verdict matches the alert's `Why:` line. Follow the corresponding fix in [`scrapers.md`](scrapers.md#when-a-source-drifts), or for batch-generated sources, [`batch.md`](batch.md#verify-refine-promote).
+The verdict matches the alert's `Why:` line. Follow the corresponding fix in [`scrapers.md`](scrapers.md#when-a-source-drifts), or for batch-maintained sources, [`batch.md`](batch.md#verify-refine-promote).
 
 Alerts have a 60-minute cooldown per source — an ongoing outage won't re-ping more than once per hour. The audit log records every failure, but the Discord alert is throttled to avoid noise during an extended outage.
 
@@ -954,12 +952,12 @@ Check the report's bucket counts. If all failures are in `LLM-NOT-CAREERS` or `L
 
 ### "Batch deploy refuses to overwrite"
 
-`batch deploy` won't overwrite existing extractors in `src/scrapers/` unless `--force`. This is deliberate — a site already committed means a human put it there, and silently rewriting would clobber that decision.
+`batch deploy` won't overwrite existing extractors in `src/scrapers/` unless `--force`. This is deliberate — a source already committed means a human put it there, and silently rewriting would clobber that decision.
 
 Two cases:
 
 - **Redeploying after `batch refine`** — use `--force` (the human just decided to regenerate)
-- **Trying to deploy a site that was hand-committed** — stop. The batch shouldn't be overwriting hand-maintained sources. Either the run-id is wrong or `urls.txt` includes a source it shouldn't.
+- **Trying to deploy a source that was hand-maintained** — stop. The batch shouldn't be overwriting hand-maintained sources. Either the run-id is wrong or `urls.txt` includes a source it shouldn't.
 
 If you're not sure which case, `git log --oneline --follow src/scrapers/extractors/jobs/<name>.js` shows the commit history. A single commit from a batch means "safe to `--force`"; multiple commits or a hand-edit means "leave it".
 
@@ -984,7 +982,7 @@ Source-failure alerts are a separate subsystem from the audit log.
 - `DEFAULT_SOURCE_ALERT_THRESHOLD` in `constants.js` — streak count. Default 3.
 - `DEFAULT_SOURCE_ALERT_COOLDOWN_MINUTES` in `constants.js` — cooldown. Default 60.
 
-**When one arrives:** treat it as a paging-level signal. Run `pulchowk-events fix <source>` — it diagnoses and, if the diagnosis is unambiguous, applies the fix and re-verifies. If it can't fix, `pulchowk-events diagnose <source>` gives the selector-level detail for manual repair. If the source is batch-generated (see [`scrapers.md`](scrapers.md#batch-generated-sources)), use `batch refine` instead — the fix path is different.
+**When one arrives:** treat it as a paging-level signal. Run `pulchowk-events fix <source>` — it diagnoses and, if the diagnosis is unambiguous, applies the fix and re-verifies. If it can't fix, `pulchowk-events diagnose <source>` gives the selector-level detail for manual repair. If the source is batch-maintained (see [`scrapers.md#batch-maintained-sources`](scrapers.md#batch-maintained-sources)), use `batch refine` instead — the repair path is different.
 
 If the verdict is `blocked`, that's often transient (Cloudflare had a bad moment) — wait an hour and re-check. If it's `dom_drift_*`, the source needs a fix — schedule it. If it's `empty`, investigate whether the site changed or is genuinely between events.
 
@@ -1037,11 +1035,11 @@ The bot doesn't care — it just writes; the supervisor handles retention.
 
 ### `data/og-image-cache.json`
 
-Not a log, but rotation-adjacent. Contains one entry per hostname (og:image URL, favicon URL, fetch timestamp). Cache TTL is 30 days per entry; stale entries are re-fetched on the next scrape. File size is bounded by the number of unique hostnames across all sources (~60-70 entries, ~10 KB total). No manual rotation needed.
+Not a log, but rotation-adjacent. Contains one entry per hostname (og:image URL, favicon URL, fetch timestamp). Cache TTL is 30 days per entry; stale entries are re-fetched on the next scrape. File size is bounded by the number of unique hostnames across all sources (roughly 60-100 entries, ~10 KB total). No manual rotation needed.
 
 ### `data/placeholder-images/`
 
-Not a log. One PNG per source, generated by `scripts/generate-placeholders.js`. Total size is ~1–2 MB for 62 sources. Regenerate with `--force` if a source's display name changes; otherwise static.
+Not a log. One PNG per source, generated by `scripts/generate-placeholders.js`. Total size scales with the source count (~20-30 KB per source). Regenerate with `--force` if a source's display name changes; otherwise static.
 
 ### Marker files
 

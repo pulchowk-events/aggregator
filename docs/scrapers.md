@@ -15,7 +15,7 @@ The scraper layer turns third-party websites into structured `{items, meta}` rep
 - [Adding a source (manual)](#adding-a-source-manual)
 - [When a source drifts](#when-a-source-drifts)
 - [Reference: current sources](#reference-current-sources)
-- [Batch-generated sources](#batch-generated-sources)
+- [Batch-maintained sources](#batch-maintained-sources)
 
 ---
 
@@ -54,13 +54,13 @@ module.exports = {
 
 Why this split exists:
 
-**The wrapper is boilerplate — you never edit it after creation.** It exists so the registry has a stable target to discover. `runSource` is the orchestrator, and it enforces every cross-cutting concern uniformly across all 62 sources: retry on failure, browser lifecycle, common sanitization, description trimming, image URL validation, image enrichment (see [Batch-generated sources](#batch-generated-sources)), and diagnostic classification.
+**The wrapper is boilerplate — you never edit it after creation.** It exists so the registry has a stable target to discover. `runSource` is the orchestrator, and it enforces every cross-cutting concern uniformly across every source: retry on failure, browser lifecycle, common sanitization, description trimming, image URL validation, image enrichment (see [Batch-maintained sources](#batch-maintained-sources)), and diagnostic classification.
 
 **The extractor is source-specific — you edit it whenever the site changes.** It contains nothing but DOM logic: `page.goto()`, `page.evaluate()`, link harvesting, field extraction. It does not retry, does not sanitize, does not log to the audit trail, does not decide what to do with failure. The orchestrator handles all of that.
 
 The practical consequence: when a source breaks, you open exactly one file. When you add a source, you write exactly one file (plus the 5-line wrapper). Everything else stays untouched.
 
-**Two origins of extractors.** 10 sources are hand-written and directly maintained (4 jobs, 4 events, 2 scholarships — see [Reference: current sources](#reference-current-sources)). The other 52 job extractors were produced by the batch pipeline (`pulchowk-events batch run`) and are maintained via `batch refine` rather than hand-edits. The wrapper/extractor split is identical for both — the batch pipeline just automates the extractor-writing step.
+**Two maintenance origins.** Every source is either hand-maintained (a human who understands the site's quirks fixes it directly) or batch-maintained (produced by `pulchowk-events batch run` and refined via `batch refine` on the original run directory). Both origins produce identical two-file sources — the wrapper/extractor split is the same, and the batch pipeline just automates the extractor-writing step. See [Reference: current sources](#reference-current-sources) for the maintenance split.
 
 ---
 
@@ -510,9 +510,9 @@ When it returns `verdict: ok` with a sensible item count, the source is live. Th
 
 ## When a source drifts
 
-The playbook depends on the source's origin — hand-written vs batch-generated. Both end at the same place (a working extractor) but the mechanism differs.
+The playbook depends on the source's maintenance origin — hand-maintained vs batch-maintained. Both end at the same place (a working extractor) but the mechanism differs.
 
-### Hand-written sources
+### Hand-maintained sources
 
 **1. Confirm the failure mode.**
 
@@ -555,7 +555,7 @@ Confirm `verdict: ok` and `items > 0`. Note the drift in the file's "Selector dr
 
 Structural drift (site moved from listing-to-detail to single-page-cards, or switched from HTML to JSON-LD) means a full extractor rewrite. Update the file's top comment to describe the new structure, and update the source table below in this doc to reflect the new reality.
 
-### Batch-generated sources
+### Batch-maintained sources
 
 Do **not** hand-edit. The batch pipeline remembers the extractor's history (prompt, dump, verify attempts) and can regenerate with the failure evidence in front of the LLM.
 
@@ -586,7 +586,7 @@ The refine step appends a `## Prior attempts` section to the prompt containing t
 - Change the URL in `urls.txt`, re-init a new batch run, and let it generate a fresh prompt. Deploy the passing extractor.
 - If the site now uses a recognized ATS (Workable, Personio, SmartRecruiters), the batch classifies it as such automatically — the template output replaces the old extractor entirely.
 
-**4. Never patch batch-generated extractors by hand.** A hand-patched extractor loses the tie to its batch run and cannot be refined in the future. If a hand-patch is the only option (rare — usually means the site is genuinely un-scrapable and the batch keeps failing), document why in the extractor's header comment so the next person knows it's off the batch loop.
+**4. Never patch batch-maintained extractors by hand.** A hand-patched extractor loses the tie to its batch run and cannot be refined in the future. If a hand-patch is the only option (rare — usually means the site is genuinely un-scrapable and the batch keeps failing), document why in the extractor's header comment so the next person knows it's off the batch loop.
 
 ### Both origins
 
@@ -596,13 +596,17 @@ The refine step appends a `## Prior attempts` section to the prompt containing t
 
 ## Reference: current sources
 
-The bot ships with **62 job sources** plus the small set of hand-written event and scholarship sources. Run `pulchowk-events batch status` for the live per-run source set, or `ls src/scrapers/extractors/jobs/` for the committed set. The list grows over time as new companies are onboarded through the batch pipeline.
+The current source set is whatever's committed under `src/scrapers/extractors/jobs/` (and the corresponding events/scholarships directories). For a live count: `ls src/scrapers/extractors/jobs/*.js | wc -l`. For a per-run view of sources not yet deployed: `pulchowk-events batch status`.
 
-**Origin split**: 10 sources are hand-written and maintained directly (4 jobs + 4 events + 2 scholarships). The remaining 52 job sources were produced by the batch pipeline (`pulchowk-events batch run`) and are regenerated or refined on demand rather than hand-edited. See [Batch-generated sources](#batch-generated-sources) below for the operating model.
+**Maintenance origins.** Every source is either hand-maintained or batch-maintained. The distinction matters for exactly one thing: how to repair the source when it drifts. Hand-maintained sources are fixed by hand (`pulchowk-events diagnose` → `pulchowk-events fix` → verify). Batch-maintained sources are regenerated via `pulchowk-events batch refine --only <name>` on the original run directory — do not hand-edit, because refine preserves the ability to retry the LLM with the failure in the loop.
 
-### Hand-written sources (10)
+Both origins produce identical two-file sources: `src/scrapers/sources/<type>/<name>.js` (a five-line wrapper) and `src/scrapers/extractors/<type>/<name>.js` (the actual DOM work). Both run through the same `runSource()` orchestrator. Both fail the same way. The split is administrative, not architectural.
 
-These are the sources the repository has always maintained directly. Each has a maintainer who understands the site and is expected to fix it by hand when it drifts.
+See [Hand-maintained sources](#hand-maintained-sources) and [Batch-maintained sources](#batch-maintained-sources) below for the per-origin operating model.
+
+### Hand-maintained sources
+
+These sources are maintained directly — a human who understands the site's structural quirks fixes them by hand when they drift. The repair path is `pulchowk-events diagnose <name>` → `pulchowk-events fix <name>` → `pulchowk-events verify <name>`.
 
 | Source | Type | Listing structure | Detail structure | Extraction strategy | Known limitations |
 |---|---|---|---|---|---|
@@ -622,9 +626,9 @@ Two sources are documented as structurally limited:
 - **ScholarshipsAds** scrapes only the first page of each category. Pages 2+ are behind Cloudflare's bot-detection wall, which a warm browser profile can't reliably bypass across many paginated requests. The extractor deliberately stops after page 1 — it captures the newest 20 items per category, which is enough for a community feed. Deadline coverage is partial by structure, not by bug: only the subset of listing cards with an icon-calendar have a parsed deadline (~1/3 on a typical run). The rest ship with an estimated-year-only deadline, which renders as a year rather than a specific date on the website. There's no fix without a warm browser profile that can survive the Cloudflare challenge per-card.
 - **Kgarira's** pagination returns the same 3 events on every page. The `MAX_PAGES = 3` loop therefore re-scrapes the same 3 events 3 times, producing 9 items before dedup (deduped to 3 by the downstream pipeline). Not a correctness issue, just throughput waste.
 
-### Batch-generated sources
+### Batch-maintained sources
 
-The remaining 52 job sources in `src/scrapers/extractors/jobs/` were produced by the batch pipeline. They fit one of two shapes:
+The job sources that aren't hand-maintained were produced by the batch pipeline. Two shapes exist:
 
 **Template output** — rendered from `scripts/batch/templates/*.js`:
 
@@ -635,12 +639,12 @@ The remaining 52 job sources in `src/scrapers/extractors/jobs/` were produced by
 
 Templates are deterministic: given a site's DOM shape, the same input always produces the same extractor. No LLM involved. Proven against the live site before being committed.
 
-**LLM output** — the wizard writes a prompt describing the site's DOM dump; a human pastes it into DeepSeek (or another code LLM); the LLM writes the extractor; the batch pipeline verifies it against the live site. Every job extractor not in the hand-written set was produced this way. `git log --oneline --follow src/scrapers/extractors/jobs/<name>.js` shows the batch run that produced the file.
+**LLM output** — the wizard writes a prompt describing the site's DOM dump; a human pastes it into DeepSeek (or another code LLM); the LLM writes the extractor; the batch pipeline verifies it against the live site. `git log --oneline --follow src/scrapers/extractors/jobs/<name>.js` shows the batch run that produced the file.
 
-Three differences from hand-written sources:
+Three things to know about batch-maintained sources:
 
-1. **Do not edit by hand when the site drifts.** Use `pulchowk-events batch refine --only <name>` to feed the failure log back to the LLM for a regenerated extractor. Manual edits work but lose the loop's ability to retry with context.
+1. **The repair path is `batch refine`, not hand-edits.** Use `pulchowk-events batch refine --only <name>` on the original run directory to feed the failure log back to the LLM for a regenerated extractor. Manual edits work but lose the loop's ability to retry with context.
 
-2. **Image enrichment is runtime, not extraction.** Jobs typically have no per-item image. The orchestrator (`sources/_orchestrate.js`) derives a per-site image from `<meta og:image>` (cached in `data/og-image-cache.json`) or a generated placeholder PNG (`scripts/generate-placeholders.js`) when neither is present. Do not add `companyLogoUrl` extraction to individual extractors — enrichment handles it uniformly for every job.
+2. **Image enrichment is uniform across all job sources.** Jobs typically have no per-item image. The orchestrator (`sources/_orchestrate.js`) derives a per-site image from `<meta og:image>` (cached in `data/og-image-cache.json`) or a generated placeholder PNG (`scripts/generate-placeholders.js`) when neither is present. This applies to hand-maintained and batch-maintained job sources alike. Do not add `companyLogoUrl` extraction to any individual job extractor — enrichment handles it uniformly for every job.
 
 3. **Prompt shape is locked.** `scripts/batch/lib/prompt-structure.js` validates every generated prompt against a canonical structure. If you change `scripts/wizard/prompt.js`, update the validator in the same commit — `pulchowk-events batch check` will fail otherwise. The lock exists so a prompt edit can't silently degrade every future extractor.
