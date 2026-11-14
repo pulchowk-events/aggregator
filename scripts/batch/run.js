@@ -212,7 +212,7 @@ async function runBatch(opts) {
             check: () => checkDiscover(runDir),
             exec: async () => {
                 const r = await runDiscover({ runId, concurrency: 15 });
-                return { ok: true, detail: `${r.actionCounts.accept} accept, ${r.actionCounts.reject} reject` };
+                return { ok: true, detail: `${r.actionCounts.accept || 0} accept, ${r.actionCounts.reject || 0} reject` };
             }
         },
         {
@@ -274,7 +274,9 @@ async function runBatch(opts) {
             check: () => ({ needed: true, reason: 'always runs (summary)' }),
             exec: async () => {
                 const r = runReport({ runId, json: false, verbose: false });
-                return { ok: r.exitCode === 0, detail: `exitCode=${r.exitCode}` };
+                // exitCode 1 = hard failures (fail run). exitCode 2 = incomplete
+                // (pending paste or LLM redirects) -- not a pipeline failure.
+                return { ok: r.exitCode !== 1, detail: `exitCode=${r.exitCode}` };
             }
         }
     ];
