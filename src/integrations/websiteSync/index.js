@@ -49,7 +49,6 @@ function registerCommands(bot) {
                     { body: cmd.toJSON() }
                 );
             }
-            console.log(`✅ [websiteSync] Registered ${commands.length} command(s) to guild ${env.HOME_GUILD_ID} only.`);
         } catch (error) {
             console.error('❌ [websiteSync] Failed to register command:', error);
         }
@@ -71,13 +70,13 @@ function attach(bot) {
 
     bot.client.once('ready', () => {
         setTimeout(() => {
-            console.log('🌐 [websiteSync] Startup sync starting (30s after ready)...');
+            console.log('  ·  websiteSync  startup sync in 30s');
             engine.scheduleSync(bot, 1000);
         }, 30000);
 
         if (cron.validate(env.WEBSITE_SYNC_CRON || '0 * * * *')) {
             cron.schedule(env.WEBSITE_SYNC_CRON || '0 * * * *', () => engine.scheduleSync(bot, 1000));
-            console.log(`🌐 [websiteSync] Cron safety net: ${env.WEBSITE_SYNC_CRON || '0 * * * *'}`);
+            console.log('  ·  websiteSync cron  "' + (env.WEBSITE_SYNC_CRON || '0 * * * *') + '"');
         } else {
             console.warn(`⚠️ [websiteSync] Invalid cron "${env.WEBSITE_SYNC_CRON}" — cron disabled`);
         }
@@ -91,9 +90,11 @@ function attach(bot) {
     };
 
     console.log(
-        `🌐 [websiteSync] Attached — mode: ${engine.DRY_RUN ? 'DRY-RUN' : 'LIVE'}, ` +
-        `events: ${engine.WEBSITE_TABLE}, jobs: ${engine.JOBS_SYNC_ENABLED ? engine.WEBSITE_JOBS_TABLE : 'disabled'}, scholarships: ${engine.SCHOLARSHIPS_SYNC_ENABLED ? engine.WEBSITE_SCHOLARSHIPS_TABLE : 'disabled'}, ` +
-        `batch: ${engine.BATCH_SIZE}`
+        '  \u2713  websiteSync  ' + (engine.DRY_RUN ? 'DRY-RUN' : 'LIVE') +
+        ' \u00b7 events: ' + engine.WEBSITE_TABLE +
+        ' \u00b7 jobs: ' + (engine.JOBS_SYNC_ENABLED ? engine.WEBSITE_JOBS_TABLE : 'disabled') +
+        ' \u00b7 scholarships: ' + (engine.SCHOLARSHIPS_SYNC_ENABLED ? engine.WEBSITE_SCHOLARSHIPS_TABLE : 'disabled') +
+        ' \u00b7 batch: ' + engine.BATCH_SIZE
     );
 }
 

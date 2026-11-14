@@ -40,10 +40,9 @@ function scheduleAutomaticScraping(bot) {
     }
     bot.activeScrapeCron = cronExpr;
     bot.cronTask = cron.schedule(cronExpr, () => {
-        console.log('⏰ Running scheduled scrape...');
+        console.log('  ·  cron  running scheduled scrape');
         bot.scrapeAndNotify('all').catch((err) => console.error('❌ Scheduled scrape failed:', err));
     });
-    console.log(`🕒 Automatic scraping scheduled with cron "${cronExpr}"`);
 }
 
 // Called when the user runs /settings set-schedule — re-arm the task on
@@ -54,7 +53,7 @@ function rescheduleWithCustomCron(bot, expr) {
     if (bot.cronTask) bot.cronTask.stop();
     bot.activeScrapeCron = expr;
     bot.cronTask = cron.schedule(expr, () => {
-        console.log('⏰ Running scheduled scrape...');
+        console.log('  ·  cron  running scheduled scrape');
         bot.scrapeAndNotify('all').catch((err) => console.error('❌ Scheduled scrape failed:', err));
     });
 }
@@ -138,7 +137,6 @@ function scheduleMissedScrapeCheck(bot) {
     bot.missedScrapeCheckCronTask = cron.schedule(MISSED_SCRAPE_CHECK_CRON, () => {
         checkForMissedScrapeAndCatchUp(bot).catch((err) => console.error('❌ Missed-scrape catch-up check failed:', err));
     });
-    console.log(`⏰ Missed-scrape catch-up check scheduled with cron "${MISSED_SCRAPE_CHECK_CRON}"`);
 }
 
 module.exports = {

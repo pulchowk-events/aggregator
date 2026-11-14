@@ -4,12 +4,18 @@
 // it happens and writes an audit entry for forensics.
 
 const { auditLog } = require('../../core/auditLogger');
+const discordLog = require('../../core/discordLog');
 
 function attachWatchdog(bot) {
     bot.client.on('shardDisconnect', (event, shardId) => {
         console.warn(`⚠️ [watchdog] Shard ${shardId} disconnected (code ${event && event.code}).`);
         auditLog('gateway_disconnect', `Shard ${shardId} disconnected`, { shardId, code: (event && event.code) || null }, 'error');
-        bot.sendLogMessage(`🔌 Discord gateway disconnected (shard ${shardId}, code ${(event && event.code) || 'unknown'}) — reconnecting automatically.`).catch(() => {});
+        discordLog.send(bot, {
+            status: 'warn',
+            title: `Discord gateway disconnected · shard ${shardId}`,
+            description: `Code ${(event && event.code) || 'unknown'} · reconnecting automatically.`,
+            footer: 'watchdog',
+        }).catch(() => {});
     });
     bot.client.on('shardReconnecting', (shardId) => {
         console.log(`🔄 [watchdog] Shard ${shardId} reconnecting...`);
@@ -18,7 +24,11 @@ function attachWatchdog(bot) {
     bot.client.on('shardResume', (shardId, replayedEvents) => {
         console.log(`✅ [watchdog] Shard ${shardId} resumed (${replayedEvents} events replayed).`);
         auditLog('gateway_resume', `Shard ${shardId} resumed`, { shardId, replayedEvents });
-        bot.sendLogMessage(`✅ Discord gateway reconnected (shard ${shardId}).`).catch(() => {});
+        discordLog.send(bot, {
+            status: 'pass',
+            title: `Discord gateway reconnected · shard ${shardId}`,
+            footer: 'watchdog',
+        }).catch(() => {});
     });
 }
 

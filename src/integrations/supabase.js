@@ -15,6 +15,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { auditLog } = require('../core/auditLogger');
+const discordLog = require('../core/discordLog');
 const ui = require('../core/ui');
 const env = require('../config/env');
 
@@ -275,9 +276,23 @@ function startAutoSync(bot, intervalMinutes = DEFAULT_AUTOSYNC_INTERVAL_MINUTES)
         try {
             const result = await syncPostedEvents(bot);
             if (result.ok && result.uploaded > 0) {
-                await bot.sendLogMessage(`🗄️ Supabase auto-sync: uploaded ${result.uploaded} row(s) (${result.events}E/${result.jobs}J/${result.scholarships}S).`);
+                await discordLog.send(bot, {
+                    status: 'pass',
+                    title: 'Supabase auto-sync',
+                    fields: [
+                        { name: 'events', value: String(result.events || 0), inline: true },
+                        { name: 'jobs', value: String(result.jobs || 0), inline: true },
+                        { name: 'scholarships', value: String(result.scholarships || 0), inline: true }
+                    ],
+                    footer: `${result.uploaded} row(s) uploaded`
+                });
             } else if (!result.ok && result.reason !== 'not_configured') {
-                await bot.sendLogMessage(`⚠️ Supabase auto-sync finished with errors: ${(result.errors || []).join('; ')}`);
+                await discordLog.send(bot, {
+                    status: 'warn',
+                    title: 'Supabase auto-sync · errors',
+                    description: (result.errors || []).slice(0, 5).join('\n').slice(0, 2000) || 'no error message recorded',
+                    footer: 'see audit-log for full stack'
+                });
             }
         } catch (error) {
             console.error('❌ Supabase auto-sync tick failed:', error);
@@ -380,7 +395,7 @@ function attach(bot) {
     bot.client.once('ready', () => {
         const state = ensureSyncState(bot);
         if (state.autoSync.active) {
-            console.log(`🗄️ [supabase] Resuming auto-sync (every ${state.autoSync.intervalMinutes}m) after restart.`);
+            console.log('  ·  supabase  auto-sync resume (' + state.autoSync.intervalMinutes + 'm)');
             startAutoSync(bot, state.autoSync.intervalMinutes);
         }
         if (!isConfigured()) {
@@ -404,7 +419,6 @@ function attach(bot) {
                     { body: cmd.toJSON() }
                 );
             }
-            console.log(`✅ [supabase] Registered ${commands.length} command(s) to guild ${env.HOME_GUILD_ID} only.`);
         } catch (error) {
             console.error('❌ [supabase] Failed to register command:', error);
         }

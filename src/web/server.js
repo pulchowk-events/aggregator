@@ -204,7 +204,6 @@ function startWebServer(bot) {
     });
 
     bot.server = app.listen(env.WEB_PORT, () => {
-        console.log(`🌐 Dashboard API available at http://localhost:${env.WEB_PORT}`);
     });
 }
 

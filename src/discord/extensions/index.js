@@ -225,7 +225,6 @@ function registerExtensionCommands(bot) {
                     { body: cmd.toJSON() }
                 );
             }
-            console.log(`✅ [ext] Registered ${EXT_DEFINITIONS.length} extension command(s) to guild ${env.HOME_GUILD_ID} only.`);
         } catch (error) {
             console.error('❌ [ext] Failed to register extension commands:', error);
         }
@@ -249,7 +248,7 @@ function attachExtensions(bot) {
     attachWatchdog(bot);
     registerExtensionCommands(bot);
 
-    console.log(`🧩 [ext] Attached ${EXT_DEFINITIONS.length} command(s) + dedupe/autopublish/blacklist/watchdog.`);
+    console.log('  ✓  extensions  ' + EXT_DEFINITIONS.length + ' command(s) + dedupe/autopublish/blacklist/watchdog');
     return bot;
 }
 

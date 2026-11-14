@@ -312,6 +312,32 @@ class EventsBot {
         }
     }
 
+    // Embed variant. Same destination as sendLogMessage (the logs
+    // channel), but takes an EmbedBuilder so the message can carry a
+    // status colour, title, structured fields, and footer. Used by
+    // core/discordLog.js for everything that used to be a bare string.
+    //
+    // Falls back to a plain-string send when no logs channel is
+    // configured, so the message is never silently dropped.
+    async sendLogEmbed(embed) {
+        try {
+            const channelId = this.cache.settings.logsChannelId;
+            if (!channelId) {
+                console.log(`[log embed, no channel configured] ${embed?.data?.title || '(embed)'}`);
+                return;
+            }
+            const channel = await this.client.channels.fetch(channelId);
+            await channel.send({ embeds: [embed] });
+        } catch (error) {
+            console.error('Failed to send log embed:', error);
+            auditLog('discord_api_error', 'sendLogEmbed() failed to fetch/send to the logs channel', {
+                logsChannelId: this.cache.settings.logsChannelId || null,
+                errorMessage: error.message, errorCode: error.code || null, errorStack: error.stack
+            }, 'error');
+        }
+    }
+
+
     // ---------- Lifecycle ----------
 
     async start() {

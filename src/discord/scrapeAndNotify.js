@@ -15,6 +15,7 @@
 
 const { scrapeAll } = require('../scrapers/scrapeAll');
 const { auditLog } = require('../core/auditLogger');
+const discordLog = require('../core/discordLog');
 
 const PROGRESS_UPDATE_INTERVAL_MS = 4000;
 
@@ -58,21 +59,39 @@ async function scrapeAndNotify(bot, site = 'all', type = null) {
 
             // Nothing new — send a summary and bail.
             if (processed.newEvents === 0) {
-                const nextScrape = bot.getNextScrapeTime();
-                const nextNote = nextScrape ? `\n⏭️ Next scrape: <t:${Math.floor(nextScrape.getTime() / 1000)}:R>` : '';
-                const summary = (result.items.length === 0 && result.errors.length > 0)
-                    ? `⚠️ Scrape produced no items — all sources errored.${nextNote}`
-                    : `✅ No new items found. Total scraped: ${result.items.length}.${nextNote}`;
-                await bot.sendLogMessage(summary);
+            const nextScrape = bot.getNextScrapeTime();
+            const nextNote = nextScrape ? `<t:${Math.floor(nextScrape.getTime() / 1000)}:R>` : 'not scheduled';
+            const allErrored = result.items.length === 0 && result.errors.length > 0;
+            await discordLog.send(bot, {
+                status: allErrored ? 'warn' : 'muted',
+                title: allErrored ? 'Scrape produced no items · all sources errored' : 'Scrape complete · no new items',
+                description: allErrored
+                    ? 'Every source failed this cycle. See audit-log for per-source errors.'
+                    : `Total scraped: ${result.items.length}. All already seen or filtered.`,
+                fields: [
+                    { name: 'items scraped', value: String(result.items.length), inline: true },
+                    { name: 'errors', value: String(result.errors.length), inline: true },
+                    { name: 'next scrape', value: nextNote, inline: true }
+                ],
+                footer: 'scrape'
+            });
                 return { newEvents: 0, errors: result.errors.length, items: [] };
             }
 
-            const flaggedNote = processed.flaggedCount > 0
-                ? ` (⚠️ ${processed.flaggedCount} flagged for manual review)`
-                : '';
-            const nextScrape = bot.getNextScrapeTime();
-            const nextNote = nextScrape ? `\n⏭️ Next scrape: <t:${Math.floor(nextScrape.getTime() / 1000)}:R>` : '';
-            await bot.sendLogMessage(`📢 Found ${processed.newEvents} new item(s)${flaggedNote}. Use /pending to review.${nextNote}`);
+            const nextScrape2 = bot.getNextScrapeTime();
+            const nextNote2 = nextScrape2 ? `<t:${Math.floor(nextScrape2.getTime() / 1000)}:R>` : 'not scheduled';
+            await discordLog.send(bot, {
+                status: 'pass',
+                title: 'Scrape complete · new items queued',
+                description: 'Use `/pending` to review. Pending embeds below.',
+                fields: [
+                    { name: 'new items', value: String(processed.newEvents), inline: true },
+                    { name: 'flagged', value: String(processed.flaggedCount || 0), inline: true },
+                    { name: 'errors', value: String(result.errors.length), inline: true },
+                    { name: 'next scrape', value: nextNote2, inline: false }
+                ],
+                footer: 'scrape'
+            });
 
             // Post pending embeds into the logs channel for quick review.
             if (bot.cache.settings.logsChannelId) {

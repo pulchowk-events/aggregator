@@ -36,7 +36,6 @@ async function registerSlashCommands(bot) {
             Routes.applicationGuildCommands(bot.client.user.id, env.HOME_GUILD_ID),
             { body: defs.map((cmd) => cmd.toJSON()) }
         );
-        console.log(`✅ Slash commands registered to guild ${env.HOME_GUILD_ID} only (${defs.length} command(s)).`);
 
         // One-time (idempotent) cleanup of previously-registered globals.
         await rest.put(

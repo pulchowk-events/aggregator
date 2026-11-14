@@ -32,6 +32,7 @@
 const { auditLog } = require('../core/auditLogger');
 const { isEventPast, isEventTooSoon, parseEventDate, compareByEventDate } = require('../core/dateUtils');
 const { sanitizeEventFields } = require('../core/sanitize');
+const discordLog = require('../core/discordLog');
 const { determineCategory } = require('./category');
 const { hasValidImage, hasDataQualityWarnings } = require('./gates');
 const { hasBeenPostedToChannel } = require('./reconcile');
@@ -90,13 +91,28 @@ function isWithinLiveAutopostWindow() {
 // spammed with one message per live tick overnight.
 async function logAutopostNightBlockThrottled(bot, itemType) {
     const now = Date.now();
-    const state = bot.autopostNightBlockLogState[itemType] || (bot.autopostNightBlockLogState[itemType] = { live: 0 });
-    if (now - (state.live || 0) >= AUTOPOST_NIGHT_BLOCK_LOG_THROTTLE_MS) {
-        state.live = now;
-        await bot.sendLogMessage(
-            `🌙 Autopost (${itemType}/live): holding off — outside the ${AUTOPOST_LIVE_WINDOW_START_HOUR} AM–${AUTOPOST_LIVE_WINDOW_END_HOUR - 12} PM Nepal-time posting window.`
-        );
-    }
+    // Global throttle (was per-itemType). The per-track version fired
+    // one Discord message per active track simultaneously — three nearly
+    // identical lines at window-open, and again on every restart since
+    // the throttle state lives in memory. A single global message that
+    // lists every live track is both quieter and more informative.
+    const state = bot.autopostNightBlockLogState._global
+        || (bot.autopostNightBlockLogState._global = { live: 0 });
+    if (now - (state.live || 0) < AUTOPOST_NIGHT_BLOCK_LOG_THROTTLE_MS) return;
+    state.live = now;
+
+    const tracks = Object.entries((bot.autopostConfig && bot.autopostConfig.tracks) || {})
+        .filter(([, cfg]) => cfg && cfg.live)
+        .map(([t]) => t);
+    if (tracks.length === 0) tracks.push(itemType);
+
+    await discordLog.send(bot, {
+        status: 'muted',
+        title: 'Autopost holding off · outside posting window',
+        description: `Live autopost window is ${AUTOPOST_LIVE_WINDOW_START_HOUR} AM–${AUTOPOST_LIVE_WINDOW_END_HOUR - 12} PM Nepal time. Resumes when the window opens.`,
+        fields: tracks.map((t) => ({ name: t, value: 'holding off', inline: true })),
+        footer: 'autopost'
+    });
 }
 
 // Throttled console log: "nothing eligible to post this tick". Real posts

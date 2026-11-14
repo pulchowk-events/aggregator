@@ -28,6 +28,7 @@
 
 const crypto = require('crypto');
 const { auditLog } = require('../../core/auditLogger');
+const discordLog = require('../../core/discordLog');
 const ui = require('../../core/ui');
 const { normalizeScholarshipToEventShape } = require('../../core/shape');
 const env = require('../../config/env');
@@ -40,6 +41,10 @@ const JOBS_SYNC_ENABLED = env.WEBSITE_JOBS_SYNC_ENABLED !== false;
 const WEBSITE_SCHOLARSHIPS_TABLE = env.WEBSITE_SCHOLARSHIPS_TABLE || 'scholarships';
 const SCHOLARSHIPS_SYNC_ENABLED = env.WEBSITE_SCHOLARSHIPS_SYNC_ENABLED !== false;
 const DRY_RUN = env.WEBSITE_SYNC_DRY_RUN === true;
+
+// Per-batch progress is opt-in. Default output is one line per table;
+// set WEBSITE_SYNC_VERBOSE=1 to also see the per-batch upsert/prune stream.
+const DEBUG_BATCHES = process.env.WEBSITE_SYNC_VERBOSE === '1';
 const BATCH_SIZE = Math.max(1, env.WEBSITE_SYNC_BATCH_SIZE || 50);
 const BATCH_DELAY_MS = Math.max(0, env.WEBSITE_SYNC_BATCH_DELAY_MS || 200);
 const REVALIDATE_URL = env.WEBSITE_REVALIDATE_URL;
@@ -413,7 +418,7 @@ async function syncOneTable(bot, { tableName, rows, label, emit, log, startMs, s
     const tableStartMs = Date.now();
     const batchStats = { inserted: 0, failed: 0, errors: [] };
     const batches = chunkArray(rows, BATCH_SIZE);
-    log(`[${label}] Upserting ${rows.length} row(s) in ${batches.length} batch(es)...`);
+    if (DEBUG_BATCHES) log(`[${label}] Upserting ${rows.length} row(s) in ${batches.length} batch(es)...`);
 
     if (!DRY_RUN) {
         for (let i = 0; i < batches.length; i++) {
@@ -432,7 +437,7 @@ async function syncOneTable(bot, { tableName, rows, label, emit, log, startMs, s
             }
             const elapsed = Date.now() - startMs;
             const pct = Math.round(((i + 1) / batches.length) * 100);
-            log(`[${label}] Batch ${i + 1}/${batches.length} — ${batchStats.inserted}/${rows.length} upserted, ${batchStats.failed} failed — ${elapsed}ms (${pct}%)`);
+            if (DEBUG_BATCHES) log(`[${label}] Batch ${i + 1}/${batches.length} — ${batchStats.inserted}/${rows.length} upserted, ${batchStats.failed} failed — ${elapsed}ms (${pct}%)`);
             emit({ phase: 'upserting', table: label, batchIndex: i + 1, totalBatches: batches.length,
                    processed: batchStats.inserted + batchStats.failed, total: rows.length, failed: batchStats.failed, elapsedMs: elapsed });
             if (i < batches.length - 1) await sleep(BATCH_DELAY_MS);
@@ -447,7 +452,7 @@ async function syncOneTable(bot, { tableName, rows, label, emit, log, startMs, s
     const currentKeys = new Set(rows.map((r) => r.bot_dedup_key));
     const pruneResult = { deleted: 0, aborted: false, reason: null };
     try {
-        log(`[${label}] Checking for orphan rows to prune...`);
+        if (DEBUG_BATCHES) log(`[${label}] Checking for orphan rows to prune...`);
         emit({ phase: 'pruning_start', table: label });
         const { data: existing, error: fetchErr } = await websiteSupabase
             .from(tableName)
@@ -456,7 +461,7 @@ async function syncOneTable(bot, { tableName, rows, label, emit, log, startMs, s
         if (fetchErr) throw fetchErr;
 
         const orphans = (existing || []).filter((r) => r.bot_dedup_key && !currentKeys.has(r.bot_dedup_key));
-        log(`[${label}] ${orphans.length} orphan(s) out of ${(existing || []).length} existing bot row(s)`);
+        if (DEBUG_BATCHES) log(`[${label}] ${orphans.length} orphan(s) out of ${(existing || []).length} existing bot row(s)`);
 
         if (rows.length === 0 && (existing || []).length > 0) {
             pruneResult.aborted = true;
@@ -479,7 +484,7 @@ async function syncOneTable(bot, { tableName, rows, label, emit, log, startMs, s
                     }
                     await sleep(50);
                 }
-                log(`[${label}] Pruned ${pruneResult.deleted}/${orphans.length} orphan(s)`);
+                if (DEBUG_BATCHES) log(`[${label}] Pruned ${pruneResult.deleted}/${orphans.length} orphan(s)`);
             }
         }
     } catch (err) {
@@ -529,13 +534,13 @@ async function syncWebsite(bot, options = {}) {
     });
 
     // Events
-    log('Computing eligible events...');
+    if (DEBUG_BATCHES) log('Computing eligible events...');
     emit({ phase: 'computing', table: 'events' });
     const eligible = computeEligible(bot);
     const rowsWithNull = eligible.map(({ event }) => eventToWebsiteRow(bot, event));
     const eventRows = rowsWithNull.filter(Boolean);
     const skippedNoDate = eligible.length - eventRows.length;
-    log(`Events: ${eligible.length} eligible, ${eventRows.length} mappable, ${skippedNoDate} skipped (no date/URL)`);
+    if (DEBUG_BATCHES) log(`Events: ${eligible.length} eligible, ${eventRows.length} mappable, ${skippedNoDate} skipped (no date/URL)`);
 
     const userEventsByDate = await fetchUserEventsLookup();
     const finalEventRows = eventRows.filter((row) => !isUserCollision(userEventsByDate, row));
@@ -547,36 +552,63 @@ async function syncWebsite(bot, options = {}) {
         skippedInfo: { noDate: skippedNoDate, collision: skippedCollisions }
     });
 
+    // Per-table result row for events.
+    {
+        const elapsedSec = ((Date.now() - startMs) / 1000).toFixed(1);
+        const tagKind = eventResult.failedCount === 0 ? 'pass' : 'warn';
+        const meta = `${eventResult.syncedCount} synced · ${eventResult.prunedCount} pruned · ${eventResult.failedCount} failed`;
+        const rowLines = ui.resultRow({ tag: ui.tag(tagKind), name: 'events', meta, right: elapsedSec + 's' });
+        for (const ln of rowLines) ui.line(ln);
+    }
+
     // Jobs
     let jobResult = null;
     if (JOBS_SYNC_ENABLED) {
-        log('Computing eligible jobs...');
+        if (DEBUG_BATCHES) log('Computing eligible jobs...');
         emit({ phase: 'computing', table: 'jobs' });
         const jobEligible = computeEligibleJobs(bot);
         const jobRowsRaw = jobEligible.map(({ job }) => jobToWebsiteRow(bot, job));
         const jobRows = jobRowsRaw.filter(Boolean);
         const jobSkippedNoUrl = jobEligible.length - jobRows.length;
-        log(`Jobs: ${jobEligible.length} eligible, ${jobRows.length} mappable, ${jobSkippedNoUrl} skipped (no URL/company)`);
+        if (DEBUG_BATCHES) log(`Jobs: ${jobEligible.length} eligible, ${jobRows.length} mappable, ${jobSkippedNoUrl} skipped (no URL/company)`);
         jobResult = await syncOneTable(bot, {
             tableName: WEBSITE_JOBS_TABLE, rows: jobRows, label: 'jobs', emit, log, startMs,
             skippedInfo: { noUrl: jobSkippedNoUrl }
         });
+
+        // Per-table result row for jobs.
+        {
+            const elapsedSec = ((Date.now() - startMs) / 1000).toFixed(1);
+            const tagKind = jobResult.failedCount === 0 ? 'pass' : 'warn';
+            const meta = `${jobResult.syncedCount} synced · ${jobResult.prunedCount} pruned · ${jobResult.failedCount} failed`;
+            const rowLines = ui.resultRow({ tag: ui.tag(tagKind), name: 'jobs', meta, right: elapsedSec + 's' });
+            for (const ln of rowLines) ui.line(ln);
+        }
     }
 
     // Scholarships
     let scholarshipResult = null;
     if (SCHOLARSHIPS_SYNC_ENABLED) {
-        log('Computing eligible scholarships...');
+        if (DEBUG_BATCHES) log('Computing eligible scholarships...');
         emit({ phase: 'computing', table: 'scholarships' });
         const scholarshipEligible = computeEligibleScholarships(bot);
         const scholarshipRowsRaw = scholarshipEligible.map(({ scholarship }) => scholarshipToWebsiteRow(bot, scholarship));
         const scholarshipRows = scholarshipRowsRaw.filter(Boolean);
         const scholarshipSkippedNoUrl = scholarshipEligible.length - scholarshipRows.length;
-        log(`Scholarships: ${scholarshipEligible.length} eligible, ${scholarshipRows.length} mappable, ${scholarshipSkippedNoUrl} skipped (no URL)`);
+        if (DEBUG_BATCHES) log(`Scholarships: ${scholarshipEligible.length} eligible, ${scholarshipRows.length} mappable, ${scholarshipSkippedNoUrl} skipped (no URL)`);
         scholarshipResult = await syncOneTable(bot, {
             tableName: WEBSITE_SCHOLARSHIPS_TABLE, rows: scholarshipRows, label: 'scholarships', emit, log, startMs,
             skippedInfo: { noUrl: scholarshipSkippedNoUrl }
         });
+
+        // Per-table result row for scholarships.
+        {
+            const elapsedSec = ((Date.now() - startMs) / 1000).toFixed(1);
+            const tagKind = scholarshipResult.failedCount === 0 ? 'pass' : 'warn';
+            const meta = `${scholarshipResult.syncedCount} synced · ${scholarshipResult.prunedCount} pruned · ${scholarshipResult.failedCount} failed`;
+            const rowLines = ui.resultRow({ tag: ui.tag(tagKind), name: 'scholarships', meta, right: elapsedSec + 's' });
+            for (const ln of rowLines) ui.line(ln);
+        }
     }
 
     // Summary
@@ -628,16 +660,37 @@ async function syncWebsite(bot, options = {}) {
             : `Synced ${eventsSynced} events + ${jobsSynced} jobs + ${scholarshipsSynced} scholarships (${eventsPruned + jobsPruned + scholarshipsPruned} pruned, ${eventsFailed + jobsFailed + scholarshipsFailed} failed)`,
         summary, summary.ok ? 'info' : 'warn');
 
-    if (!DRY_RUN && bot.sendLogMessage) {
-        const parts = [
-            `🌐 Website sync: ${eventsSynced} events + ${jobsSynced} jobs + ${scholarshipsSynced} scholarships synced`,
-            (eventsPruned + jobsPruned + scholarshipsPruned) > 0 ? `${eventsPruned + jobsPruned + scholarshipsPruned} pruned` : null,
-            (eventsFailed + jobsFailed + scholarshipsFailed) > 0 ? `⚠️ ${eventsFailed + jobsFailed + scholarshipsFailed} failed` : null,
-            eventResult.pruneAborted ? '🚨 events prune aborted' : null,
-            jobResult && jobResult.pruneAborted ? '🚨 jobs prune aborted' : null,
-            scholarshipResult && scholarshipResult.pruneAborted ? '🚨 scholarships prune aborted' : null
+    if (!DRY_RUN && bot.sendLogEmbed) {
+        const totalFailed = eventsFailed + jobsFailed + scholarshipsFailed;
+        const pruneAborts = [
+            eventResult.pruneAborted ? 'events' : null,
+            jobResult && jobResult.pruneAborted ? 'jobs' : null,
+            scholarshipResult && scholarshipResult.pruneAborted ? 'scholarships' : null
         ].filter(Boolean);
-        bot.sendLogMessage(parts.join(' — ')).catch(() => {});
+        const status = totalFailed > 0 ? 'warn' : (pruneAborts.length > 0 ? 'warn' : 'pass');
+
+        const tableField = (label, result) => {
+            if (!result) return { name: label, value: '(disabled)', inline: true };
+            const parts = [`${result.syncedCount} synced`];
+            if (result.prunedCount) parts.push(`${result.prunedCount} pruned`);
+            if (result.failedCount) parts.push(`${result.failedCount} failed`);
+            if (result.pruneAborted) parts.push('prune ABORTED');
+            return { name: label, value: parts.join(' \u00b7 '), inline: true };
+        };
+
+        discordLog.send(bot, {
+            status,
+            title: 'Website sync',
+            fields: [
+                tableField('events', eventResult),
+                tableField('jobs', jobResult),
+                tableField('scholarships', scholarshipResult)
+            ],
+            description: pruneAborts.length > 0
+                ? `Prune aborted for ${pruneAborts.join(', ')} \u2014 safety guard tripped, no rows deleted.`
+                : undefined,
+            footer: `${durationMs}ms \u00b7 mode: ${DRY_RUN ? 'DRY-RUN' : 'LIVE'}`
+        }).catch(() => {});
     }
 
     if (!DRY_RUN && (eventsSynced > 0 || eventsPruned > 0 || jobsSynced > 0 || jobsPruned > 0 || scholarshipsSynced > 0 || scholarshipsPruned > 0)) {
