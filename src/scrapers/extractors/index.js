@@ -1,14 +1,12 @@
 // src/scrapers/extractors/index.js
 // Loader for extractor modules.
 //
-// For a given (type, name), returns { extractor, isStub }:
-//   - try `./<type>/<name>` first (real extractor, gitignored)
-//   - on MODULE_NOT_FOUND, fall back to `./<type>/<name>.example`
-//     (committed stub, throws on extract())
+// For a given (type, name), returns { extractor, isStub }.
+// Extractor files are committed, one per source, at `./<type>/<name>.js`.
 //
-// The orchestrator uses `isStub` to short-circuit "not implemented" without
-// ever invoking the stub — the stub's throw() is only a belt-and-suspenders
-// for callers that bypass the loader.
+// `isStub` is retained in the return shape for callers that already branch
+// on it; a real extractor always sets it false, and the loader no longer
+// resolves a separate stub file.
 //
 // Results are cached in-process so repeated scrapes don't re-require.
 
@@ -21,32 +19,27 @@ function loadExtractor(type, name) {
     if (cache.has(key)) return cache.get(key);
 
     const realPath = path.join(__dirname, type, name);
-    const examplePath = path.join(__dirname, type, `${name}.example`);
 
     let extractor;
-    let isStub = false;
-
     try {
         extractor = require(realPath);
     } catch (error) {
-        if (error.code !== 'MODULE_NOT_FOUND') {
-            // Real extractor exists but has a syntax/require error — this
-            // is a hard failure, don't silently fall back to the stub.
-            throw new Error(`Extractor ${key} failed to load: ${error.message}`);
+        if (error.code === 'MODULE_NOT_FOUND') {
+            throw new Error(`No extractor for ${key}: ${realPath}.js does not exist`);
         }
-        try {
-            extractor = require(examplePath);
-            isStub = true;
-        } catch (error2) {
-            throw new Error(`No extractor for ${key}: neither ${realPath}.js nor ${examplePath}.js exist`);
-        }
+        // Extractor file exists but has a syntax/require error — hard
+        // failure, surface the underlying message.
+        throw new Error(`Extractor ${key} failed to load: ${error.message}`);
     }
 
     if (!extractor || typeof extractor.extract !== 'function') {
         throw new Error(`Extractor ${key} does not export an extract() function`);
     }
 
-    const result = { extractor, isStub };
+    // isStub retained in the return shape for existing callers
+    // (_orchestrate, diagnose, verify). A real extractor is never a stub;
+    // the .example.js fallback that used to set this true was removed.
+    const result = { extractor, isStub: false };
     cache.set(key, result);
     return result;
 }

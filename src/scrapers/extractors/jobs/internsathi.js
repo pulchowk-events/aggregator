@@ -1,4 +1,4 @@
-// Private extractor — gitignored. See ../README.md for the contract.
+// Site-specific extractor. See ../README.md for the contract.
 // Structural shape: virtualized /internships list (scroll + Load more / Next)
 // -> per-internship detail. Mirrors the SathiJob pattern; the one
 // substantive difference is the slug-based fallback for level / employment

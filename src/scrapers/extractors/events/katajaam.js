@@ -1,4 +1,4 @@
-// Private extractor — gitignored. See ../README.md for the contract.
+// Site-specific extractor. See ../README.md for the contract.
 // Structural shape: 9 category-listing pages -> per-event detail page.
 // Per-link navigation, per-unit progress in finally blocks.
 //

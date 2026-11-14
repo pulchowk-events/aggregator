@@ -1,4 +1,4 @@
-// Private extractor — gitignored. See ../README.md for the contract.
+// Site-specific extractor. See ../README.md for the contract.
 // 3 paginated listing pages -> per-event detail. JSON-LD-first, HTML fallback.
 //
 // Selector drift history:

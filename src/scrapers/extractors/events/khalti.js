@@ -1,4 +1,4 @@
-// Private extractor — gitignored. See ../README.md for the contract.
+// Site-specific extractor. See ../README.md for the contract.
 // Ported to contract form: browser lifecycle + retry + sanitize now live
 // in sources/_orchestrate.js, so this file is ONLY the DOM work.
 

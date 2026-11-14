@@ -1,4 +1,4 @@
-// Private extractor — gitignored. See ../README.md for the contract.
+// Site-specific extractor. See ../README.md for the contract.
 // Structural shape: virtualized /jobs list (scroll + Load more) -> per-job
 // detail. The virtualization means we must scroll to force each row into
 // the DOM before harvesting its href; a bare querySelector on the initial

@@ -1,4 +1,4 @@
-// Private extractor — gitignored. See ../README.md for the contract.
+// Site-specific extractor. See ../README.md for the contract.
 // Structural shape: real server-rendered category listing (pagination via
 // rel=next or a "Next" link) -> per-job detail.
 //

@@ -1,4 +1,4 @@
-// Private extractor — gitignored. See ../README.md for the contract.
+// Site-specific extractor. See ../README.md for the contract.
 // 3 category pages -> per-event detail. JSON-LD-first, HTML fallback.
 // Registration URL discovery uses anchor-click / new-tab detection and is
 // not migrated to pickOne (it's an interaction, not a DOM read).

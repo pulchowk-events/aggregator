@@ -1,13 +1,15 @@
-// Private extractor — gitignored. See ../README.md for the contract.
-// Structural shape: 2 category listings × up to 10 paginated pages ->
-// per-card detail visit (deadline lookup only, not full extraction).
+// Site-specific extractor. See ../README.md for the contract.
+// Structural shape: 2 category listings, first page only per category
+// (page 2+ is Cloudflare-challenged, so the extractor deliberately stops
+// after page 1). No per-card detail visit — the deadline, when present,
+// comes from the listing card's own icon-calendar row.
 //
-// Why the per-card detail visit: the listing card's title year is NOT
-// reliably the deadline year (e.g. "Guggenheim Fellowship 2027" has a
-// real deadline of 15 Sep 2026). So we visit each card's own detail page
-// once, extract just the line(s) that mention "deadline", and hand that
-// text to buildScholarship(). If the visit fails, we fall back to the
-// card title — which is at least the pre-refactor behavior.
+// Deadline coverage is partial by structure, not by bug: roughly a third
+// of listing cards carry an icon-calendar with a real parsed date; the
+// rest ship as year-only estimates. The detail-page visit that used to
+// fill this gap was dropped in 6d2f0f9 — page 2+ and detail pages are
+// Cloudflare-challenged, so the round-trip cost more than the coverage it
+// added. See docs/scrapers.md "Reference: the 10 current sources".
 
 const { delay } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
