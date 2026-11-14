@@ -15,7 +15,6 @@ The scraper layer turns third-party websites into structured `{items, meta}` rep
 - [Adding a source (manual)](#adding-a-source-manual)
 - [When a source drifts](#when-a-source-drifts)
 - [Reference: current sources](#reference-current-sources)
-- [Batch-maintained sources](#batch-maintained-sources)
 
 ---
 
@@ -54,13 +53,13 @@ module.exports = {
 
 Why this split exists:
 
-**The wrapper is boilerplate — you never edit it after creation.** It exists so the registry has a stable target to discover. `runSource` is the orchestrator, and it enforces every cross-cutting concern uniformly across every source: retry on failure, browser lifecycle, common sanitization, description trimming, image URL validation, image enrichment (see [Batch-maintained sources](#batch-maintained-sources)), and diagnostic classification.
+**The wrapper is boilerplate — you never edit it after creation.** It exists so the registry has a stable target to discover. `runSource` is the orchestrator, and it enforces every cross-cutting concern uniformly across every source: retry on failure, browser lifecycle, common sanitization, description trimming, image URL validation, image enrichment (see [Image enrichment — orchestrator-owned](#image-enrichment--orchestrator-owned)), and diagnostic classification.
 
 **The extractor is source-specific — you edit it whenever the site changes.** It contains nothing but DOM logic: `page.goto()`, `page.evaluate()`, link harvesting, field extraction. It does not retry, does not sanitize, does not log to the audit trail, does not decide what to do with failure. The orchestrator handles all of that.
 
 The practical consequence: when a source breaks, you open exactly one file. When you add a source, you write exactly one file (plus the 5-line wrapper). Everything else stays untouched.
 
-**Two maintenance origins.** Every source is either hand-maintained (a human who understands the site's quirks fixes it directly) or batch-maintained (produced by `pulchowk-events batch run` and refined via `batch refine` on the original run directory). Both origins produce identical two-file sources — the wrapper/extractor split is the same, and the batch pipeline just automates the extractor-writing step. See [Reference: current sources](#reference-current-sources) for the maintenance split.
+**Two maintenance origins.** Every source in the repository was either hand-maintained (a human wrote the extractor, and fixes it by hand when the site drifts) or batch-maintained (produced by `pulchowk-events batch run`, and refined via `batch refine` on the original run directory). Both origins produce identical two-file sources, both go through the same `runSource()` orchestrator, and both fail the same way. The distinction matters for exactly one thing — which repair path to use when the source drifts (see [When a source drifts](#when-a-source-drifts)). See [Reference: current sources](#reference-current-sources) for the full per-source list.
 
 ---
 
@@ -119,6 +118,15 @@ Called once per item, after `extract()` returns, before the common sanitization 
 Use it for source-specific cleanup that shouldn't live in the shared sanitizer. Example: NepVents embeds a wall of boilerplate (social links, register button, detail table) inside its description field. `preprocessItem` strips that via `cleanNepVentsDescription()` before the common sanitizer ever sees it.
 
 Do not use it for the cross-cutting cleanups the common sanitizer already handles — image URL validation, description trimming, field-level mislabeling, image enrichment. Those are applied automatically to every source.
+
+### Image enrichment — orchestrator-owned
+
+Job postings rarely carry a per-item image. After `extract()` returns, `runSource` (in `src/scrapers/sources/_orchestrate.js`) derives one for every job item that came back without a valid image:
+
+1. `deriveImageForUrl(url)` — fetches `<meta og:image>` from the site's homepage (falling back to `<link rel="icon">`). Caches the result per-hostname for 30 days in `data/og-image-cache.json`, and deduplicates concurrent in-flight fetches for the same hostname.
+2. `derivePlaceholderForSource(name)` — returns a URL to a generated placeholder PNG in `data/placeholder-images/` if one exists, `null` otherwise. Placeholders are produced by `scripts/generate-placeholders.js` (Puppeteer one-shot: black background, white company name centered, auto-shrinking font for long names). Served from the bot's own Express route at `http://127.0.0.1:${WEB_PORT}/placeholders/<name>.png`.
+
+Both functions live in `src/scrapers/ogImage.js` and are called from `sources/_orchestrate.js`, not from individual extractors. No job extractor handles image extraction itself — enrichment is uniform across every job source, hand-maintained or batch-maintained. Do not add `companyLogoUrl` extraction to any individual extractor.
 
 ---
 
@@ -402,7 +410,7 @@ pulchowk-events batch run urls.txt --run mybatch
 5. **Refines.** LLM-origin failures get re-prompted with their own failure log. Bounded at 3 attempts.
 6. **Deploys.** Verified-passing extractors are copied into `src/scrapers/` with wrappers, then you commit.
 
-Full walkthrough: [`batch.md`](batch.md). The one-line answer for "should I use the wizard or the batch?" — wizard for 1-2 sources, batch for 3+.
+Full walkthrough: [`batch.md`](batch.md). The one-line answer for "should I use the wizard or the batch?" — wizard for one or two sources, batch for three or more.
 
 ---
 
@@ -510,11 +518,9 @@ When it returns `verdict: ok` with a sensible item count, the source is live. Th
 
 ## When a source drifts
 
-The playbook depends on the source's maintenance origin — hand-maintained vs batch-maintained. Both end at the same place (a working extractor) but the mechanism differs.
+Both maintenance origins end at the same place (a working extractor), but the mechanism differs. First step either way is the same: confirm the failure and figure out the origin.
 
-### Hand-maintained sources
-
-**1. Confirm the failure mode.**
+**Confirm the failure.**
 
 ```bash
 pulchowk-events diagnose <name>
@@ -522,7 +528,17 @@ pulchowk-events diagnose <name>
 
 This reports every selector the extractor uses, which ones broke, and which alternatives currently match. If you also want the formal verdict, `pulchowk-events verify <name>` runs the extractor end-to-end and prints the classifier's verdict.
 
-**2. Try the auto-fixer.**
+**Find the origin.** The extractor file's first commit identifies which repair path applies:
+
+```bash
+git log --oneline --follow src/scrapers/extractors/jobs/<name>.js | head -3
+```
+
+A commit message matching `feat(scrapers): add N proven job sources from companies-76 batch` (or any other `batch run` commit) means the source is **batch-maintained**. A hand-commit (something like `feat(scrapers): ship all 10 extractors`, or a manual `fix:` commit on a single file) means **hand-maintained**. When in doubt, look at the extractor file's top-of-file comment: batch-generated extractors carry a banner like `// Extractor: <name> (jobs) -- single-page HTML card listing. // Generated by scripts/batch/templates/html-cards-listing.js.`, and the drift-repair hint points at `pulchowk-events diagnose` / `fix`. Hand-maintained extractors have a plain top comment documenting the site's structural quirks.
+
+### Hand-maintained sources
+
+**1. Try the auto-fixer.**
 
 ```bash
 pulchowk-events fix <name>
@@ -534,14 +550,14 @@ The fix entry point lists every source with last-known status, lets you pick one
 
 Interactive by default. `--apply` skips the confirm prompt and applies non-interactively. `--full` also runs the extractor for correlation.
 
-**3. Match the verdict to a manual fix (if auto-fix couldn't).**
+**2. Match the verdict to a manual fix (if auto-fix couldn't).**
 
 - **`dom_drift_listing`** — listing selector matched nothing. Open the extractor, find the listing selectors (usually a `pickAll` call or a `page.evaluate(() => document.querySelectorAll(...))`), patch the primary selector to match current DOM, keep the old selector as a fallback.
 - **`dom_drift_detail`** — detail pages yielded no titles. Same procedure, but for the detail title selector. Usually the title is an `<h1>` with a specific class that got renamed.
 - **`blocked`** — the site served a captcha or Cloudflare challenge. Not a code fix. Set `BROWSER_EXECUTABLE_PATH` and `BROWSER_USER_DATA_DIR` to a profile that has manually solved the challenge once. On WSL2, this only works from Windows.
 - **`empty`** — the site loaded, anchors were found, some detail pages yielded titles, but zero items came out. Either the site genuinely has no items right now, or a filter is rejecting everything. Check the console output — the extractor usually logs why items were skipped.
 
-**4. Patch, verify, commit.**
+**3. Patch, verify, commit.**
 
 After patching (auto or manual), re-run:
 
@@ -551,7 +567,7 @@ pulchowk-events verify <name>
 
 Confirm `verdict: ok` and `items > 0`. Note the drift in the file's "Selector drift history" comment with the date and what changed. Commit.
 
-**5. If the fix is a rewrite, note what changed.**
+**4. If the fix is a rewrite, note what changed.**
 
 Structural drift (site moved from listing-to-detail to single-page-cards, or switched from HTML to JSON-LD) means a full extractor rewrite. Update the file's top comment to describe the new structure, and update the source table below in this doc to reflect the new reality.
 
@@ -559,15 +575,7 @@ Structural drift (site moved from listing-to-detail to single-page-cards, or swi
 
 Do **not** hand-edit. The batch pipeline remembers the extractor's history (prompt, dump, verify attempts) and can regenerate with the failure evidence in front of the LLM.
 
-**1. Confirm the failure mode.**
-
-```bash
-pulchowk-events verify <name>
-```
-
-The verdict is one of the drift statuses (`dom_drift_listing`, `dom_drift_detail`, `parse_failed`, etc.) or `ok`. The raw code is in the output; the human-readable label and explanation come from `src/core/messages.js`.
-
-**2. Refine via the batch loop.**
+**1. Refine via the batch loop.**
 
 ```bash
 # Find the run that produced this extractor
@@ -581,12 +589,12 @@ pulchowk-events batch verify --run <run-id> --only <name>
 
 The refine step appends a `## Prior attempts` section to the prompt containing the failure log (item count, verdict, stderr tail). The LLM sees its own failure and usually produces a corrected extractor on the second try. Bounded at 3 attempts.
 
-**3. If the site has genuinely changed shape** (moved domains, switched to ATS, became single-page), the correct response is a fresh extractor, not a refine. Either:
+**2. If the site has genuinely changed shape** (moved domains, switched to ATS, became single-page), the correct response is a fresh extractor, not a refine. Either:
 
 - Change the URL in `urls.txt`, re-init a new batch run, and let it generate a fresh prompt. Deploy the passing extractor.
 - If the site now uses a recognized ATS (Workable, Personio, SmartRecruiters), the batch classifies it as such automatically — the template output replaces the old extractor entirely.
 
-**4. Never patch batch-maintained extractors by hand.** A hand-patched extractor loses the tie to its batch run and cannot be refined in the future. If a hand-patch is the only option (rare — usually means the site is genuinely un-scrapable and the batch keeps failing), document why in the extractor's header comment so the next person knows it's off the batch loop.
+**3. Never patch batch-maintained extractors by hand.** A hand-patched extractor loses the tie to its batch run and cannot be refined in the future. If a hand-patch is the only option (rare — usually means the site is genuinely un-scrapable and the batch keeps failing), document why in the extractor's header comment so the next person knows it's off the batch loop.
 
 ### Both origins
 
@@ -596,55 +604,112 @@ The refine step appends a `## Prior attempts` section to the prompt containing t
 
 ## Reference: current sources
 
-The current source set is whatever's committed under `src/scrapers/extractors/jobs/` (and the corresponding events/scholarships directories). For a live count: `ls src/scrapers/extractors/jobs/*.js | wc -l`. For a per-run view of sources not yet deployed: `pulchowk-events batch status`.
+The current source set is whatever's committed under `src/scrapers/extractors/{events,jobs,scholarships}/`. For a live count:
 
-**Maintenance origins.** Every source is either hand-maintained or batch-maintained. The distinction matters for exactly one thing: how to repair the source when it drifts. Hand-maintained sources are fixed by hand (`pulchowk-events diagnose` → `pulchowk-events fix` → verify). Batch-maintained sources are regenerated via `pulchowk-events batch refine --only <name>` on the original run directory — do not hand-edit, because refine preserves the ability to retry the LLM with the failure in the loop.
+```bash
+ls src/scrapers/extractors/jobs/*.js | wc -l
+ls src/scrapers/extractors/events/*.js | wc -l
+ls src/scrapers/extractors/scholarships/*.js | wc -l
+```
 
-Both origins produce identical two-file sources: `src/scrapers/sources/<type>/<name>.js` (a five-line wrapper) and `src/scrapers/extractors/<type>/<name>.js` (the actual DOM work). Both run through the same `runSource()` orchestrator. Both fail the same way. The split is administrative, not architectural.
+For a per-run view of sources still staged in a batch (not yet deployed), `pulchowk-events batch status`.
 
-See [Hand-maintained sources](#hand-maintained-sources) and [Batch-maintained sources](#batch-maintained-sources) below for the per-origin operating model.
+Every source listed below appears in `src/scrapers/sources/<type>/<name>.js` (the wrapper) and `src/scrapers/extractors/<type>/<name>.js` (the extractor). The registry discovers both at boot. The origin column is not part of the source's shape — it's a maintenance hint (see [When a source drifts](#when-a-source-drifts)), and it is inferred from the extractor file's first commit. To check the origin of a specific source:
 
-### Hand-maintained sources
+```bash
+git log --oneline --follow --reverse src/scrapers/extractors/jobs/<name>.js | head -1
+```
 
-These sources are maintained directly — a human who understands the site's structural quirks fixes them by hand when they drift. The repair path is `pulchowk-events diagnose <name>` → `pulchowk-events fix <name>` → `pulchowk-events verify <name>`.
+The `Source` column identifies the site. `Notes` captures structural quirks, extraction strategy, or site-level limitations specific to that source.
 
-| Source | Type | Listing structure | Detail structure | Extraction strategy | Known limitations |
-|---|---|---|---|---|---|
-| **Khalti** | events | Single page, no pagination | None — all data on cards | Single `page.evaluate()` | Fastest source. Cards sometimes miss images. |
-| **KataJaam** | events | 9 category pages | Per-event detail page | HTML extraction, blur-up image filter | 9 categories × ~10 events each per run. Detail pages occasionally 404. |
-| **NepVents** | events | 3 category pages | Per-event detail page | JSON-LD-first, HTML fallback | Registration URL requires anchor-click discovery (some pages lack it). |
-| **Kgarira** | events | 3 paginated pages | Per-event detail page | JSON-LD-first, HTML `h1` fallback | Pagination returns the same 3 items on each page — deduped downstream, just wasteful. |
-| **SathiJob** | jobs | Virtualized scroll + Load More | Per-job detail page | Stat-grid label/value extraction | Scroll loop caps at 40 steps per load; jobs with unusual layouts may miss fields. |
-| **InternSathi** | jobs | Virtualized scroll + Load more / Next | Per-job detail page | Stat-grid extraction, slug-based fallback | Same structure as SathiJob. Slug encodes level/employment-type/mode, used as fallback. |
-| **MeroJob** | jobs | Real pagination (Next link) | Per-job detail page | Icon-based field extraction | Deadlines are relative ("15 days from now") — converted to absolute at scrape time. |
-| **KumariJob** | jobs | Real pagination (rel=next / Next link) | Per-job detail page | Label/value row extraction, badge classification | "Apply Now" often points offsite — only used as `registrationUrl` when it's a well-formed http(s) URL. |
-| **ScholarshipsAds** | scholarships | 2 category pages, paginated | None — no detail visit; deadline read from listing card icon-calendar | Listing-only extraction | Page 1 only per category — page 2+ is Cloudflare-challenged. ~2/3 of listing cards have no deadline; those ship as estimated-year-only. |
-| **Erasmus Mundus** | scholarships | Single listing, paginated | Per-project detail page | Two-hop with year pre-filter | Deadlines intentionally `unknown` (project duration ≠ application deadline). No funding amount (total consortium grant ≠ per-student award). |
+### Events
 
-Two sources are documented as structurally limited:
+| Source | Site | Notes |
+|---|---|---|
+| Khalti | `events.khalti.com` | Single-page DOM harvest, no per-event navigation. Fastest source. |
+| KataJaam | `katajaam.com` | Nine category pages × per-event detail. Blur-up placeholder images need an `aria-hidden` filter. |
+| NepVents | `nepvents.com` | Three category pages. JSON-LD-first extraction with HTML fallback. Registration URL is discovered by clicking through the site's own button. |
+| Kgarira | `kgarira.com` | Three paginated listing pages × per-event detail. JSON-LD-first detail extraction. Pagination currently returns the same 3 items on each page — deduped downstream, just wasteful. |
 
-- **ScholarshipsAds** scrapes only the first page of each category. Pages 2+ are behind Cloudflare's bot-detection wall, which a warm browser profile can't reliably bypass across many paginated requests. The extractor deliberately stops after page 1 — it captures the newest 20 items per category, which is enough for a community feed. Deadline coverage is partial by structure, not by bug: only the subset of listing cards with an icon-calendar have a parsed deadline (~1/3 on a typical run). The rest ship with an estimated-year-only deadline, which renders as a year rather than a specific date on the website. There's no fix without a warm browser profile that can survive the Cloudflare challenge per-card.
+### Scholarships
+
+| Source | Site | Notes |
+|---|---|---|
+| ScholarshipsAds | `scholarshipsads.com` | Listing-only extraction. Listing cards carry everything including deadline (icon-calendar on some cards, no detail visit). Cloudflare-challenged past page 1 of each category; extractor deliberately stops after page 1. |
+| Erasmus Mundus | `eacea.ec.europa.eu` | Two-hop scrape with year pre-filter. Deadlines are intentionally `unknown` (project duration ≠ application deadline). `fundingType` and `degreeLevel` are hardcoded EMJMD facts, not scraped. |
+
+### Jobs
+
+| Source | Site | Notes |
+|---|---|---|
+| SathiJob | `sathijob.com` | Virtualized listing, needs scroll-loop harvesting. Structured stat grid on detail pages. |
+| InternSathi | `internsathi.com` | Same structural shape as SathiJob. Slug encodes level/employment-type/mode — used as fallback. |
+| MeroJob | `merojob.com` | Normal server-rendered listing with real pagination. Deadlines are relative ("15 days from now") and are converted to absolute at scrape time. |
+| KumariJob | `kumarijob.com` | Normal listing with real pagination. Detail pages can apply offsite (LinkedIn, employer ATS). |
+| Aarambha IT | `aarambhait.com` | Single-page HTML card listing. |
+| Aayulogic | `aayulogic.com/careers/` | Job listings on the site's careers section. |
+| Adex International | `adex.ltd/` | Cloud/DevOps consulting firm's careers page. |
+| Aegis Software | `aegishms.com/careers` | Hospitality software niche leader. |
+| Agile Solutions | `agile.com.np/careers/` | Microsoft partner. |
+| Alpas Technology | `alpastechnology.com/careers` | Boutique studio. |
+| Bajra Technologies | `bajratechnologies.com/` | Leading Nepali tech firm. |
+| Black Tech | `blacktech.com.np/career` | Pokhara-based software company. |
+| Cedar Gate Technologies | `cedargate.com/careers-2/` | US healthcare tech. |
+| Cloco Nepal | `cloco.com.np/careers/` | Japanese-backed company. |
+| CloudFactory | `cloudfactory.com/careers` | Global data/AI company. |
+| CloudTechService | `cloudtechservice.com/careers` | AWS/cloud consulting. |
+| Daraz | `careers.daraz.com/` | E-commerce platform. |
+| Dev | — | Careers URL not recorded in the source doc; check the extractor's `LISTING_URL` constant. |
+| Devfinity | `devfinity.io/careers/` | Software company. |
+| DishHome | `career.dishhome.com.np/` | DTH/ISP provider. |
+| DLytica | `dlytica.com/career/` | Data/AI company. |
+| Docsumo | `docsumo.com/careers/` | AI document startup. |
+| E-Digital Nepal | `edigitalnepal.com/careers/` | Education-tech. |
+| Ekbana | `careers.ekbana.com/` | Digital transformation. |
+| Eminence Ways | `eminenceways.com/` | Cybersecurity. |
+| ESignature | `esignature.com.np/` | Full-stack company. |
+| Evolve | `evolveasia.co/` | FMCG tech startup. |
+| F1Soft International | `career.f1soft.com/` | Leading fintech. |
+| Fonepay | `fonepay.com/` | Payment network. |
+| Genese Solution | `genesesolution.com/` | UK-based consulting. |
+| GrowByData | `growbydata.com/` | Ecommerce data services. |
+| Gurkhatech | `gurkhatech.com/careers/` | Digital marketing. |
+| Hazesoft | `hazesoft.co/careers/` | Software firm. |
+| HiTech Solutions & Services | `hitechnepal.com.np/career/` | ERP provider. |
+| Hitachi (Pioneer Solutions) | `careers.hitachi.com/` (Nepal filter) | Hitachi Energy subsidiary. Uses the vendor's own careers search. |
+| InfoDevelopers | `infodev.com.np/careers/` | IT services. |
+| Intuji | `intuji.com/careers/` | Digital transformation. |
+| Leapfrog Technology | `career.lftechnology.com/` | Leading software company. |
+| Lunover Digital | `lunover.com/` | Web agency. |
+| Manaram Technology | `manaram.group/` | Tech conglomerate. |
+| MarginTop Solutions | `margintopsolutions.com/careers` | IT company. |
+| Naxa | `naxa.com.np/` | Geo-ICT. |
+| Nep Tech Pal | `neptechpal.com.np/careers/` | Pokhara digital provider. |
+| Nimble Infosys | `career.nimble.com.np` | Established software company. |
+| Progressive Labs | `progressivelabs.tech/careers/` | Software company. |
+| Proshore | `proshore.eu/careers/` | Netherlands-Nepal company. |
+| Quickfox Technologies | `quickfoxconsulting.com/careers/` | Technology consulting. |
+| Skybase Innovations | `skybase.com.np/careers` | Pokhara digital agency. |
+| SoftNEP | `softnep.com/careers` | Established software company. |
+| Source Code | `sourcecode.com.np/join-us/` | Fintech company. |
+| Sustainable Solutions (Sussol) | `sussol.net/jobs/` | Niche software company. |
+| Tech101 | `tech101.com.np/` | Digital marketing. |
+| Technorio | `technorio.com/career/` | IT company. |
+| TeslaTech | `teslatech.com.np/` | Mobile game developer. |
+| UXCam | `uxcam.com/careers/` | Mobile analytics platform. |
+| Vianet Communications | `vianet.com.np/careers/` | ISP. |
+| Vivasoft Nepal | `vivasoft.com.np/careers/` | Software outsourcing. |
+| Viveka Health | `vivekahealth.com/careers/` | Health-tech. |
+| Vrit Technologies | `vrittechnologies.com/careers/` | SaaS/EdTech. |
+| Worldlink Communications | `worldlink.com.np/career/` | Largest ISP. |
+| Yarsa Labs | `yarsalabs.com/` | Product company. |
+| Ycotek (LIS Nepal) | `ycotek.com/careers` | IT services. |
+
+Two sources have documented structural limits worth flagging up front:
+
+- **ScholarshipsAds** scrapes only the first page of each category. Pages 2+ are behind Cloudflare's bot-detection wall, which a warm browser profile can't reliably bypass across many paginated requests. The extractor deliberately stops after page 1 — it captures the newest items per category, which is enough for a community feed. Deadline coverage is partial by structure, not by bug: only the subset of listing cards with an icon-calendar have a parsed deadline. The rest ship with an estimated-year-only deadline, which renders as a year rather than a specific date on the website.
 - **Kgarira's** pagination returns the same 3 events on every page. The `MAX_PAGES = 3` loop therefore re-scrapes the same 3 events 3 times, producing 9 items before dedup (deduped to 3 by the downstream pipeline). Not a correctness issue, just throughput waste.
 
-### Batch-maintained sources
+**Image enrichment is uniform across every job source.** Jobs typically have no per-item image. The orchestrator (`sources/_orchestrate.js`) derives a per-site image from `<meta og:image>` (cached in `data/og-image-cache.json`) or a generated placeholder PNG (`scripts/generate-placeholders.js`) when neither is present. This applies to every job source. Do not add `companyLogoUrl` extraction to any individual extractor — enrichment handles it uniformly.
 
-The job sources that aren't hand-maintained were produced by the batch pipeline. Two shapes exist:
-
-**Template output** — rendered from `scripts/batch/templates/*.js`:
-
-- `workable.js` — Workable ATS API (JSON)
-- `personio.js` — Personio ATS feed (XML)
-- `smartrecruiters.js` — SmartRecruiters ATS API (JSON)
-- `html-cards-listing.js` — single-page HTML card listings
-
-Templates are deterministic: given a site's DOM shape, the same input always produces the same extractor. No LLM involved. Proven against the live site before being committed.
-
-**LLM output** — the wizard writes a prompt describing the site's DOM dump; a human pastes it into DeepSeek (or another code LLM); the LLM writes the extractor; the batch pipeline verifies it against the live site. `git log --oneline --follow src/scrapers/extractors/jobs/<name>.js` shows the batch run that produced the file.
-
-Three things to know about batch-maintained sources:
-
-1. **The repair path is `batch refine`, not hand-edits.** Use `pulchowk-events batch refine --only <name>` on the original run directory to feed the failure log back to the LLM for a regenerated extractor. Manual edits work but lose the loop's ability to retry with context.
-
-2. **Image enrichment is uniform across all job sources.** Jobs typically have no per-item image. The orchestrator (`sources/_orchestrate.js`) derives a per-site image from `<meta og:image>` (cached in `data/og-image-cache.json`) or a generated placeholder PNG (`scripts/generate-placeholders.js`) when neither is present. This applies to hand-maintained and batch-maintained job sources alike. Do not add `companyLogoUrl` extraction to any individual job extractor — enrichment handles it uniformly for every job.
-
-3. **Prompt shape is locked.** `scripts/batch/lib/prompt-structure.js` validates every generated prompt against a canonical structure. If you change `scripts/wizard/prompt.js`, update the validator in the same commit — `pulchowk-events batch check` will fail otherwise. The lock exists so a prompt edit can't silently degrade every future extractor.
+**Prompt shape is locked.** `scripts/batch/lib/prompt-structure.js` validates every generated prompt against a canonical structure. If you change `scripts/wizard/prompt.js`, update the validator in the same commit — `pulchowk-events batch check` will fail otherwise. The lock exists so a prompt edit can't silently degrade every future extractor.

@@ -42,6 +42,8 @@ Every phase is idempotent. Every phase writes per-site files into the run direct
 
 ### What to expect at each scale
 
+The figures below are rough extrapolations from prior runs — they describe the shape of the work, not measured promises for any future batch. The one measured reference case is the companies-76 run, documented in [What a real batch looks like](#what-a-real-batch-looks-like) below.
+
 | Sources | Machine time | Interactive time | Committed extractors (typical) |
 |---|---|---|---|
 | 3 sources | ~5 min | ~5 min | most of them |
@@ -101,7 +103,7 @@ These are historical measurements from one specific run, not current state. Ever
 
 - **Safe deploy.** `batch deploy` refuses to overwrite an existing extractor in `src/scrapers/` unless `--force`. Runs `node --check` on every file before copying. Prints the exact git commands for the human step, but does not run git itself. The pipeline commits nothing on your behalf.
 
-- **Image enrichment, not extraction.** Jobs typically have no per-item image. The orchestrator (`src/scrapers/sources/_orchestrate.js`) derives a per-site image from `<meta og:image>` (cached for 30 days in `data/og-image-cache.json`) or a generated placeholder PNG (`scripts/generate-placeholders.js`) when neither is present. This is uniform across every job extractor — no extractor needs to handle image extraction itself. See [`scrapers.md#batch-maintained-sources`](scrapers.md#batch-maintained-sources).
+- **Image enrichment, not extraction.** Jobs typically have no per-item image. The orchestrator (`src/scrapers/sources/_orchestrate.js`) derives a per-site image from `<meta og:image>` (cached for 30 days in `data/og-image-cache.json`) or a generated placeholder PNG (`scripts/generate-placeholders.js`) when neither is present. This is uniform across every job extractor — no extractor needs to handle image extraction itself. See [`scrapers.md#the-extractor-contract`](scrapers.md#the-extractor-contract).
 
 ---
 
@@ -366,7 +368,7 @@ The refined prompt includes the full `stderrTail` from `results/<name>.json` —
 
 Safety properties:
 
-- **Never overwrites** an existing extractor unless `--force`. A site already in `src/scrapers/` means a human committed it deliberately. Silently rewriting would clobber that work.
+- **Never overwrites** an existing extractor unless `--force`. A site already in `src/scrapers/` means a source was committed deliberately. Silently rewriting would clobber that work.
 - **Syntax-checks** every file via `node --check` before copying. A malformed file should never reach `src/`.
 - **Prints the exact git commands** for staging and committing the new files. Does not run git itself. Review the diff before committing.
 
@@ -403,7 +405,7 @@ Two files are load-bearing:
 - **`src-snapshot.json`** — frozen `src/scrapers/` state at init. Naming collisions between new URLs and existing sources are resolved against this snapshot, not the live filesystem. An interrupted `verify` leaving orphans in `src/scrapers/` cannot shift naming on a subsequent `discover` for the same run.
 - **`verify-summary.json`** — merged, not overwritten. A partial run (`batch verify --only a,b`) merges its results with the existing summary. Without this, a partial verify would wipe previously-passing sites out of the summary and `batch report` would show them as NOT-GENERATED.
 
-Run directories are never auto-pruned. Raw HTML per URL dominates the size; a few dozen URLs means tens of megabytes. See [`operations.md#batch-pipeline-operations`](operations.md#batch-pipeline-operations) for cleanup guidance.
+Run directories are never auto-pruned. Raw HTML per URL dominates the size. See [`operations.md#batch-pipeline-operations`](operations.md#batch-pipeline-operations) for cleanup guidance.
 
 ---
 
@@ -442,7 +444,7 @@ Run directories are never auto-pruned. Raw HTML per URL dominates the size; a fe
 
 **Verify reports `dom_drift_listing` for a site the LLM claims is a real jobs page.** Open the site manually first. If it genuinely has jobs, `batch refine --only <site>` gives the LLM its previous failure plus the current dump. If the site has no jobs, the empty-vs-drift discrimination should already pass it — but if it doesn't, check that `dumps/<site>.json` shows `maxJobTitleRatio >= 0.3`.
 
-**A source fails after being deployed.** Run `pulchowk-events verify <name>` (the single-source verify). If it fails, `batch refine --only <name>` on the original run dir. Do not edit the extractor by hand — refine preserves the ability to retry with evidence. See [`scrapers.md#batch-maintained-sources`](scrapers.md#batch-maintained-sources) for the full reasoning.
+**A source fails after being deployed.** Run `pulchowk-events verify <name>` (the single-source verify). If it fails, `batch refine --only <name>` on the original run dir. Do not edit the extractor by hand — refine preserves the ability to retry with evidence. See [`scrapers.md#when-a-source-drifts`](scrapers.md#when-a-source-drifts) for the full reasoning.
 
 **`batch report` exit code 2.** Not a failure. It means some sites still need action: paste pending, or LLM redirect verdicts unresolved. Run `batch paste` or `batch follow` accordingly.
 
@@ -454,7 +456,7 @@ Run directories are never auto-pruned. Raw HTML per URL dominates the size; a fe
 
 **`batch run` says "run dir already exists".** Expected. `batch init` refuses to overwrite an existing run directory — it would corrupt the run's state. Pick a different run-id, or delete the abandoned run first (check its `generated/` for un-deployed extractors before you do).
 
-**Placeholder image returns 404 after deploy.** The bot serves placeholder PNGs from `http://127.0.0.1:${WEB_PORT}/placeholders/<name>.png`. If the PNG doesn't exist in `data/placeholder-images/`, the route returns 404. Regenerate with `node scripts/generate-placeholders.js --only <name>`. See [`operations.md#post-failed-no-image`](operations.md#post-failed-no-image) for the post-gate side.
+**Placeholder image returns 404 after deploy.** The bot serves placeholder PNGs from `http://127.0.0.1:${WEB_PORT}/placeholders/<name>.png`. If the PNG doesn't exist in `data/placeholder-images/`, the route returns 404. Regenerate with `node scripts/generate-placeholders.js --only <name>`. See [`operations.md#post-failed-no_image`](operations.md#post-failed-no_image) for the post-gate side.
 
 ---
 

@@ -1,10 +1,10 @@
+# Pulchowk Events Aggregator
+
 <div align="left">
 
 <img width="1920" height="400" alt="Pulchowk Events" src="https://github.com/user-attachments/assets/4aeb44d8-af5e-46cf-9084-1d2857360c45" />
 
-# Pulchowk Events Aggregator
-
-**Scrapes events, jobs, and scholarships from sixty-plus Nepali and international sources, deduplicates them, publishes to Discord, and syncs to a public website.**
+**Scrapes events, jobs, and scholarships across Nepali and international sources, deduplicates them, publishes to Discord, and syncs to a public website.**
 
 ![Node](https://img.shields.io/badge/node-%E2%89%A518.0-339933?logo=node.js&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/code-MIT-blue)
@@ -14,7 +14,7 @@
 
 | Sources | Categories | Delivery |
 |---|---|---|
-| **many** scraped<br/><sub>events, jobs, and scholarships from Nepali and international sites<br/>see [Sources supported](#sources-supported)</sub> | **9** routed<br/><sub>sports, software, hardware, gaming, music, business, misc, jobs, scholarships</sub> | **3** targets<br/><sub>Discord test · Discord live · Supabase website</sub> |
+| **68 sources**<br/><sub>4 events · 62 jobs · 2 scholarships<br/>recount with `ls src/scrapers/extractors/*/ \| wc -l`</sub> | **9** routed<br/><sub>sports, software, hardware, gaming, music, business, misc, jobs, scholarships</sub> | **3** targets<br/><sub>Discord test · Discord live · Supabase website</sub> |
 
 [Architecture](#architecture) · [Quickstart](#quickstart) · [CLI](#command-line-tool) · [Setup wizard](#setup-wizard) · [Adding a source](#adding-a-source) · [Batch onboarding](#batch-onboarding) · [Docs](#documentation) · [Issues](https://github.com/pulchowk-events/aggregator/issues)
 
@@ -52,7 +52,7 @@ The **batch pipeline** (`scripts/batch/`) exists because the source set keeps gr
 
 ## Features
 
-- **A source is two files.** Adding a website to scrape is: create `src/scrapers/sources/<type>/<name>.js` (five-line wrapper), then `src/scrapers/extractors/<type>/<name>.js` and implement `extract()`. The registry discovers both at boot. Nothing in `src/core/`, `src/posting/`, or `src/discord/` needs to know the source exists. The batch pipeline produces the same two files — the wrapper and extractor are identical whether hand-maintained or batch-maintained.
+- **A source is two files.** Adding a website to scrape is: create `src/scrapers/sources/<type>/<name>.js` (five-line wrapper), then `src/scrapers/extractors/<type>/<name>.js` and implement `extract()`. The registry discovers both at boot. Nothing in `src/core/`, `src/posting/`, or `src/discord/` needs to know the source exists. The batch pipeline produces the same two files — the wrapper and extractor are identical whether a source was written by hand or produced by the pipeline.
 
 - **A batch pipeline for onboarding dozens of sources.** `pulchowk-events batch run urls.txt --run mybatch` fetches every URL, classifies the site shape, renders deterministic templates for the four supported ATS families (Workable, Personio, SmartRecruiters) and single-page HTML listings, writes LLM prompts for everything else, verifies the generated extractors against the live site in parallel, and refines LLM-origin failures with their own failure logs. The only human step is the paste round-trip: `paste` copies each prompt to the clipboard, you paste into DeepSeek, copy the reply back, and the loop advances.
 
@@ -82,33 +82,104 @@ The **batch pipeline** (`scripts/batch/`) exists because the source set keeps gr
 
 ## Sources supported
 
-For the live count, run `ls src/scrapers/extractors/jobs/*.js | wc -l` (or `ls src/scrapers/extractors/events/*.js | wc -l`, `.../scholarships/...`). For a per-run view of sources not yet deployed, `pulchowk-events batch status`. The list grows over time; nothing in this document should be read as a fixed count.
+The current set: **68 sources total — 4 events, 62 jobs, 2 scholarships.** The list grows over time; the numbers in the hero table and this section reflect the repository at the time of writing.
 
-Every source is either **hand-maintained** or **batch-maintained**. The distinction matters for exactly one thing: how to repair the source when it drifts. Both origins produce identical two-file sources, run through the same `runSource()` orchestrator, and fail the same way. See [`docs/scrapers.md#reference-current-sources`](docs/scrapers.md#reference-current-sources) for the full per-source deep dive.
+To recount from the filesystem:
 
-### Hand-maintained sources
+```bash
+ls src/scrapers/extractors/events/*.js | wc -l          # event sources
+ls src/scrapers/extractors/jobs/*.js | wc -l            # job sources
+ls src/scrapers/extractors/scholarships/*.js | wc -l    # scholarship sources
+```
 
-These sources are maintained directly — a human who understands the site's structural quirks fixes them by hand when they drift. The repair path is `pulchowk-events diagnose <name>` → `pulchowk-events fix <name>` → `pulchowk-events verify <name>`.
+For a per-run view of sources staged in a batch but not yet deployed, `pulchowk-events batch status`.
 
-| Type | Source | Site | Notes |
-|---|---|---|---|
-| Events | Khalti | `events.khalti.com` | Single-page DOM harvest, no per-event navigation. Fastest source. |
-| Events | KataJaam | `katajaam.com` | Nine category pages × per-event detail. Blur-up placeholder images need an `aria-hidden` filter. |
-| Events | NepVents | `nepvents.com` | Three category pages. JSON-LD-first extraction with HTML fallback. Registration URL is discovered by clicking through the site's own button. |
-| Events | Kgarira | `kgarira.com` | Three paginated listing pages × per-event detail. JSON-LD-first detail extraction. Pagination currently returns the same 3 items on each page — deduped downstream, just wasteful. |
-| Jobs | SathiJob | `sathijob.com` | Virtualized listing, needs scroll-loop harvesting. Structured stat grid on detail pages. |
-| Jobs | InternSathi | `internsathi.com` | Same structural shape as SathiJob. Slug encodes level/employment-type/mode — used as fallback. |
-| Jobs | MeroJob | `merojob.com` | Normal server-rendered listing with real pagination. Deadlines are relative ("15 days from now") and are converted to absolute at scrape time. |
-| Jobs | KumariJob | `kumarijob.com` | Normal listing with real pagination. Detail pages can apply offsite (LinkedIn, employer ATS). |
-| Scholarships | ScholarshipsAds | `scholarshipsads.com` | Listing cards carry everything including deadline (icon-calendar on ~1/3 of cards, no detail visit). Cloudflare-challenged past page 1 of each category; extractor deliberately stops after page 1. |
-| Scholarships | Erasmus Mundus | `eacea.ec.europa.eu` | Two-hop scrape. Deadlines are intentionally `unknown` (project duration ≠ application deadline). |
+Every source is two files: `src/scrapers/sources/<type>/<name>.js` (the 5-line wrapper) and `src/scrapers/extractors/<type>/<name>.js` (the DOM work). The registry discovers both at boot. Nothing in `src/core/`, `src/posting/`, or `src/discord/` needs to change when a source is added.
 
-### Batch-maintained sources
+Per-source structural details (extraction strategy, known limitations, drift history) and the repair path when a source drifts are documented in [`docs/scrapers.md#reference-current-sources`](docs/scrapers.md#reference-current-sources) and [`docs/scrapers.md#when-a-source-drifts`](docs/scrapers.md#when-a-source-drifts).
 
-The rest of the job sources were produced by the batch pipeline. They fit one of two shapes:
+### Events (4)
 
-- **Template output** — rendered deterministically from `scripts/batch/templates/{workable,personio,smartrecruiters,html-cards-listing}.js`. No LLM involved. The template's input is the site's DOM shape, its output is the extractor.
-- **LLM output** — a prompt describes the site's DOM dump, a human pastes it into DeepSeek, the LLM writes the extractor, the batch pipeline verifies it against the live site. `git log --oneline --follow src/scrapers/extractors/jobs/<name>.js` shows the batch run that produced the file.
+| Source | Site |
+|---|---|
+| Khalti | `events.khalti.com` |
+| KataJaam | `katajaam.com` |
+| NepVents | `nepvents.com` |
+| Kgarira | `kgarira.com` |
+
+### Jobs (62)
+
+| Source | Careers page |
+|---|---|
+| SathiJob | `sathijob.com` |
+| InternSathi | `internsathi.com` |
+| MeroJob | `merojob.com` |
+| KumariJob | `kumarijob.com` |
+| Aarambha IT | `aarambhait.com` |
+| Aayulogic | `aayulogic.com/careers/` |
+| Adex International | `adex.ltd/` |
+| Aegis Software | `aegishms.com/careers` |
+| Agile Solutions | `agile.com.np/careers/` |
+| Alpas Technology | `alpastechnology.com/careers` |
+| Bajra Technologies | `bajratechnologies.com/` |
+| Black Tech | `blacktech.com.np/career` |
+| Cedar Gate Technologies | `cedargate.com/careers-2/` |
+| Cloco Nepal | `cloco.com.np/careers/` |
+| CloudFactory | `cloudfactory.com/careers` |
+| CloudTechService | `cloudtechservice.com/careers` |
+| Daraz | `careers.daraz.com/` |
+| Dev | (see extractor's `LISTING_URL`) |
+| Devfinity | `devfinity.io/careers/` |
+| DishHome | `career.dishhome.com.np/` |
+| DLytica | `dlytica.com/career/` |
+| Docsumo | `docsumo.com/careers/` |
+| E-Digital Nepal | `edigitalnepal.com/careers/` |
+| Ekbana | `careers.ekbana.com/` |
+| Eminence Ways | `eminenceways.com/` |
+| ESignature | `esignature.com.np/` |
+| Evolve | `evolveasia.co/` |
+| F1Soft International | `career.f1soft.com/` |
+| Fonepay | `fonepay.com/` |
+| Genese Solution | `genesesolution.com/` |
+| GrowByData | `growbydata.com/` |
+| Gurkhatech | `gurkhatech.com/careers/` |
+| Hazesoft | `hazesoft.co/careers/` |
+| Hitachi (Pioneer Solutions) | `careers.hitachi.com/` (Nepal filter) |
+| HiTech Solutions & Services | `hitechnepal.com.np/career/` |
+| InfoDevelopers | `infodev.com.np/careers/` |
+| Intuji | `intuji.com/careers/` |
+| Leapfrog Technology | `career.lftechnology.com/` |
+| Lunover Digital | `lunover.com/` |
+| Manaram Technology | `manaram.group/` |
+| MarginTop Solutions | `margintopsolutions.com/careers` |
+| Naxa | `naxa.com.np/` |
+| Nep Tech Pal | `neptechpal.com.np/careers/` |
+| Nimble Infosys | `career.nimble.com.np` |
+| Progressive Labs | `progressivelabs.tech/careers/` |
+| Proshore | `proshore.eu/careers/` |
+| Quickfox Technologies | `quickfoxconsulting.com/careers/` |
+| Skybase Innovations | `skybase.com.np/careers` |
+| SoftNEP | `softnep.com/careers` |
+| Source Code | `sourcecode.com.np/join-us/` |
+| Sustainable Solutions (Sussol) | `sussol.net/jobs/` |
+| Tech101 | `tech101.com.np/` |
+| Technorio | `technorio.com/career/` |
+| TeslaTech | `teslatech.com.np/` |
+| UXCam | `uxcam.com/careers/` |
+| Vianet Communications | `vianet.com.np/careers/` |
+| Vivasoft Nepal | `vivasoft.com.np/careers/` |
+| Viveka Health | `vivekahealth.com/careers/` |
+| Vrit Technologies | `vrittechnologies.com/careers/` |
+| Worldlink Communications | `worldlink.com.np/career/` |
+| Yarsa Labs | `yarsalabs.com/` |
+| Ycotek (LIS Nepal) | `ycotek.com/careers` |
+
+### Scholarships (2)
+
+| Source | Site |
+|---|---|
+| ScholarshipsAds | `scholarshipsads.com` |
+| Erasmus Mundus | `eacea.ec.europa.eu` |
 
 Full per-source deep dive (structural quirks, drift history, extraction strategy, batch operating model): [`docs/scrapers.md`](docs/scrapers.md). For the batch pipeline itself: [`docs/batch.md`](docs/batch.md).
 
@@ -614,7 +685,7 @@ Five docs, each scoped to one audience.
 | Doc | Audience | What's inside |
 |---|---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Anyone modifying the code | System overview diagram, lifecycle of one item, startup sequence, module boundaries, the four chokepoints, why the batch pipeline is outside the runtime |
-| [`docs/scrapers.md`](docs/scrapers.md) | Anyone touching a scraper | Plugin system, extractor contract (including `browserless` and image enrichment), drift classification, fallback chains, `verify-source.js`, `wizard/index.js`, drift-fixing playbook, per-source reference for hand-maintained and batch-maintained sources |
+| [`docs/scrapers.md`](docs/scrapers.md) | Anyone touching a scraper | Plugin system, extractor contract (including `browserless` and image enrichment), drift classification, fallback chains, `verify-source.js`, `wizard/index.js`, drift-fixing playbook, per-source reference |
 | [`docs/batch.md`](docs/batch.md) | Anyone onboarding many sources | State machine, phase commands, template vs prompt selection, two-way LLM loop (verdicts, redirects, refine, promote), deploy safety, run directory layout, failure modes |
 | [`docs/operations.md`](docs/operations.md) | Anyone running the bot | Process supervision, full env var reference, tuning constants, monitoring queries, batch pipeline operations, backups, migration, setup wizard, troubleshooting matrix, alerts, log rotation |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Anyone opening a PR | The four load-bearing invariants, code style, testing philosophy, commit and PR conventions, how to file a useful bug report |

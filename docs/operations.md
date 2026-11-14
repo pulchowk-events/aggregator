@@ -402,9 +402,7 @@ That reports every selector, which one broke, and what alternatives currently ma
 - `empty` → site genuinely has nothing
 - `parse_failed` → runtime error, check console
 
-`pulchowk-events fix <name>` automates the unambiguous cases. See [`scrapers.md`](scrapers.md) for the full drift playbook.
-
-If the source is batch-maintained, see [Batch pipeline operations](#batch-pipeline-operations) below — the repair path is `batch refine`, not hand-edits.
+`pulchowk-events fix <name>` automates the unambiguous cases. The repair path depends on the source's maintenance origin — see [`scrapers.md#when-a-source-drifts`](scrapers.md#when-a-source-drifts) for how to determine the origin and which path to use.
 
 **"The website is out of sync with Discord."**
 
@@ -439,7 +437,7 @@ The batch pipeline onboards many sources at once. It runs entirely under `script
 
 ### When you run a batch
 
-Typical operator workflow for onboarding 30 new job sources:
+Typical operator workflow for onboarding a set of new job sources:
 
 ```bash
 # 1. Prepare URLs (one per line)
@@ -490,7 +488,9 @@ Per-source rows appear in real time as workers finish. Failures get the full hum
 
 ### When a deployed batch-maintained source drifts
 
-Batch-maintained and hand-maintained sources are structurally identical — same two-file shape, same `runSource()` orchestrator, same failure modes, same `{items, meta}` contract. The distinction matters only for **how you repair them**. Hand-maintained sources get fixed by hand; batch-maintained sources get regenerated with `batch refine` (do not hand-edit — refine preserves the ability to retry with the LLM in the loop).
+Batch-maintained and hand-maintained sources are structurally identical — same two-file shape, same `runSource()` orchestrator, same failure modes, same `{items, meta}` contract. The distinction matters only for **how you repair them**. Hand-maintained sources get fixed by hand; batch-maintained sources get regenerated with `batch refine` (do not hand-edit — refine preserves the ability to retry with the LLM in the loop). To determine which origin a source is, check its first commit — full walkthrough in [`scrapers.md#when-a-source-drifts`](scrapers.md#when-a-source-drifts).
+
+If the source is batch-maintained:
 
 ```bash
 # 1. Confirm the failure
@@ -534,13 +534,13 @@ jq -r 'to_entries[] | select(.value.templatedBy) | "\(.key) \(.value.templatedBy
 
 ### Batch deploy: safety
 
-`batch deploy` will not overwrite existing extractors unless `--force`. If a source is already in `src/scrapers/`, either the batch is trying to deploy a site that was previously hand-maintained (review the situation manually) or you're re-deploying a refined extractor (use `--force` deliberately).
+`batch deploy` will not overwrite existing extractors unless `--force`. If a source is already in `src/scrapers/`, either the batch is trying to deploy a site whose extractor was previously written by hand (review the situation manually) or you're re-deploying a refined extractor (use `--force` deliberately).
 
 The deploy step runs `node --check` on every file before copying. A malformed extractor never reaches `src/`.
 
 ### Batch run directory size
 
-Each run stores raw HTML for every URL. For 76 URLs that's roughly 50–100 MB. Run directories are not auto-pruned. Clean up old runs periodically:
+Each run stores raw HTML for every URL. Run directories are not auto-pruned. Clean up old runs periodically:
 
 ```bash
 # Delete runs older than 30 days
@@ -726,9 +726,9 @@ pulchowk-events diagnose <name>
 pulchowk-events fix <name>
 ```
 
-`diagnose` reports which selector broke and what currently matches instead. `fix` applies the fix automatically when the diagnosis is unambiguous, then re-verifies. If neither resolves it, `pulchowk-events verify <name>` gives the formal verdict — full playbook in [`scrapers.md`](scrapers.md#when-a-source-drifts).
+`diagnose` reports which selector broke and what currently matches instead. `fix` applies the fix automatically when the diagnosis is unambiguous, then re-verifies. If neither resolves it, `pulchowk-events verify <name>` gives the formal verdict — full playbook in [`scrapers.md#when-a-source-drifts`](scrapers.md#when-a-source-drifts).
 
-The most common cause is selector drift — the site changed its DOM and the extractor's `pickOne`/`pickAll` chain didn't catch it. If the source is batch-maintained, see [When a deployed batch-maintained source drifts](#when-a-deployed-batch-maintained-source-drifts) instead — `batch refine` is the right repair path, not hand-editing.
+The most common cause is selector drift — the site changed its DOM and the extractor's `pickOne`/`pickAll` chain didn't catch it. The repair path depends on the source's maintenance origin — see [`scrapers.md#when-a-source-drifts`](scrapers.md#when-a-source-drifts) for how to determine the origin and which path to use.
 
 ### "Post failed: no_image"
 
@@ -831,7 +831,7 @@ pulchowk-events fix <source-name>
 pulchowk-events diagnose <source-name>
 ```
 
-The verdict matches the alert's `Why:` line. Follow the corresponding fix in [`scrapers.md`](scrapers.md#when-a-source-drifts), or for batch-maintained sources, [`batch.md`](batch.md#verify-refine-promote).
+The verdict matches the alert's `Why:` line. Follow the corresponding fix in [`scrapers.md#when-a-source-drifts`](scrapers.md#when-a-source-drifts) — the repair path depends on the source's maintenance origin.
 
 Alerts have a 60-minute cooldown per source — an ongoing outage won't re-ping more than once per hour. The audit log records every failure, but the Discord alert is throttled to avoid noise during an extended outage.
 
@@ -982,7 +982,7 @@ Source-failure alerts are a separate subsystem from the audit log.
 - `DEFAULT_SOURCE_ALERT_THRESHOLD` in `constants.js` — streak count. Default 3.
 - `DEFAULT_SOURCE_ALERT_COOLDOWN_MINUTES` in `constants.js` — cooldown. Default 60.
 
-**When one arrives:** treat it as a paging-level signal. Run `pulchowk-events fix <source>` — it diagnoses and, if the diagnosis is unambiguous, applies the fix and re-verifies. If it can't fix, `pulchowk-events diagnose <source>` gives the selector-level detail for manual repair. If the source is batch-maintained (see [`scrapers.md#batch-maintained-sources`](scrapers.md#batch-maintained-sources)), use `batch refine` instead — the repair path is different.
+**When one arrives:** treat it as a paging-level signal. Run `pulchowk-events fix <source>` — it diagnoses and, if the diagnosis is unambiguous, applies the fix and re-verifies. If it can't fix, `pulchowk-events diagnose <source>` gives the selector-level detail for manual repair. The repair path depends on the source's maintenance origin — see [`scrapers.md#when-a-source-drifts`](scrapers.md#when-a-source-drifts) for how to determine the origin and which path to use.
 
 If the verdict is `blocked`, that's often transient (Cloudflare had a bad moment) — wait an hour and re-check. If it's `dom_drift_*`, the source needs a fix — schedule it. If it's `empty`, investigate whether the site changed or is genuinely between events.
 
@@ -1012,7 +1012,7 @@ Not a log, but rotation-adjacent: capped at 1000 entries per array (`pendingEven
 
 ### `data/batch/<run-id>/`
 
-Not a log either, but worth flagging because it accumulates. Each batch run stores raw HTML for every URL. For 76 URLs that's roughly 50–100 MB. Run directories are never auto-pruned. Clean up old runs periodically:
+Not a log either, but worth flagging because it accumulates. Each batch run stores raw HTML for every URL. Run directories are never auto-pruned. Clean up old runs periodically:
 
 ```bash
 # Delete runs older than 30 days
@@ -1035,7 +1035,7 @@ The bot doesn't care — it just writes; the supervisor handles retention.
 
 ### `data/og-image-cache.json`
 
-Not a log, but rotation-adjacent. Contains one entry per hostname (og:image URL, favicon URL, fetch timestamp). Cache TTL is 30 days per entry; stale entries are re-fetched on the next scrape. File size is bounded by the number of unique hostnames across all sources (roughly 60-100 entries, ~10 KB total). No manual rotation needed.
+Not a log, but rotation-adjacent. Contains one entry per hostname (og:image URL, favicon URL, fetch timestamp). Cache TTL is 30 days per entry; stale entries are re-fetched on the next scrape. File size is bounded by the number of unique hostnames across all sources. No manual rotation needed.
 
 ### `data/placeholder-images/`
 
