@@ -274,7 +274,7 @@ module.exports = {
 
                 sanitizeJobFields(finalJob);
                 items.push(finalJob);
-                console.log(`    ✅ [sathijob] Scraped: ${finalJob.title}`);
+
                 await delay(800);
             } catch (error) {
                 if (error.message && error.message.includes('403')) {

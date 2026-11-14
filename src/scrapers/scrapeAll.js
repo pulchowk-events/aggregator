@@ -26,6 +26,7 @@ const { classifyOutcome } = require('./diagnostics');
 const { recordOutcome } = require('./alerts');
 const { normalizeJobToEventShape, normalizeScholarshipToEventShape } = require('../core/shape');
 const { auditLog } = require('../core/auditLogger');
+const ui = require('../core/ui');
 
 const TYPE_LABEL = { events: 'events', jobs: 'jobs', scholarships: 'scholarships' };
 
@@ -77,7 +78,10 @@ async function scrapeAll(bot, { sites = 'all', progress = null } = {}) {
         };
     }
 
-    console.log(`🔄 [scrapeAll] Running ${sources.length} source(s) in parallel: ${sources.map((s) => s.name).join(', ')}`);
+    ui.banner({
+        title: 'Scrape cycle',
+        sub: `${sources.length} source(s) running in parallel`
+    });
     auditLog('scrape_all_start', `Starting scrape run of ${sources.length} source(s)`, {
         sites, sources: sources.map((s) => `${s.type}/${s.name}`)
     });
@@ -105,6 +109,13 @@ async function scrapeAll(bot, { sites = 'all', progress = null } = {}) {
                 console.error(`❌ [scrapeAll] Alert recording failed for "${src.name}":`, alertError.message);
             }
 
+            // Per-source completion line, single-line so parallel sources
+            // do not interleave mid-message. Style matches batch phases.
+            const dur = ((Date.now() - sourceStart) / 1000).toFixed(1);
+            const tagKind = verdict.status === 'ok' ? 'pass' : (verdict.status === 'empty' ? 'skip' : 'warn');
+            const namePad = src.name.length > 22 ? src.name.slice(0, 21) + '…' : src.name.padEnd(22);
+            console.log(`  ${ui.tag(tagKind)}  ${ui.colors.B}${namePad}${ui.colors.R}  ${String(items.length).padStart(3)} items  ${ui.colors.GRAY}${verdict.status.padEnd(16)} ${dur}s${ui.colors.R}`);
+
             return {
                 type: src.type,
                 name: src.name,
@@ -130,6 +141,9 @@ async function scrapeAll(bot, { sites = 'all', progress = null } = {}) {
             } catch (alertError) {
                 console.error(`❌ [scrapeAll] Alert recording failed for "${src.name}":`, alertError.message);
             }
+
+            const dur = ((Date.now() - sourceStart) / 1000).toFixed(1);
+            console.log(`  ❌ ${src.name} · threw · ${dur}s · ${error.message.slice(0, 100)}`);
 
             return {
                 type: src.type,
@@ -186,7 +200,20 @@ async function scrapeAll(bot, { sites = 'all', progress = null } = {}) {
     const okCount = Object.values(perSource).filter((r) => r.ok).length;
     const failCount = Object.values(perSource).length - okCount;
 
-    console.log(`✅ [scrapeAll] Completed in ${Math.round(durationMs / 1000)}s — ${items.length} items, ${okCount} ok source(s), ${failCount} failed`);
+    // Completion summary in ui style, matching batch phase reports.
+    const emptyCount = Object.values(perSource).filter((r) => r.verdict && r.verdict.status === 'empty').length;
+    const totalDur = (durationMs / 1000).toFixed(1);
+    ui.blank();
+    ui.divider('Scrape summary');
+    ui.blank();
+    ui.summary([
+        ['pass',   `${okCount}`],
+        ['empty',  `${emptyCount}`],
+        ['fail',   failCount > 0 ? `${failCount} -- see failures above` : '0'],
+        ['items',  String(items.length)],
+        ['duration', `${totalDur}s`]
+    ]);
+    ui.blank();
 
     auditLog('scrape_all_complete', `Scrape run completed: ${items.length} items from ${okCount}/${Object.keys(perSource).length} sources (${failCount} failed)`, {
         items: items.length,

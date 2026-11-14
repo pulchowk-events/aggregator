@@ -214,6 +214,11 @@ explanation before or after. The full module body including all requires.
 - **Retries** — the orchestrator already retries the whole extract() call
   on failure. Do NOT add per-page retry inside extract(). Use plain
   \`page.goto(url, { timeout: 30000 })\`.
+- **Logging** — log ONCE at the end of extract(), e.g.
+  \`console.log('  [${name}] extracted ' + items.length + '/' + raw.length + ' jobs')\`.
+  Do NOT console.log inside per-item loops — a 40-item page would emit
+  40 log lines per scrape cycle, burying real output. One summary line
+  per run is the standard.
 
 Do not invent selectors you have not seen in the evidence dump. If a
 field cannot be extracted with confidence, leave it null and note the
