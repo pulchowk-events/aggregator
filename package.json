@@ -3,14 +3,26 @@
   "version": "1.0.0",
   "description": "Discord bot that scrapes events, jobs, and scholarships, posts them to Discord, and syncs to Supabase.",
   "main": "src/index.js",
+  "bin": {
+    "pulchowk-events": "./scripts/cli.js"
+  },
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js"
   },
-  "keywords": ["discord", "bot", "events", "jobs", "scholarships", "scraping"],
+  "keywords": [
+    "discord",
+    "bot",
+    "events",
+    "jobs",
+    "scholarships",
+    "scraping"
+  ],
   "author": "",
   "license": "MIT",
-  "engines": { "node": ">=18.0.0" },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
     "axios": "^1.10.0",
