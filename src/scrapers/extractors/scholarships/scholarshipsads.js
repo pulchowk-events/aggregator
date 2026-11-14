@@ -75,24 +75,6 @@ async function harvestCards(page) {
     });
 }
 
-async function lookupDeadline(page, detailUrl) {
-    try {
-        await page.goto(detailUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-        await delay(500 + Math.random() * 500);
-        return page.evaluate(() => {
-            const bodyText = document.body.innerText || '';
-            const lines = bodyText.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-            const deadlineLines = lines.filter((l) => /deadline/i.test(l));
-            // Join (not just first) — real pages repeat the deadline 2-3
-            // times. Joining gives the parser more than one shot at a
-            // clean match if one phrasing is ambiguous.
-            return deadlineLines.length > 0 ? deadlineLines.slice(0, 5).join(' | ') : null;
-        });
-    } catch (error) {
-        console.warn(`⚠️ [scholarshipsads] detail lookup failed for ${detailUrl}: ${error.message}`);
-        return null;
-    }
-}
 
 module.exports = {
     async extract(page, { progress, meta }) {
