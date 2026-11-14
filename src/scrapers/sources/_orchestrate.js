@@ -28,6 +28,7 @@ const { loadExtractor } = require('../extractors');
 const { withRetry } = require('../retry');
 const { trimDescriptionToLastSentence } = require('../text');
 const { sanitizeScrapedEvent, sanitizeImageUrl } = require('../sanitize');
+const { deriveImageForUrl, derivePlaceholderForSource } = require('../ogImage');
 
 async function runSource(name, type, { withPage, progress }) {
     const { extractor, isStub } = loadExtractor(type, name);
@@ -86,6 +87,58 @@ async function runSource(name, type, { withPage, progress }) {
         }
         return item;
     });
+
+    // Enrichment: for job items that carry no image after extraction,
+    // derive a per-site image from <meta og:image> or the site favicon.
+    // Runs only when runSource was called for `type === 'jobs'` -- for
+    // events and scholarships this is a no-op. Groups by hostname so we
+    // trigger one fetch per unique domain (ogImage.js additionally
+    // deduplicates in-flight requests, so 68 items from one host still
+    // cause exactly one HTTP fetch).
+    //
+    // Failures here never break extraction: a null image stays null, and
+    // the live-post hasValidImage gate will reject it (same as before).
+    // Cost: ~1s latency for the first scrape per domain; cache hit after
+    // that. data/og-image-cache.json TTL is 30 days.
+    if (type === 'jobs') {
+        const itemsNeedingImage = items.filter((it) => it && !it.image);
+        if (itemsNeedingImage.length > 0) {
+            const byHost = new Map();
+            for (const it of itemsNeedingImage) {
+                const ref = it.url || it.registrationUrl;
+                if (!ref) continue;
+                let host;
+                try { host = new URL(ref).hostname.toLowerCase(); } catch (e) { continue; }
+                if (!byHost.has(host)) byHost.set(host, []);
+                byHost.get(host).push(it);
+            }
+            let enriched = 0;
+            await Promise.all([...byHost.entries()].map(async ([host, group]) => {
+                try {
+                    const sample = group[0];
+                    // Try og:image / favicon first.
+                    let img = await deriveImageForUrl(sample.url || sample.registrationUrl);
+                    // Fallback: placeholder PNG generated for this source.
+                    // One image per source (not per hostname) -- that's
+                    // correct because the fallback is company-branded,
+                    // not site-structure-derived.
+                    if (!img) img = derivePlaceholderForSource(name);
+                    if (!img) return;
+                    for (const it of group) {
+                        it.companyLogoUrl = img;
+                        it.image = img;
+                        enriched++;
+                    }
+                } catch (e) {
+                    // best-effort; enrichment failure leaves items as they were
+                }
+            }));
+            meta.imagesEnriched = enriched;
+            if (enriched > 0) {
+                console.log(`   [${name}] derived site image for ${enriched}/${itemsNeedingImage.length} job item(s) from og:image/favicon`);
+            }
+        }
+    }
 
     meta.durationMs = Date.now() - startedAt;
     console.log(`✅ [${name}] Scraped ${items.length} items (listingHits=${meta.listingHits}, detailFailures=${meta.detailParseFailures}, duration=${Math.round(meta.durationMs / 1000)}s)`);
