@@ -48,6 +48,7 @@ const { writeSnapshot } = require('./lib/snapshot');
 const { runPaste, parseArgs: parsePasteArgs } = require('./paste');
 const { runFollow, parseArgs: parseFollowArgs } = require('./follow');
 const { runRefine, parseArgs: parseRefineArgs } = require('./refine');
+const { runAuto, parseArgs: parseAutoArgs } = require('./auto');
 const { runPromote, parseArgs: parsePromoteArgs } = require('./promote');
 
 const C = (code) => (process.stdout.isTTY ? `\x1b[${code}m` : '');
@@ -71,6 +72,7 @@ function printHelp() {
     console.log(`  ${CYAN}paste${R}             Interactive loop: copy prompt, paste LLM reply, write extractor.`);
     console.log(`  ${CYAN}follow${R}            Follow CAREERS_PAGE_REDIRECT verdicts (re-dump, re-prompt).`);
     console.log(`  ${CYAN}refine${R}            Re-prompt LLM-origin failed sites with verify failure evidence.`);
+    console.log(`  ${CYAN}auto${R}              One-shot: discover -> generate -> paste -> verify -> refine, loops until stable.`);
     console.log(`  ${CYAN}promote${R}           Promote template-failed sites to LLM prompts (dump-reuse, no re-scrape).`);
     console.log(`  ${CYAN}status${R}            Quick view of current run state (no verify).`);
     console.log(`  ${CYAN}help${R}              This help.`);
@@ -254,6 +256,13 @@ function main() {
                 console.error(`${RED}✗ promote failed:${R} ${e.message}`);
                 return 1;
             }
+        }
+        case 'auto': {
+            const opts = parseAutoArgs(rest);
+            return runAuto(opts).then(() => 0).catch((e) => {
+                console.error(`${RED}✗ auto failed:${R} ${e.message}`);
+                return 1;
+            });
         }
         case 'refine': {
             const opts = parseRefineArgs(rest);

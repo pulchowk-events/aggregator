@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { paths, readLatest, resolveRunDir, ensureRunLayout } = require('./lib/paths');
+const messages = require('./lib/messages');
 
 function parseArgs(argv) {
     const args = { runId: null, json: false, verbose: false };
@@ -56,35 +57,43 @@ function pickRunDir(runId) {
 // check it would fall through to NOT-GENERATED, masking the real state.
 // rd is the parsed redirects/<name>.json (or null).
 function bucketFor(r, cls, rd) {
-    if (rd) {
-        if (rd.type === 'NOT_CAREERS_PAGE') return 'LLM-NOT-CAREERS';
-        if (rd.type === 'CAREERS_PAGE_REDIRECT') return 'LLM-REDIRECT';
-        if (rd.type === 'FOLLOWED') return 'NOT-GENERATED';
-    }
-    // Pre-verify states.
+    // Discovery rejections always win -- those sites never reached verify.
     if (cls && cls.classResult && cls.classResult.type === 'rejected') {
         const shape = cls.resolution && cls.resolution.pageShape;
         if (shape === 'blocked') return 'REJECT-BLOCKED';
         return 'REJECT-URL';
     }
     if (cls && cls.classResult && cls.classResult.type === 'fetch-failed') return 'SKIP-FETCH';
-    if (!r) return 'NOT-GENERATED';
 
-    if (r.pass) return 'PASS';
+    // A NOT_CAREERS verdict is terminal. The LLM read the page and said
+    // it is not a careers listing; a verify result from BEFORE the verdict
+    // was written is stale.
+    if (rd && rd.type === 'NOT_CAREERS_PAGE') return 'LLM-NOT-CAREERS';
 
-    const reason = r.reason || '';
-    if (reason === 'blocked') return 'REJECT-BLOCKED';
-    if (reason === 'dom_drift_spa_needs_js') return 'FAIL-DRIFT-SPA';
-    if (reason === 'dom_drift_unknown_shape') return 'FAIL-DRIFT-UNKWN';
-    if (reason === 'dom_drift_listing' || reason === 'dom_drift_detail') return 'FAIL-DRIFT';
-    if (reason === 'parse_failed' || reason === 'stage_failed') return 'FAIL-PARSE';
-    if (reason === 'timeout') return 'FAIL-TIMEOUT';
-    if (reason === 'not_implemented') return 'NOT-IMPL';
-    if (reason === 'empty-wizard-suspicious') return 'FAIL-EMPTY-SUSP';
-    if (reason === 'low_precision') return 'FAIL-LOW-PREC';
-    if (reason === 'empty-wizard') return 'PASS';
-    if (reason === 'empty-ats') return 'PASS';
-    return 'FAIL-OTHER';
+    // Fresh verify result wins over FOLLOWED redirect state. Sites that
+    // were followed, re-prompted, re-pasted and re-verified have a verify
+    // result reflecting the current extractor -- the FOLLOWED marker is
+    // just a leftover from redirect processing.
+    if (r) {
+        if (r.pass) return 'PASS';
+        const reason = r.reason || '';
+        if (reason === 'blocked') return 'REJECT-BLOCKED';
+        if (reason === 'dom_drift_spa_needs_js') return 'FAIL-DRIFT-SPA';
+        if (reason === 'dom_drift_unknown_shape') return 'FAIL-DRIFT-UNKWN';
+        if (reason === 'dom_drift_listing' || reason === 'dom_drift_detail') return 'FAIL-DRIFT';
+        if (reason === 'parse_failed' || reason === 'stage_failed') return 'FAIL-PARSE';
+        if (reason === 'timeout') return 'FAIL-TIMEOUT';
+        if (reason === 'not_implemented') return 'NOT-IMPL';
+        if (reason === 'empty-wizard-suspicious') return 'FAIL-EMPTY-SUSP';
+        if (reason === 'low_precision') return 'FAIL-LOW-PREC';
+        if (reason === 'empty-wizard') return 'PASS';
+        if (reason === 'empty-ats') return 'PASS';
+        return 'FAIL-OTHER';
+    }
+
+    // No verify result: fall back to redirect state for reporting.
+    if (rd && rd.type === 'CAREERS_PAGE_REDIRECT') return 'LLM-REDIRECT';
+    return 'NOT-GENERATED';
 }
 
 function pad(s, n) { return String(s).padEnd(n); }
@@ -143,14 +152,16 @@ function runReport(opts) {
         // has a one-line explanation without leaking preflight's
         // initial-HTML guess into rows where the wizard actually succeeded.
         let reason = null;
-        if (v) {
-            reason = v.reason;
+        if (rd && rd.type === 'NOT_CAREERS_PAGE' && rd.reason) {
+            reason = 'Not a careers page: ' + rd.reason;
+        } else if (v) {
+            reason = messages.label(v.reason);
         } else if (rd && rd.reason) {
-            reason = `llm-verdict: ${rd.reason}`;
+            reason = 'LLM verdict: ' + rd.reason;
         } else if (rd && rd.url) {
-            reason = `llm-verdict: redirect -> ${rd.url}`;
+            reason = 'LLM redirect -> ' + rd.url;
         } else if (cls && cls.wizardDetectedType) {
-            reason = `wizard classified as ${cls.wizardDetectedType}; prompt written, awaiting paste`;
+            reason = 'Wizard detected: ' + cls.wizardDetectedType + ' -- awaiting paste';
         } else if (cls && cls.resolution && cls.resolution.action === 'reject') {
             reason = cls.resolution.pageShape + ': ' + cls.resolution.reasoning;
         } else if (cls && cls.resolution) {

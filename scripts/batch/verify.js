@@ -508,7 +508,7 @@ async function runVerify(opts) {
             // Human label instead of the raw code. "Page layout not
             // recognized" not "dom_drift_unknown_shape". Raw code still
             // in results/<name>.json for debugging.
-            reason: messages.label(decision.reason),
+            reason: decision.reason,
             warn: decision.warn || null,
             verdict: parsed.verdict,
             items: parsed.items,
@@ -768,8 +768,19 @@ async function runVerify(opts) {
     }
     ui.blank();
 
-    // Also write a combined report so report.js can read one file.
-    fs.writeFileSync(path.join(runDir, 'verify-summary.json'), JSON.stringify(results, null, 2));
+    // Write verify-summary.json, MERGING with any existing entries so a
+    // partial run (`--only a,b`) does not wipe prior verified state. The
+    // per-site results/*.json files are already merged (each verify run
+    // only touches its own sites); this file is the aggregated view.
+    const summaryPath = path.join(runDir, 'verify-summary.json');
+    let mergedSummary = {};
+    try {
+        if (fs.existsSync(summaryPath)) {
+            mergedSummary = JSON.parse(fs.readFileSync(summaryPath, 'utf8')) || {};
+        }
+    } catch (e) { /* corrupt -- start fresh */ }
+    for (const [name, r] of Object.entries(results)) mergedSummary[name] = r;
+    fs.writeFileSync(summaryPath, JSON.stringify(mergedSummary, null, 2));
 
     // Propagate hard-failure state to caller AND exit code. Any failure ->
     // non-zero, so shell chains (verify && paste || refine) behave as
