@@ -16,7 +16,7 @@
 |---|---|---|
 | **10** scraped<br/><sub>4 events · 4 jobs · 2 scholarships</sub> | **9** routed<br/><sub>sports, software, hardware, gaming, music, business, misc, jobs, scholarships</sub> | **3** targets<br/><sub>Discord test · Discord live · Supabase website</sub> |
 
-[Architecture](#architecture) · [Quickstart](#quickstart) · [Setup wizard](#setup-wizard) · [Adding a source](#adding-a-source) · [Docs](#documentation) · [Issues](https://github.com/pulchowk-events/aggregator/issues)
+[Architecture](#architecture) · [Quickstart](#quickstart) · [CLI](#command-line-tool) · [Setup wizard](#setup-wizard) · [Adding a source](#adding-a-source) · [Docs](#documentation) · [Issues](https://github.com/pulchowk-events/aggregator/issues)
 
 </div>
 
@@ -29,9 +29,10 @@
 - [Sources supported](#sources-supported)
 - [Architecture](#architecture)
 - [Quickstart](#quickstart)
+- [Command-line tool](#command-line-tool)
 - [Setup wizard](#setup-wizard)
 - [Adding a source](#adding-a-source)
-- [Commands](#commands)
+- [Discord commands](#discord-commands)
 - [Configuration](#configuration)
 - [Repository layout](#repository-layout)
 - [Documentation](#documentation)
@@ -62,7 +63,9 @@ This bot automates the whole loop. On a cron it scrapes every configured source 
 
 - **Two-tier delivery.** Every item type has two delivery tracks: a bot archival Supabase (service-role, full records) and the public website's Supabase (a curated subset filtered by `hasValidImage`, data-quality warnings, and a user-collision check). The two are independent — either can fail without affecting the other, and either can be dry-run independently.
 
-- **Guided wizards.** Two interactive CLIs. The setup wizard (`scripts/setup/`) walks a fresh deployment end-to-end and has a `--demo` mode that runs the entire flow with mock data and writes nothing outside `data/demo-setup.env`. The source wizard (`scripts/wizard/`) scaffolds a new scraper against an LLM prompt. Both fall back to a plain-text recipe when stdin isn't a TTY, so they work in CI.
+- **One CLI entry point.** `pulchowk-events` — installed via `npm link` or `npm install -g .`, or run as `node scripts/cli.js <cmd>` — dispatches to every operator surface: `setup`, `add`, `fix`, `diagnose`, `verify`. Each subcommand is a thin subprocess wrapper, so the TUI, prompts, and signal handling behave identically to running the underlying script directly.
+
+- **Guided wizards.** Two interactive wizards. The setup wizard (`scripts/setup/`) walks a fresh deployment end-to-end and has a `--demo` mode that runs the entire flow with mock data and writes nothing outside `data/demo-setup.env`. The source wizard (`scripts/wizard/`) scaffolds a new scraper against an LLM prompt. Both fall back to a plain-text recipe when stdin isn't a TTY, so they work in CI.
 
 ## Sources supported
 
@@ -76,7 +79,7 @@ This bot automates the whole loop. On a cron it scrapes every configured source 
 | Jobs | InternSathi | `internsathi.com` | Same structural shape as SathiJob. Slug encodes level/employment-type/mode — used as fallback. |
 | Jobs | MeroJob | `merojob.com` | Normal server-rendered listing with real pagination. Deadlines are relative ("15 days from now") and are converted to absolute at scrape time. |
 | Jobs | KumariJob | `kumarijob.com` | Normal listing with real pagination. Detail pages can apply offsite (LinkedIn, employer ATS). |
-| Scholarships | ScholarshipsAds | `scholarshipsads.com` | Listing cards carry everything except deadline — one extra detail-page visit per item to read the real date. Cloudflare-challenged past page 1 of each category; extractor deliberately stops after page 1. |
+| Scholarships | ScholarshipsAds | `scholarshipsads.com` | Listing cards carry everything including deadline (icon-calendar on ~1/3 of cards, no detail visit). Cloudflare-challenged past page 1 of each category; extractor deliberately stops after page 1. |
 | Scholarships | Erasmus Mundus | `eacea.ec.europa.eu` | Two-hop scrape. Deadlines are intentionally `unknown` (project duration ≠ application deadline). |
 
 Full per-source deep dive (structural quirks, drift history, extraction strategy): [`docs/scrapers.md`](docs/scrapers.md#reference-the-10-current-sources).
@@ -127,6 +130,7 @@ For the full mental model — the ten-stage lifecycle of an item, the startup se
 git clone https://github.com/pulchowk-events/aggregator.git
 cd aggregator
 npm install
+npm link                      # optional — installs `pulchowk-events` on PATH
 cp .env.example .env
 # fill in: DISCORD_TOKEN, HOME_GUILD_ID, LOGS_CHANNEL_ID, AUDIT_LOG_CHANNEL_ID,
 #          category channel IDs, Supabase credentials
@@ -140,22 +144,39 @@ To fill `.env` interactively instead of by hand, use the [setup wizard](#setup-w
 Verify any single source in isolation before trusting a full scrape:
 
 ```bash
-node scripts/verify-source.js scholarshipsads
-node scripts/verify-source.js katajaam
+pulchowk-events verify scholarshipsads
+pulchowk-events verify katajaam
 ```
 
-This runs the extractor directly against the live site — no bot, no Discord, no cron — and prints item count, verdict, and a sample.
+`pulchowk-events` is the CLI dispatcher (see [Command-line tool](#command-line-tool)); without an install, `node scripts/verify-source.js <name>` runs the same script directly. This runs the extractor against the live site — no bot, no Discord, no cron — and prints item count, verdict, and a sample.
+
+## Command-line tool
+
+`pulchowk-events` is the front door for every interactive script in the repo. Install once with `npm link` (dev) or `npm install -g .` (prod); the same entry point is callable as `node scripts/cli.js <cmd>` with no install.
+
+| Command | Purpose |
+|---|---|
+| `pulchowk-events setup` | Walk a fresh deployment end-to-end (.env, Discord channels, Supabase) |
+| `pulchowk-events add <url> --type <type>` | Scaffold a new scraper source (LLM-assisted, guided) |
+| `pulchowk-events fix [name]` | Diagnose drift and auto-fix if unambiguous; `fix all` sweeps every source |
+| `pulchowk-events diagnose <name>` | Report broken selectors for one source; `--full` also runs the extractor; `--fix --apply` writes suggested patches |
+| `pulchowk-events verify <name>` | Run one source's extractor against the live site (the unit test) |
+| `pulchowk-events help` / `version` | List commands / print package version |
+
+No shared state, no daemon mode — one command, one process, one task. Set `NO_COLOR=1` to disable ANSI output. Each subcommand maps 1:1 to an underlying script under `scripts/`; the deep dive lives in [`docs/scrapers.md`](docs/scrapers.md) and [`docs/operations.md`](docs/operations.md).
 
 ## Setup wizard
 
-For a fresh deployment from zero, the setup wizard walks the entire flow interactively: Discord token → guild selection → category channel pick/create → logs/audit/alerts channels → ping roles → Supabase (both projects) → dashboard key → browser profile → `.env` write (with backup + diff preview) → optional boot test.
+For a fresh deployment from zero, the setup wizard walks the entire flow interactively: Discord token → guild selection → category channel pick/create → logs/audit/alerts channels → ping roles → Supabase (both projects) → dashboard key → browser profile → `.env` write (with backup + diff preview) → optional boot test. Reached via `pulchowk-events setup` or the underlying script.
 
 ```bash
 # Walk the entire flow with mock data (never touches .env, Discord, or Supabase)
-node scripts/setup/index.js --demo
+pulchowk-events setup --demo
+# or: node scripts/setup/index.js --demo
 
 # Real setup
-node scripts/setup/index.js
+pulchowk-events setup
+# or: node scripts/setup/index.js
 ```
 
 Every step asks before doing anything. Every side effect is opt-in. `.env` is never written without showing a diff and confirming. The demo mode writes to `data/demo-setup.env` (gitignored) so you can inspect the output without committing anything.
@@ -195,7 +216,8 @@ module.exports = {
 Commit both. Verify:
 
 ```bash
-node scripts/verify-source.js mynewsite
+pulchowk-events verify mynewsite
+# or: node scripts/verify-source.js mynewsite
 ```
 
 When it returns `verdict: ok` with `items > 0`, the source is live. The registry discovers it on the next scrape run.
@@ -203,14 +225,15 @@ When it returns `verdict: ok` with `items > 0`, the source is live. The registry
 To scaffold a new source against an LLM prompt instead of writing the extractor by hand:
 
 ```bash
-node scripts/wizard/index.js <url> <name> <type>
+pulchowk-events add <url> --type events
+# or: node scripts/wizard/index.js <url> <name> <type>
 ```
 
-This dumps the site's DOM structure, classifies its shape (`jsonld-first` / `listing-to-detail` / `single-page-cards`), writes a ready-to-paste prompt for DeepSeek / ChatGPT / Claude, and walks you through pasting the LLM's code back in — with an automatic verify-source step at the end.
+This dumps the site's DOM structure, classifies its shape (`jsonld-first` / `listing-to-detail` / `single-page-cards`), writes a ready-to-paste prompt for DeepSeek / ChatGPT / Claude, and walks you through pasting the LLM's code back in — with an automatic verify step at the end.
 
 Full walkthrough (both manual and wizard paths, plus the drift-fixing playbook): [`docs/scrapers.md#adding-a-source-manual`](docs/scrapers.md#adding-a-source-manual) and [`docs/scrapers.md#adding-a-source-guided`](docs/scrapers.md#adding-a-source-guided).
 
-## Commands
+## Discord commands
 
 All commands are guild-scoped to `HOME_GUILD_ID` and require Discord's `ADMINISTRATOR` permission. There is deliberately no global registration — adding the bot to a foreign guild grants no access.
 
@@ -289,6 +312,10 @@ Two independent config layers, both loaded at boot.
 | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | Bot archival Supabase |
 | `WEBSITE_SUPABASE_URL` + `WEBSITE_SUPABASE_SERVICE_ROLE_KEY` | Public website Supabase |
 | `WEBSITE_SYNC_DRY_RUN` | `true` to preview website changes without writing |
+| `SCRAPE_CRON` | Cron schedule for the scrape loop (default `0 */6 * * *` — every 6 hours) |
+| `WEBSITE_SYNC_CRON` | Cron schedule for the website sync loop (default `0 * * * *` — hourly) |
+| `DASHBOARD_API_KEY` | Bearer token for `/api/*`; mutating routes are unauthenticated if unset |
+| `WEBSITE_*_TABLE` | Table name overrides for the website project (`events`, `jobs`, `scholarships` by default) |
 | `BROWSER_EXECUTABLE_PATH` + `BROWSER_USER_DATA_DIR` | Windows-only: real browser + warm profile for Cloudflare/login-required sites |
 
 **Server-specific non-secrets — `src/config/`.** Emoji IDs and ping role IDs live here so a forker can swap servers by editing three files, not re-running `.env` setup:
@@ -358,13 +385,15 @@ Supporting directories, outside `src/`:
 
 ```text
 scripts/
+├── cli.js                  pulchowk-events binary — dispatches to the rest
+├── diagnose.js             selector-level drift diagnosis
 ├── verify-source.js        run one scraper in isolation (the "unit test")
 ├── setup/                  interactive setup wizard
 │   index · adapters · discord · discord-create
 │   env-writer · supabase · validators
-├── wizard/                 new-source wizard (LLM prompt generator)
+├── wizard/                 new-source wizard + drift-fix entry
 │   index · dump · detect · prompt · templates
-│   tui · interactive · browser
+│   tui · interactive · fix · browser
 ├── shared/platform.js      cross-wizard helpers (clipboard, URL open)
 └── maintenance/            one-shot migration + cleanup tools
 
@@ -471,7 +500,7 @@ Read them in the order that matches what you're about to do. If you're modifying
 
 **Data**
 
-- Scraper sources are third-party sites with no published APIs. Selector drift happens — the `pickOne` fallback chains and `classifyOutcome` diagnostics make drift visible, but they don't prevent it. The `verify-source.js` script makes per-source testing a 60-second operation.
+- Scraper sources are third-party sites with no published APIs. Selector drift happens — the `pickOne` fallback chains and `classifyOutcome` diagnostics make drift visible, but they don't prevent it. `pulchowk-events diagnose <name>` and `pulchowk-events fix` make per-source testing and drift repair a one-command operation.
 - Some sources are structurally limited. `scholarshipsads` stops at page 1 per category (Cloudflare); `kgarira` returns the same items on each pagination page (deduped downstream, but wastes fetch time). Both are captured accurately (correct items, deduped) — the limitation is throughput, not data.
 - The website sync excludes items that fail `hasValidImage` or carry unresolved data-quality warnings. That's intentional (public site quality gate) but it means some real events never reach the site.
 - The bot archival Supabase caps at 1000 posted items per type. `republish-all` can only re-upload what's in that window.
