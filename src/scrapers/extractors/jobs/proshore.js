@@ -47,7 +47,7 @@ module.exports = {
         try {
             await page.goto(ENTRY_URL, {
                 waitUntil: 'domcontentloaded',
-                timeout: 45000
+                timeout: 12000
             });
         } catch (error) {
             console.warn(
@@ -57,7 +57,7 @@ module.exports = {
         }
 
         // Generous settle for Webflow client-side fetches
-        await delay(3000);
+        await delay(800);
 
         try {
             const state = await detectPageState(page);
@@ -99,9 +99,9 @@ module.exports = {
                 meta.pagesVisited++;
                 await page.goto(FALLBACK_URL, {
                     waitUntil: 'domcontentloaded',
-                    timeout: 45000
+                    timeout: 12000
                 });
-                await delay(3000);
+                await delay(800);
                 await interactAndSettle(page);
                 jobLinks = await harvestJobLinks(page);
                 if (jobLinks.length === 0) {
@@ -136,7 +136,7 @@ module.exports = {
                     meta.detailPagesVisited++;
                     await page.goto(link.href, {
                         waitUntil: 'domcontentloaded',
-                        timeout: 45000
+                        timeout: 12000
                     });
                     await delay(1200);
 
@@ -238,7 +238,7 @@ module.exports = {
                     });
 
                     console.log(`    ? [proshore] Scraped: ${title}`);
-                    await delay(500);
+                    await delay(200);
                 } catch (error) {
                     if (error.message && error.message.includes('403')) {
                         console.warn(
@@ -360,7 +360,7 @@ async function interactAndSettle(page) {
             for (const tab of tabs) {
                 try {
                     await tab.click({ delay: 80 });
-                    await delay(500);
+                    await delay(200);
                 } catch (e) {
                     /* tab may be hidden/covered */
                 }
@@ -369,7 +369,7 @@ async function interactAndSettle(page) {
             /* selector may not exist */
         }
     }
-    await delay(1500);
+    await delay(400);
 }
 
 /**
@@ -525,4 +525,4 @@ async function harvestInlineCards(page) {
 
         return out;
     });
-}
+}

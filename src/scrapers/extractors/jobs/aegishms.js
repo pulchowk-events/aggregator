@@ -22,7 +22,11 @@ module.exports = {
 
         // --- Stage 1: load the careers listing ---------------------------------
         meta.pagesVisited++;
-        await page.goto(ENTRY_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        // domcontentloaded, not networkidle2. Aegis Hms embeds
+        // long-running analytics sockets; networkidle2 never fires and
+        // goto waits its full 30s timeout. domcontentloaded returns in
+        // ~1-3s and content is already server-rendered.
+        await page.goto(ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await delay(800);
 
         // Block / captcha check on first load only
@@ -41,7 +45,7 @@ module.exports = {
 
         // Wait for at least one accordion job card
         try {
-            await page.waitForSelector('button[aria-controls^="job-content-"]', { timeout: 15000 });
+            await page.waitForSelector('button[aria-controls^="job-content-"]', { timeout: 5000 });
         } catch (e) {
             console.log('?? [aegishms] No job accordion buttons found on careers page.');
             meta.listingHits = 0;
@@ -53,16 +57,20 @@ module.exports = {
         const buttons = await page.$$('button[aria-controls^="job-content-"]');
         for (const btn of buttons) {
             try {
+                // Instant click via DOM, not Puppeteer's actionability wait.
+                // btn.click() waits for element to be visible AND stable
+                // (no CSS animation) which can hang 30s per button on
+                // accordion animation. el.click() dispatches immediately.
                 const expanded = await btn.evaluate((el) => el.getAttribute('aria-expanded'));
                 if (expanded !== 'true') {
-                    await btn.click();
-                    await delay(350);
+                    await btn.evaluate((el) => el.click());
+                    await delay(200);
                 }
             } catch (e) {
                 /* best-effort - content may already be visible */
             }
         }
-        await delay(800);
+        await delay(400);
 
         // --- Stage 3: harvest JSON-LD JobPosting objects (authoritative) -------
         const jsonLdJobs = await page.evaluate(() => {
@@ -239,4 +247,4 @@ module.exports = {
 
         return { items, meta };
     }
-};
+};
