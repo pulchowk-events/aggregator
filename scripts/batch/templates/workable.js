@@ -91,7 +91,7 @@ module.exports = {
                     experience: j.experience || null,
                     level: j.education || null,
                     openings: null,
-                    description: '',
+                    description: j.description || '',
                     responsibilities: '',
                     requirements: '',
                     skills: [],

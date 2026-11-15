@@ -26,7 +26,7 @@
 
 const { loadExtractor } = require('../extractors');
 const { withRetry } = require('../retry');
-const { trimDescriptionToLastSentence } = require('../text');
+const { trimDescriptionToLastSentence, stripHtml } = require('../text');
 const { sanitizeScrapedEvent, sanitizeImageUrl } = require('../sanitize');
 const { deriveImageForUrl, derivePlaceholderForSource } = require('../ogImage');
 const { isNepalRelevant } = require('../../core/geo');
@@ -80,6 +80,7 @@ async function runSource(name, type, { withPage, progress }) {
     items = items.map((item) => {
         try {
             if (extractor.preprocessItem) item = extractor.preprocessItem(item);
+            if (item.description) item.description = stripHtml(item.description);
             if (item.description) item.description = trimDescriptionToLastSentence(item.description, 1500);
             if (item.image) item.image = sanitizeImageUrl(item.image);
             sanitizeScrapedEvent(item, { source: name });

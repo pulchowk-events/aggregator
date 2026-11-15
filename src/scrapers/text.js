@@ -100,8 +100,29 @@ function cleanNepVentsDescription(raw) {
     return cleaned;
 }
 
+// Strip HTML tags + decode common entities. Idempotent -- no-op on
+// already-plain strings, so batch extractors that strip inline (44 of
+// them) are not double-processed in a harmful way. Used by the sanitize
+// layer in _orchestrate.js so any source that returns HTML descriptions
+// (Workable API, future sources) is normalized before the item leaves
+// the orchestrator. Shared-layer fix, not per-extractor.
+function stripHtml(s) {
+    if (s == null) return s;
+    return String(s)
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 module.exports = {
     cleanDescriptionText,
     trimDescriptionToLastSentence,
-    cleanNepVentsDescription
+    cleanNepVentsDescription,
+    stripHtml
 };
