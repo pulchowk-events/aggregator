@@ -135,7 +135,7 @@ module.exports = {
 
                     // Vacancy count  tag.
                     const tags = [];
-                    const vacM = cardTxt.match(/no\.?\s*of\s*vacanc(?:y|ies)\s*[:\-]?\s*(\d{1,3})/i);
+                    const vacM = cardTxt.match(/no\.?\s*of\s*vacanc\w*(?:\s*\([^)]*\))?\s*[:\-]?\s*(\d{1,3})/i);
                     if (vacM) tags.push(`${vacM[1]} vacancy(ies)`);
 
                     // Optional mode hints.
@@ -167,14 +167,22 @@ module.exports = {
                     // orchestrator gets a meaningful prose blob.
                     let description = null;
                     const descParts = [];
-                    for (const p of card.querySelectorAll('p, li, div')) {
-                        if (p.children.length > 0) continue; // leaf text
+                    // Walk <p> and <li> including those with child spans/
+                    // strongs. Vianet nests values in
+                    // <p><span>label</span><strong>value</strong></p>, so the
+                    // old `if (p.children.length > 0) continue` skipped every
+                    // metadata <p> and left description empty. Also dropped
+                    // `div` from the selector -- the outer card wrapper is a
+                    // div and returns the whole card as one "line".
+                    for (const p of card.querySelectorAll('p, li')) {
                         const t = clean(p.textContent);
                         if (!t) continue;
-                        if (t.length < 15) continue;
+                        if (t.length < 10) continue;
                         if (t === title) continue;
-                        if (/^(apply before|deadline)/i.test(t)) continue;
-                        if (/^(no\.?\s*of\s*vacanc)/i.test(t)) continue;
+                        if (/^apply\s*before/i.test(t)) continue;
+                        if (/^no\.?\s*of\s*vacanc/i.test(t)) continue;
+                        if (/^\d{4}-\d{2}-\d{2}$/.test(t)) continue;
+                        if (/^\d{1,3}$/.test(t)) continue;
                         if (descParts.includes(t)) continue;
                         descParts.push(t);
                     }
