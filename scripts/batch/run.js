@@ -27,6 +27,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { runDiscover } = require('./discover');
+const { runRetryRejected } = require('./retry-rejected');
 const { runGenerate } = require('./generate');
 const { runCheck } = require('./check');
 const { runPaste } = require('./paste');
@@ -48,6 +49,9 @@ function parseArgs(argv) {
         maxRounds: 5,
         maxAttempts: 5,
         skipDeploy: false,
+        retryRejected: true,
+        profile: 'medium',
+        minQuality: 'medium',
         dryRun: false
     };
     for (let i = 0; i < argv.length; i++) {
@@ -59,6 +63,10 @@ function parseArgs(argv) {
         else if (a === '--max-rounds' && argv[i + 1]) args.maxRounds = Math.max(1, parseInt(argv[++i], 10) || 5);
         else if (a === '--max-attempts' && argv[i + 1]) args.maxAttempts = Math.max(1, parseInt(argv[++i], 10) || 5);
         else if (a === '--skip-deploy') args.skipDeploy = true;
+        else if (a === '--retry-rejected') args.retryRejected = true;
+        else if (a === '--no-retry-rejected') args.retryRejected = false;
+        else if (a === '--profile' && argv[i + 1]) args.profile = argv[++i];
+        else if (a === '--min-quality' && argv[i + 1]) args.minQuality = argv[++i];
         else if (a === '--dry-run') args.dryRun = true;
         else if (!a.startsWith('-') && !args.urlsFile) args.urlsFile = a;
     }
@@ -173,6 +181,22 @@ function runInit(urlsFile, runId) {
 
 // ---- main orchestrator --------------------------------------------------
 
+const PROFILE_SETTINGS = {
+    low:    { discoverConcurrency: 3,  generateParallel: 2, pasteConcurrency: 1 },
+    medium: { discoverConcurrency: 10, generateParallel: 4, pasteConcurrency: 1 },
+    high:   { discoverConcurrency: 20, generateParallel: 8, pasteConcurrency: 1 }
+};
+
+function profileOf(opts) {
+    const p = PROFILE_SETTINGS[opts.profile] || PROFILE_SETTINGS.medium;
+    return p;
+}
+
+function rssSnapshot() {
+    const u = process.memoryUsage();
+    return { rss: Math.round(u.rss / 1024 / 1024), heap: Math.round(u.heapUsed / 1024 / 1024) };
+}
+
 async function runBatch(opts) {
     // Resolve run dir BEFORE any phase. If --run given, use it (may or
     // may not exist yet). Else infer from urlsFile name or fail.
@@ -198,6 +222,16 @@ async function runBatch(opts) {
         sub: `run ${runId} · ${opts.skipDeploy ? 'deploy disabled' : 'deploy enabled'}`
     });
 
+    // Peak RSS tracking. process.memoryUsage() sampled every 2s during
+    // the run. 8GB WSL hits OOM around 6GB RSS; knowing peak tells us
+    // whether --profile needs to drop a notch.
+    let peakRss = 0;
+    const rssTimer = setInterval(() => {
+        const cur = process.memoryUsage().rss;
+        if (cur > peakRss) peakRss = cur;
+    }, 2000);
+    rssTimer.unref();
+
     const phases = [
         {
             name: 'init',
@@ -211,15 +245,34 @@ async function runBatch(opts) {
             name: 'discover',
             check: () => checkDiscover(runDir),
             exec: async () => {
-                const r = await runDiscover({ runId, concurrency: 15 });
+                const prof = profileOf(opts);
+                const r = await runDiscover({ runId, concurrency: prof.discoverConcurrency });
                 return { ok: true, detail: `${r.actionCounts.accept || 0} accept, ${r.actionCounts.reject || 0} reject` };
+            }
+        },
+        {
+            name: 'retry-rejected',
+            check: () => {
+                if (!opts.retryRejected) return { needed: false, reason: 'pass --retry-rejected to attempt' };
+                const cls = (() => {
+                    try { return JSON.parse(fs.readFileSync(path.join(runDir, 'classes.json'), 'utf8')); }
+                    catch (e) { return null; }
+                })();
+                if (!cls) return { needed: false, reason: 'classes.json missing (run discover first)' };
+                const count = Object.values(cls).filter((c) => c.classResult && c.classResult.type === 'rejected').length;
+                if (count === 0) return { needed: false, reason: 'no rejected sources to retry' };
+                return { needed: true, reason: `${count} rejected source(s)` };
+            },
+            exec: async () => {
+                const r = await runRetryRejected({ runId });
+                return { ok: true, detail: `${r.promoted || 0} promoted, ${r.needsReview || 0} needs-review` };
             }
         },
         {
             name: 'generate',
             check: () => checkGenerate(runDir, opts.only),
             exec: async () => {
-                const r = await runGenerate({ runId, only: opts.only, parallel: 5, timeoutSec: 120 });
+                const r = await runGenerate({ runId, only: opts.only, parallel: profileOf(opts).generateParallel, timeoutSec: 120 });
                 return { ok: true, detail: `${r.ats.length} template, ${r.wizard.length} prompt` };
             }
         },
@@ -265,6 +318,46 @@ async function runBatch(opts) {
             name: 'deploy',
             check: () => opts.skipDeploy ? { needed: false, reason: '--skip-deploy' } : checkDeploy(runDir, opts.only),
             exec: async () => {
+                // Quality gate: before deploying, load verify-summary and
+                // enforce opts.minQuality. Any source below the threshold
+                // is moved to needs-review (deploy itself already refuses
+                // quality='low'; this gate raises the floor to 'medium'
+                // by default).
+                const summaryPath = path.join(runDir, 'verify-summary.json');
+                const reviewDir = path.join(runDir, 'needs-review');
+                if (fs.existsSync(summaryPath)) {
+                    try {
+                        fs.mkdirSync(reviewDir, { recursive: true });
+                        const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+                        const ranked = { low: 0, medium: 1, high: 2 };
+                        const floor = ranked[opts.minQuality] != null ? ranked[opts.minQuality] : 1;
+                        let gated = 0;
+                        for (const [name, r] of Object.entries(summary)) {
+                            if (!r.pass) continue;
+                            const q = r.quality || 'medium';
+                            if ((ranked[q] || 0) < floor) {
+                                const gatePath = path.join(reviewDir, `${name}-quality.json`);
+                                fs.writeFileSync(gatePath, JSON.stringify({
+                                    name,
+                                    reason: `quality=${q} below min=${opts.minQuality}`,
+                                    coverage: r.coverage,
+                                    score: r.score,
+                                    note: 'Deploy refused by --min-quality gate. Inspect coverage, fix extractor, re-verify, or deploy manually with batch deploy --force-low-quality.'
+                                }, null, 2));
+                                // Mark as not passing so deploy skips it
+                                r.pass = false;
+                                r.reason = 'quality_gate: ' + q;
+                                gated++;
+                            }
+                        }
+                        if (gated > 0) {
+                            fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
+                            ui.info(`--min-quality=${opts.minQuality}: gated ${gated} source(s) to needs-review`);
+                        }
+                    } catch (e) {
+                        ui.warn(`quality gate: ${e.message} (proceeding)`);
+                    }
+                }
                 const r = runDeploy({ runId, only: opts.only, force: false, type: 'jobs' });
                 return { ok: true, detail: `${r.deployed} deployed, ${r.skipped} skipped` };
             }
@@ -337,6 +430,13 @@ async function runBatch(opts) {
         ui.line(`  ${ui.tag('warn')}  ${failed.length} phase(s) failed. Fix and re-run \`batch run --run ${runId}\`.`);
     }
     ui.blank();
+
+    clearInterval(rssTimer);
+    const peakRssMB = Math.round(peakRss / 1024 / 1024);
+    ui.info(`peak RSS: ${peakRssMB}MB  ·  profile: ${opts.profile}`);
+    if (peakRssMB > 6000) {
+        ui.warn(`peak RSS above 6GB -- consider --profile low on next run`);
+    }
 
     return { runId, results, ok: failed.length === 0 };
 }
