@@ -10,8 +10,10 @@
 //   - cardGroups     — repeating DOM groups (tag+class) that could be cards
 //   - bodySnippet    — first 300 chars of visible text
 
+const { extractFieldEvidence } = require('./fieldEvidence');
+
 async function dumpListingPage(page) {
-    return page.evaluate(() => {
+    const structural = await page.evaluate(() => {
         // SVG elements expose className as SVGAnimatedString — coerce to string.
         // Named `clsStr` (not `cls`) so it can't collide with local variables
         // in the loops below.
@@ -356,10 +358,21 @@ async function dumpListingPage(page) {
             detailLinkCandidates
         };
     });
+
+    // Field evidence runs on the NODE side -- extractFieldEvidence calls
+    // page.evaluate internally, so it cannot be invoked from within the
+    // browser context above. Runs immediately after the structural dump
+    // so both see the same DOM state.
+    let fieldEvidence = null;
+    try {
+        fieldEvidence = await extractFieldEvidence(page);
+    } catch (e) { /* best-effort; prompt renders placeholder if null */ }
+
+    return { ...structural, fieldEvidence };
 }
 
 async function dumpDetailPage(page) {
-    return page.evaluate(() => {
+    const structural = await page.evaluate(() => {
         const clsStr = (el) => {
             if (!el) return '';
             const c = el.className;
@@ -515,6 +528,13 @@ async function dumpDetailPage(page) {
             mainContentHeuristic
         };
     });
+
+    let fieldEvidence = null;
+    try {
+        fieldEvidence = await extractFieldEvidence(page);
+    } catch (e) { /* best-effort */ }
+
+    return { ...structural, fieldEvidence };
 }
 
 module.exports = { dumpListingPage, dumpDetailPage };
