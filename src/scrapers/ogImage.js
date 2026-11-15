@@ -184,14 +184,17 @@ function getCachedImage(url) {
 // caller's image stays null in that case, same as before this feature.
 function derivePlaceholderForSource(sourceName) {
     if (!sourceName || !/^[a-z0-9_-]+$/i.test(sourceName)) return null;
-    const pngPath = path.join(REPO, 'data', 'placeholder-images', `${sourceName}.png`);
+    // Placeholders live in assets/placeholders/ (committed to the repo, public).
+    // Discord cannot fetch http://127.0.0.1 -- embeds with a localhost image URL
+    // render silently with no image. Return the GitHub raw URL so Discord's CDN
+    // can fetch it, same as it fetches any source image.
+    //
+    // Local existence check is deliberate: assets/placeholders/<name>.png is
+    // committed by the operator when a new source is added. If the file isn't
+    // present, return null and let the live-post hasValidImage gate reject it.
+    const pngPath = path.join(REPO, 'assets', 'placeholders', `${sourceName}.png`);
     if (!fs.existsSync(pngPath)) return null;
-    // Port from the config layer (not process.env directly). env.js runs
-    // dotenv at require time and applies the WEB_PORT env var with a
-    // documented 3001 fallback. Reading via env guarantees this matches
-    // whatever server.js binds to, regardless of require order.
-    const port = env.WEB_PORT;
-    return `http://127.0.0.1:${port}/placeholders/${sourceName}.png`;
+    return `https://raw.githubusercontent.com/pulchowk-events/aggregator/main/assets/placeholders/${sourceName}.png`;
 }
 
 module.exports = { deriveImageForUrl, derivePlaceholderForSource, getCachedImage, CACHE_PATH };

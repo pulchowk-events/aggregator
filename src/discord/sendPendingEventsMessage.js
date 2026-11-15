@@ -49,6 +49,9 @@ async function sendOnePendingEmbed(bot, channel, event) {
     if (!eventHasImage) {
         description += '\n\n🖼️ **No image** - this can never go to a LIVE channel until one is added. Use Customize to add an image URL, or it will stay Test-only.';
     }
+    if (event.imageSource === 'placeholder') {
+        description += '\n\n\u{1F5BC}\u{FE0F} **Placeholder image** - source site exposed no og:image or favicon; using generated brand PNG. Use Customize to override with a real logo.';
+    }
     if (bot.isStuckNeedsAttentionEvent(event) && event.firstSeenAt) {
         const archiveAtMs = event.firstSeenAt + (bot.getNeedsAttentionExpiryDays() * 24 * 60 * 60 * 1000);
         description += `\n\n🗄️ If this is not fixed, it will be auto-archived <t:${Math.floor(archiveAtMs / 1000)}:R> (never auto-posted live).`;

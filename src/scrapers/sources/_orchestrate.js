@@ -82,6 +82,10 @@ async function runSource(name, type, { withPage, progress }) {
             if (item.description) item.description = trimDescriptionToLastSentence(item.description, 1500);
             if (item.image) item.image = sanitizeImageUrl(item.image);
             sanitizeScrapedEvent(item, { source: name });
+            // Provenance: 'source' means the extractor found a real per-item
+            // image on the page (company logo, hero image, etc.). Set only
+            // after sanitize so a rejected URL doesn't leave a false tag.
+            if (item.image) item.imageSource = 'source';
         } catch (e) {
             console.warn(`⚠️ [${name}] sanitize failed on "${item.title || '?'}": ${e.message}`);
         }
@@ -118,15 +122,18 @@ async function runSource(name, type, { withPage, progress }) {
                     const sample = group[0];
                     // Try og:image / favicon first.
                     let img = await deriveImageForUrl(sample.url || sample.registrationUrl);
-                    // Fallback: placeholder PNG generated for this source.
+                    let imageSource = 'site';
+                    // Fallback: placeholder PNG committed to assets/placeholders/
+                    // (served as a GitHub raw URL so Discord can fetch it).
                     // One image per source (not per hostname) -- that's
                     // correct because the fallback is company-branded,
                     // not site-structure-derived.
-                    if (!img) img = derivePlaceholderForSource(name);
+                    if (!img) { img = derivePlaceholderForSource(name); imageSource = 'placeholder'; }
                     if (!img) return;
                     for (const it of group) {
                         it.companyLogoUrl = img;
                         it.image = img;
+                        it.imageSource = imageSource;
                         enriched++;
                     }
                 } catch (e) {

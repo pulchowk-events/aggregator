@@ -29,7 +29,7 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
 const REPO = path.resolve(__dirname, '..');
-const OUT_DIR = path.join(REPO, 'data', 'placeholder-images');
+const OUT_DIR = path.join(REPO, 'assets', 'placeholders');
 const TYPES = ['jobs', 'events', 'scholarships'];
 
 function parseArgs(argv) {
