@@ -69,6 +69,7 @@ const REQUIRED_SECTIONS = [
     { match: 'exact',  text: '## The contract' },
     { match: 'exact',  text: '## Available helpers' },
     { match: 'prefix', text: '## Item shape' },
+    { match: 'exact',  text: '## Wizard evidence warnings -- read before trusting the dump' },
     { match: 'exact',  text: '## Field requirements' },
     { match: 'prefix', text: '## Reference example' },
     { match: 'prefix', text: '## Evidence dump (listing page)' },

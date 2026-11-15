@@ -51,7 +51,7 @@ function detectSiteType(listing, detail = null) {
             evidence: {
                 detailLinkPattern: detailLikePattern.pattern,
                 detailLinkCount: detailLikePattern.count,
-                sampleHrefs: detailLikePattern.samples.map(s => s.href)
+                sampleHrefs: (detailLikePattern.samples || []).map(s => s.href)
             }
         };
     }

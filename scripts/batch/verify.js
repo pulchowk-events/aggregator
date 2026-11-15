@@ -299,6 +299,22 @@ function parseVerifyOutput(rawStdout) {
             description: saDesc ? parseInt(saDesc[1], 10) : 0,
             location: saLoc ? parseInt(saLoc[1], 10) : 0
         } : null,
+        // Semantic data-quality flags from verify-worker. Present only
+        // when the worker detected the class of failure. Absence means
+        // clean on that dimension.
+        semantic: (() => {
+            const sem = {};
+            const grab = (key) => stdout.match(new RegExp('^semantic_' + key + ':\\s*(\\d+|true)', 'm'));
+            const b = (key) => { const m = grab(key); return Boolean(m); };
+            const n = (key) => { const m = grab(key); return m ? parseInt(m[1], 10) : 0; };
+            if (b('descriptionDuplicated')) sem.descriptionDuplicated = true;
+            if (b('noUniqueUrl')) sem.noUniqueUrl = true;
+            if (b('descriptionBloated')) sem.descriptionBloated = n('descriptionBloated');
+            if (b('locationInsane')) sem.locationInsane = n('locationInsane');
+            if (b('salaryTruncated')) sem.salaryTruncated = n('salaryTruncated');
+            if (b('duplicateTitles')) sem.duplicateTitles = n('duplicateTitles');
+            return Object.keys(sem).length > 0 ? sem : null;
+        })(),
         layers: {
             geoDropped: layer('layerGeoDropped'),
             filterDropped: layer('layerFilterDropped'),
@@ -508,6 +524,44 @@ function decidePass(parsed, { isTemplate, isHtmlTemplate, resolution, dumpEviden
                 return { pass: false, reason: 'low_field_coverage', field: r.field, warn: r.warn };
             }
         }
+
+        // Semantic data-quality gate. Coverage says "every item has a
+        // description" but doesn't check the descriptions are USABLE.
+        // A listing-page dump as each item's description passes 8/8
+        // coverage and posts as garbage. These checks catch the class.
+        const sem = parsed.semantic || {};
+        if (sem.descriptionDuplicated) {
+            return {
+                pass: false,
+                reason: 'semantic_garbage',
+                field: 'description',
+                warn: `every item shares the same description prefix -- extractor grabbed the listing page as each item's description, not the role body. Refine with evidence.`
+            };
+        }
+        if (sem.noUniqueUrl) {
+            return {
+                pass: false,
+                reason: 'semantic_garbage',
+                field: 'url',
+                warn: `every item shares the same url -- extractor never visited per-role detail pages, or the site has no per-role URLs. If genuinely single-page, items must still differ in title.`
+            };
+        }
+        if (sem.descriptionBloated > 0) {
+            return {
+                pass: false,
+                reason: 'semantic_garbage',
+                field: 'description',
+                warn: `${sem.descriptionBloated} item(s) have description > 3000 chars -- likely whole-page dump. Extract role-body element only.`
+            };
+        }
+        if (sem.locationInsane > 0) {
+            return {
+                pass: false,
+                reason: 'semantic_garbage',
+                field: 'location',
+                warn: `${sem.locationInsane} item(s) have location > 100 chars -- prose leaked into location. Extract a place-name element or accept site_absent.`
+            };
+        }
         return { pass: true, reason: 'ok' };
     }
 
@@ -703,6 +757,7 @@ async function runVerify(opts) {
             score: parsed.qualityScore || null,
             coverage: parsed.coverage || null,
             siteAbsent: parsed.siteAbsent || null,
+            semantic: parsed.semantic || null,
             rawItems: parsed.rawItems || null,
             layers: parsed.layers || null,
             items: parsed.items,

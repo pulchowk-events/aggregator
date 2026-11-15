@@ -12,6 +12,208 @@
 
 const { extractFieldEvidence } = require('./fieldEvidence');
 
+// ---------- trimmed raw HTML for prompt ----------
+// The structural dump + field evidence give the LLM heuristics. They're
+// often wrong (card candidates match <script> tags, detail-link pattern
+// matches every nav anchor, sample detail page is Facebook). Real HTML
+// doesn't have that failure mode — the LLM sees actual structure and
+// writes selectors against it.
+//
+// Trimmed aggressively to fit prompt budget: no scripts, no styles, no
+// comments, no inline event handlers, collapsed whitespace. Structure
+// (tags, classes, ids, text content) preserved.
+function trimHtmlForPrompt(html, maxBytes) {
+    maxBytes = maxBytes || 40000;
+    let s = String(html || '');
+    s = s.replace(/<script[\s\S]*?<\/script>/gi, '');
+    s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
+    s = s.replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
+    s = s.replace(/<svg[\s\S]*?<\/svg>/gi, '<!-- svg -->');
+    s = s.replace(/<!--[\s\S]*?-->/g, '');
+    s = s.replace(/\s+style="[^"]*"/gi, '');
+    s = s.replace(/\s+on\w+="[^"]*"/gi, '');
+    s = s.replace(/\s+data-(?:src|srcset|bg)="[^"]*"/gi, '');
+    s = s.replace(/\s+/g, ' ');
+    s = s.trim();
+    if (s.length > maxBytes) {
+        s = s.slice(0, maxBytes) + '<!-- truncated at ' + maxBytes + ' chars -->';
+    }
+    return s;
+}
+
+// Chrome-tag detector. If a "card wrapper" selector is actually HTML
+// chrome, don't dump its outerHTML — it's noise.
+const CHROME_TAG_RE = /^(script|link|meta|style|noscript|svg|path|head|html)$/i;
+function isChromeSelector(sel) {
+    if (!sel) return true;
+    const tag = String(sel).split(/[.#\[]/)[0].trim().toLowerCase();
+    return CHROME_TAG_RE.test(tag);
+}
+
+// ---------- size-aware HTML fitting with feedback ----------
+// Instead of blindly stripping or capping, walk a progressive removal
+// ladder and stop as soon as the payload fits the budget. Report what
+// was removed so failures are diagnosable.
+//
+// The ladder:
+//   1. Garbage: scripts, styles, svgs, comments, data URIs, event
+//      handlers, inline styles. Nothing here is ever useful for a
+//      selector decision.
+//   2. Whitespace collapse. Pure noise reduction.
+//   3. Semantic chrome: <header>, <footer>, <nav>, <aside>, aria-hidden.
+//      Often removable, occasionally contains a company name we care about.
+//   4. Cookie/newsletter/modal blocks -- pure junk.
+//   5. If still over: truncate at the byte boundary with a visible marker.
+//
+// For each step, we log the byte delta. Callers get a report they can
+// print or audit so a site that keeps hitting truncation is visible.
+function fitHtmlToBudget(html, budgetBytes, label) {
+    if (!html) return { html: null, removed: [], originalSize: 0, finalSize: 0 };
+    const originalSize = html.length;
+    let current = String(html);
+    const removed = [];
+
+    const tryStrip = (step, re) => {
+        if (current.length <= budgetBytes) return;
+        const before = current.length;
+        current = current.replace(re, '');
+        if (current.length < before) {
+            removed.push({ step, delta: before - current.length });
+        }
+    };
+
+    // Pass 1: pure garbage
+    tryStrip('scripts', /<script[\s\S]*?<\/script>/gi);
+    tryStrip('styles', /<style[\s\S]*?<\/style>/gi);
+    tryStrip('noscript', /<noscript[\s\S]*?<\/noscript>/gi);
+    tryStrip('svg', /<svg[\s\S]*?<\/svg>/gi);
+    tryStrip('comments', /<!--[\s\S]*?-->/g);
+    tryStrip('inline-styles', /\s+style="[^"]*"/gi);
+    tryStrip('event-handlers', /\s+on\w+="[^"]*"/gi);
+    tryStrip('data-uris', /data:[^"')\s>]+/g);
+
+    // Pass 2: whitespace
+    tryStrip('whitespace-collapse', /\s{2,}/g);
+
+    // Pass 3: semantic chrome
+    tryStrip('header', /<header[\s\S]*?<\/header>/gi);
+    tryStrip('footer', /<footer[\s\S]*?<\/footer>/gi);
+    tryStrip('nav', /<nav[\s\S]*?<\/nav>/gi);
+    tryStrip('aside', /<aside[\s\S]*?<\/aside>/gi);
+
+    // Pass 4: junk blocks
+    tryStrip('cookie-blocks', /<div[^>]*class="[^"]*(?:cookie|gdpr|newsletter|modal|dropdown)[^"]*"[\s\S]*?<\/div>/gi);
+    tryStrip('aria-hidden', /<div[^>]*aria-hidden="true"[^>]*>[\s\S]*?<\/div>/gi);
+
+    // Pass 5: truncate if still over
+    let truncated = false;
+    if (current.length > budgetBytes) {
+        const cut = current.slice(0, budgetBytes);
+        removed.push({ step: 'truncated', delta: current.length - budgetBytes });
+        current = cut + '\n<!-- truncated: budget=' + budgetBytes + ' -->';
+        truncated = true;
+    }
+
+    return {
+        html: current,
+        removed,
+        originalSize,
+        finalSize: current.length,
+        truncated,
+        label
+    };
+}
+
+async function dumpCardHtml(page, cardSelector) {
+    if (!cardSelector || isChromeSelector(cardSelector)) return null;
+    try {
+        const html = await page.evaluate((sel) => {
+            let el;
+            try { el = document.querySelector(sel); } catch (e) { return null; }
+            return el ? el.outerHTML : null;
+        }, cardSelector);
+        if (!html) return null;
+        // Budget: 40KB. A real job card should be under 20KB; if it's
+        // bigger, the selector matched something too broad (whole page).
+        // Feedback report will show truncated=true in that case.
+        return fitHtmlToBudget(html, 40000, 'rawCardHtml');
+    } catch (e) {
+        return null;
+    }
+}
+
+async function dumpDetailHtml(page, bodySelector) {
+    try {
+        const html = await page.evaluate((sel) => {
+            let el;
+            // Prefer specific body selector when it isn't a generic container
+            if (sel && !/^(script|link|meta|style|body|html|main|article|div\.container|div\.wrapper)$/i.test(sel)) {
+                try { el = document.querySelector(sel); } catch (e) { el = null; }
+            }
+            if (!el) el = document.querySelector('main') || document.querySelector('article') || document.body;
+            return el ? el.outerHTML : null;
+        }, bodySelector);
+        if (!html) return null;
+        return fitHtmlToBudget(html, 55000, 'rawDetailHtml');
+    } catch (e) {
+        return null;
+    }
+}
+
+async function dumpFallbackContentHtml(page) {
+    try {
+        const html = await page.evaluate(() => {
+            const clone = document.body.cloneNode(true);
+            const dropSels = 'header, footer, nav, aside, [role="navigation"], [role="banner"], [role="contentinfo"], noscript, svg, script, style';
+            const drop = clone.querySelectorAll(dropSels);
+            for (const c of drop) { if (c.parentNode) c.parentNode.removeChild(c); }
+            const candidates = clone.querySelectorAll('section, article, main, div');
+            let best = null, bestLen = 0;
+            for (const c of candidates) {
+                const len = (c.textContent || '').trim().length;
+                if (len > bestLen && len < 500000) { best = c; bestLen = len; }
+            }
+            return (best || clone).outerHTML;
+        });
+        if (!html) return null;
+        // If picked block is tiny, it means the largest child is still
+        // small (page probably SPA / iframe / chrome-heavy). Fall back to
+        // the whole stripped body so the LLM at least sees SOMETHING.
+        if (html.length < 3000) {
+            const fullBody = await page.evaluate(() => {
+                const clone = document.body.cloneNode(true);
+                const dropSels = 'header, footer, nav, aside, [role="navigation"], [role="banner"], [role="contentinfo"], noscript, svg, script, style';
+                const drop = clone.querySelectorAll(dropSels);
+                for (const c of drop) { if (c.parentNode) c.parentNode.removeChild(c); }
+                return clone.outerHTML;
+            });
+            if (fullBody && fullBody.length > html.length) {
+                return fitHtmlToBudget(fullBody, 40000, 'rawCardHtml-fallback-fullbody');
+            }
+        }
+        return fitHtmlToBudget(html, 40000, 'rawCardHtml-fallback');
+    } catch (e) {
+        return null;
+    }
+}
+
+// Job-signal check on rawCardHtml. A card dump that contains ZERO
+// role-ish tokens is probably site chrome (a nav, hero, or footer that
+// slipped past chrome-strip) or the wrong DOM block entirely. Flag it so
+// the caller can decide whether to trust the HTML.
+const JOB_SIGNAL_RE = /\b(?:job|career|role|position|opening|apply|vacancy|hiring|recruit)\b/i;
+function scoreCardHtml(html) {
+    if (!html || typeof html !== 'string') return { hasSignal: false, hits: 0 };
+    // Count distinct role-ish token hits (capped at 20 for perf)
+    const re = new RegExp(JOB_SIGNAL_RE.source, 'gi');
+    const seen = new Set();
+    let m;
+    while ((m = re.exec(html)) !== null && seen.size < 20) {
+        seen.add(m[0].toLowerCase());
+    }
+    return { hasSignal: seen.size > 0, hits: seen.size };
+}
+
 async function dumpListingPage(page) {
     const structural = await page.evaluate(() => {
         // SVG elements expose className as SVGAnimatedString — coerce to string.
@@ -368,7 +570,63 @@ async function dumpListingPage(page) {
         fieldEvidence = await extractFieldEvidence(page);
     } catch (e) { /* best-effort; prompt renders placeholder if null */ }
 
-    return { ...structural, fieldEvidence };
+    // Trim verbose fields BEFORE the dump reaches the prompt. The
+    // structural dump carries anchorGroups (hundreds of entries),
+    // cardCandidates with full sample arrays, jsonLdSamples with HTML
+    // content — all 50KB+ of JSON noise. Keep orientation signal only;
+    // the raw HTML section (below) carries the actual structure.
+    const trimmed = { ...structural };
+    if (Array.isArray(trimmed.anchorGroups)) {
+        trimmed.anchorGroups = trimmed.anchorGroups.slice(0, 10).map((g) => ({
+            pattern: g.pattern, count: g.count
+        }));
+    }
+    // Only slice array length. Preserve full item shape because generate.js
+    // reads fields like .href / .selector / .samples off [0]. Reshaping to
+    // {key,count} crashes generate at pick-sample-detail-link time.
+    if (Array.isArray(trimmed.anchorGroups)) {
+        trimmed.anchorGroups = trimmed.anchorGroups.slice(0, 10);
+    }
+    if (Array.isArray(trimmed.cardCandidates)) {
+        trimmed.cardCandidates = trimmed.cardCandidates.slice(0, 5);
+    }
+    if (Array.isArray(trimmed.detailLinkCandidates)) {
+        trimmed.detailLinkCandidates = trimmed.detailLinkCandidates.slice(0, 5);
+    }
+    if (Array.isArray(trimmed.cardGroups)) {
+        trimmed.cardGroups = trimmed.cardGroups.slice(0, 3);
+    }
+    if (Array.isArray(trimmed.categoryChips)) {
+        trimmed.categoryChips = trimmed.categoryChips.slice(0, 10);
+    }
+
+    let rawCardHtml = null;
+    try {
+        const topCard = (structural.cardCandidates && structural.cardCandidates[0])
+            || (structural.cardGroups && structural.cardGroups[0]);
+        if (topCard && topCard.selector && !isChromeSelector(topCard.selector)) {
+            rawCardHtml = await dumpCardHtml(page, topCard.selector);
+        }
+        // Fallback fires when the card selector matched something tiny
+        // (a wrapper div, an icon, a broken class). 3000B is the floor
+        // below which the "card" HTML is definitely not a real job card.
+        if (!rawCardHtml || !rawCardHtml.html || rawCardHtml.html.length < 3000) {
+            const fallback = await dumpFallbackContentHtml(page);
+            if (fallback && fallback.html && fallback.html.length > (rawCardHtml ? (rawCardHtml.html || '').length : 0)) {
+                rawCardHtml = fallback;
+            }
+        }
+    } catch (e) { /* best-effort */ }
+
+    const cardScore = rawCardHtml && rawCardHtml.html ? scoreCardHtml(rawCardHtml.html) : { hasSignal: false, hits: 0 };
+    if (rawCardHtml && rawCardHtml.html && !cardScore.hasSignal) {
+        console.warn(`   \u26a0\ufe0f [dump] rawCardHtml has no job-signal tokens (${rawCardHtml.html.length}B, hits=${cardScore.hits}) -- likely wrong element`);
+        rawCardHtml.qualityWarning = 'no_job_signal';
+    } else if (rawCardHtml && rawCardHtml.html) {
+        rawCardHtml.jobSignalHits = cardScore.hits;
+    }
+
+    return { ...trimmed, fieldEvidence, rawCardHtml };
 }
 
 async function dumpDetailPage(page) {
@@ -534,7 +792,29 @@ async function dumpDetailPage(page) {
         fieldEvidence = await extractFieldEvidence(page);
     } catch (e) { /* best-effort */ }
 
-    return { ...structural, fieldEvidence };
+    const trimmed = { ...structural };
+    if (Array.isArray(trimmed.jsonLdSamples)) {
+        trimmed.jsonLdSamples = trimmed.jsonLdSamples.slice(0, 2).map((j) => ({
+            type: j.type || j['@type'] || null
+        }));
+    }
+    if (Array.isArray(trimmed.headings)) {
+        trimmed.headings = trimmed.headings.slice(0, 6);
+    }
+    if (Array.isArray(trimmed.images)) {
+        trimmed.images = trimmed.images.slice(0, 5);
+    }
+    if (Array.isArray(trimmed.dataAttributeHints)) {
+        trimmed.dataAttributeHints = trimmed.dataAttributeHints.slice(0, 10);
+    }
+
+    let rawDetailHtml = null;
+    try {
+        const bodySel = (structural.mainContentHeuristic && structural.mainContentHeuristic.descriptionSelector) || null;
+        rawDetailHtml = await dumpDetailHtml(page, bodySel);
+    } catch (e) { /* best-effort */ }
+
+    return { ...trimmed, fieldEvidence, rawDetailHtml };
 }
 
 module.exports = { dumpListingPage, dumpDetailPage };

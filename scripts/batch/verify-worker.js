@@ -186,7 +186,99 @@ async function runSite(name) {
                 lines.push(`coverageImg: ${verdict.coverage.image}`);
                 lines.push(`coverageDeadline: ${verdict.coverage.deadline}`);
             }
+            // Per-field site_absent counts. The LLM's <field>_status
+            // contract lets it declare "this site genuinely does not
+            // publish this field" with evidence. Those items should NOT
+            // count against coverage -- an item with
+            // description_status: 'site_absent' is a truthful report, not
+            // a failure. The gate uses these counts to compute
+            // "coverage among items where the field was expected."
+            if (result.items.length > 0) {
+                const countSA = (field) => result.items.filter(
+                    (it) => it && it[`${field}_status`] === 'site_absent'
+                ).length;
+                const sa = {
+                    title: countSA('title'),
+                    company: countSA('company'),
+                    description: countSA('description'),
+                    location: countSA('location')
+                };
+                // Emit only when non-zero so clean sources stay compact.
+                if (sa.title) lines.push(`siteAbsentTitle: ${sa.title}`);
+                if (sa.company) lines.push(`siteAbsentCompany: ${sa.company}`);
+                if (sa.description) lines.push(`siteAbsentDesc: ${sa.description}`);
+                if (sa.location) lines.push(`siteAbsentLoc: ${sa.location}`);
+            }
         }
+        // Semantic data-quality checks. Coverage counts field presence
+        // only -- an extractor returning 8 items with identical
+        // descriptions (whole listing page dump) passed coverage with
+        // 8/8 "descriptions present". These checks assert the data is
+        // actually usable:
+        //   descriptionDuplicated  -> every item has the same description
+        //                             prefix (100 chars). Means extractor
+        //                             grabbed listing page, not role body.
+        //   descriptionBloated     -> > 3000 chars. Probably whole-page
+        //                             dump, not a role body.
+        //   locationInsane         -> > 100 chars. Extractor grabbed prose
+        //                             instead of a place name.
+        //   salaryTruncated        -> < 8 chars. Prefix-only, not the value.
+        //   noUniqueUrl            -> all items share the same url. Either
+        //                             single-page listing (legit) or detail
+        //                             pages never visited (bug). Combined
+        //                             with descriptionDuplicated, it's
+        //                             definitely the listing-page grab.
+        //   duplicateTitles        -> count of dupe titles. Soft signal.
+        if (result.items.length > 0) {
+            const sem = {};
+
+            if (result.items.length > 1) {
+                const descPrefixes = result.items.map((i) =>
+                    String(i.description || '').slice(0, 100)
+                );
+                const uniquePrefixes = new Set(descPrefixes);
+                if (uniquePrefixes.size === 1 && String(result.items[0].description || '').trim().length > 20) {
+                    sem.descriptionDuplicated = true;
+                }
+            }
+
+            const bloatedCount = result.items.filter(
+                (i) => String(i.description || '').length > 3000
+            ).length;
+            if (bloatedCount > 0) sem.descriptionBloated = bloatedCount;
+
+            const locInsaneCount = result.items.filter(
+                (i) => i.location && String(i.location).length > 100
+            ).length;
+            if (locInsaneCount > 0) sem.locationInsane = locInsaneCount;
+
+            const salTruncCount = result.items.filter((i) => {
+                const v = String(i.salary || '').trim();
+                return v.length > 0 && v.length < 8;
+            }).length;
+            if (salTruncCount > 0) sem.salaryTruncated = salTruncCount;
+
+            if (result.items.length > 1) {
+                const urls = result.items.map((i) => i.url || i.registrationUrl || '');
+                const uniqueUrls = new Set(urls.filter((u) => u.length > 0));
+                if (uniqueUrls.size === 1 && result.items[0].url) {
+                    sem.noUniqueUrl = true;
+                }
+            }
+
+            if (result.items.length > 1) {
+                const titles = result.items.map((i) => i.title || '');
+                const uniqueTitles = new Set(titles);
+                if (uniqueTitles.size < result.items.length) {
+                    sem.duplicateTitles = result.items.length - uniqueTitles.size;
+                }
+            }
+
+            for (const [k, v] of Object.entries(sem)) {
+                lines.push(`semantic_${k}: ${v}`);
+            }
+        }
+
         // Per-layer drop breakdown. Only emit nonzero counters so the
         // stdout stays compact for clean sources.
         if (rmeta.locationDropped > 0) lines.push(`layerGeoDropped: ${rmeta.locationDropped}`);

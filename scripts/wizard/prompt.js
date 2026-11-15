@@ -45,6 +45,113 @@ function formatFieldEvidenceForPrompt(listing, detail) {
     }
 }
 
+// Universal warnings distilled from 33 self-diagnosing extractors. Every
+// bullet here is a real failure an LLM-corrected extractor documented:
+// the wizard claimed X, reality was Y. Feeding these to future prompts
+// stops the same class of mistake from shipping.
+const ANTI_PATTERNS_SECTION = `## Wizard evidence warnings -- read before trusting the dump
+
+The DOM scanner (wizard) has known false-positive patterns. These
+are VERIFIED from past extractor corrections. When you see any of
+these in the evidence below, IGNORE the wizard evidence and reason
+from the raw HTML instead.
+
+### Card wrapper false positives
+
+Reject any cardCandidates selector matching these -- they are HTML
+chrome, not job cards:
+- script, link, meta, style, noscript, svg, path
+- div.swiper-slide* (carousel image slides, no text content)
+- [class*="logo"], [class*="cookie"], [class*="breadcrumb"]
+
+If every cardCandidate is one of these, there are NO real job cards
+in the dump. Use raw HTML to find the actual structure.
+
+### Detail-link pattern false positives
+
+These are NOT per-job detail routes:
+- Bare / (matches every nav anchor)
+- tel:, mailto:, javascript:, #fragment
+- /home, /about, /contact, /blog
+- /services/*, /solutions/*, /products/*, /news/*, /resources/*
+- Social media: facebook, twitter, x.com, linkedin, instagram,
+  whatsapp, youtube
+- URLs pointing back to the same page
+
+If detailLinkCandidates is dominated by any of the above, the site
+has NO per-role detail pages. Treat as SINGLE-PAGE-CARDS. Extract
+from listing cards directly.
+
+### Sample detail page may be wrong
+
+If the "sample detail page" URL is:
+- A social media site (facebook/twitter/x/linkedin/instagram/whatsapp)
+- A marketing, services, or solutions page
+- A homepage or hero page
+- The same URL as the listing (wizard misresolved)
+
+...then DISCARD the wizard detail-page evidence entirely. Any
+H1.*, div.*, or "longest description" selector from that page is
+noise. Reason only from the listing-page raw HTML.
+
+### Longest-description candidate is often wrong
+
+The wizard's "longest description candidate" frequently wraps the
+whole page (div.container, main, body). Do NOT use it as the
+description selector when:
+- Its char count is > 4000
+- The selector is a generic container class
+- Its sample text starts with site nav / hero copy
+
+Instead:
+1. Read the raw detail HTML below, find the actual role-body region
+2. Prefer specific classes: [class*="job-description"],
+   [class*="role-body"], [class*="job-detail"], article p
+3. Fall back to card <p> excerpt if no detail body exists
+4. If nothing role-specific exists: description_status: site_absent
+
+### Empty-state detection (do this FIRST)
+
+Before extracting anything, search the raw HTML for:
+- "no open positions", "no current openings", "no job openings"
+- "no vacancies", "no any vacancy"
+- "we are always hiring", "always on the lookout", "not hiring"
+- "check back soon", "there are no (open|current)"
+- "sorry, no positions available at this time"
+
+If ANY appear AND no role-shaped cards exist, return
+{ items: [], meta } with meta.atsEmpty = true.
+Do NOT invent items from marketing or hero content.
+
+### Structural patterns to prefer
+
+- Accordions (Bootstrap div.collapse, div.accordion-*): content is
+  in DOM even when collapsed. Read directly; expand defensively only
+  if reading the collapsed content produces empty.
+- Hub pages (/jobs/ lists departments): traverse ONE level deeper.
+  Real job cards live inside the department pages.
+- ATS JSON-LD (Workable, Personio, SmartRecruiters, Recruitee):
+  application/ld+json JobPosting blocks are AUTHORITATIVE for
+  title/company/location/description/employmentType/dates.
+  Prefer JSON-LD over DOM selectors when present.
+
+### Extraction self-checks -- run BEFORE writing code
+
+If any check fails, your planned extractor has a structural bug.
+Fix the selector logic before returning items:
+
+1. Are all description values UNIQUE per item? If all identical,
+   you grabbed the listing page as each item's description.
+2. Are url / registrationUrl values distinct per item? All same +
+   different titles = single-page board (OK). All same + same
+   descriptions = page-dump bug (not OK).
+3. Is every location under 80 chars and place-shaped? Longer means
+   prose (company HQ copy) leaked into location.
+4. Is every salary either null OR under 60 chars with a numeric/
+   currency token? Long prose = bug.
+5. Is every company short (site name, not a paragraph)?
+`;
+
 const FIELD_REQUIREMENTS_SECTION = [
     '## Field requirements',
     '',
@@ -199,6 +306,8 @@ function buildPrompt({ name, type, url, listing, detail, detected }) {
     parts.push('scholarships), see `src/scrapers/jobs.js` and');
     parts.push('`src/scrapers/scholarships.js` for the additional fields.');
     parts.push('');
+    parts.push(ANTI_PATTERNS_SECTION);
+    parts.push('');
     parts.push(FIELD_REQUIREMENTS_SECTION);
     parts.push(`## Reference example -- a working ${detected.type} extractor`);
     parts.push('');
@@ -221,6 +330,55 @@ function buildPrompt({ name, type, url, listing, detail, detected }) {
         parts.push('```');
         parts.push('');
     }
+    // Raw HTML evidence -- the primary structural signal for the LLM.
+    // Wizard heuristics can be wrong; raw HTML is always right.
+    const rawCard = listing && listing.rawCardHtml;
+    if (rawCard && rawCard.html) {
+        parts.push('## Raw HTML (one representative listing card)');
+        parts.push('');
+        parts.push('Actual HTML of ONE card from the listing. Use this to');
+        parts.push('identify the correct selector structure instead of trusting');
+        parts.push('wizard heuristics that may be wrong.');
+        parts.push('');
+        if (rawCard.qualityWarning === 'no_job_signal') {
+            parts.push('WARNING: the raw HTML below does NOT contain any job-related keywords (job, role, position, apply, hiring). It may be the wrong DOM element (nav/hero/footer that slipped past chrome-strip) or a genuinely empty careers page. Before writing selectors, check the HTML for real content. If you find no job cards here, look at the evidence dump and consider whether the source is empty.');
+            parts.push('');
+        }
+        if (rawCard.removed && rawCard.removed.length > 0) {
+            const truncated = rawCard.removed.find((r) => r.step === 'truncated');
+            const stripped = rawCard.removed.filter((r) => r.step !== 'truncated').map((r) => `${r.step}(-${r.delta})`).join(', ');
+            parts.push(`HTML budget report: ${rawCard.originalSize}B original -> ${rawCard.finalSize}B final.`);
+            if (stripped) parts.push(`Stripped: ${stripped}`);
+            if (truncated) parts.push(`TRUNCATED ${truncated.delta}B -- this means the wizard's card selector matched a block LARGER than a single card. Consider using the raw HTML below to find a more specific nested selector for one card.`);
+            parts.push('');
+        }
+        parts.push('```html');
+        parts.push(rawCard.html);
+        parts.push('```');
+        parts.push('');
+    }
+    const rawDetail = detail && detail.rawDetailHtml;
+    if (rawDetail && rawDetail.html) {
+        parts.push('## Raw HTML (detail page role-body region)');
+        parts.push('');
+        parts.push('Actual HTML of the role-body region on a detail page.');
+        parts.push('This is where description / location / salary live.');
+        parts.push('Extract from here, not from main.bodyInnerText.');
+        parts.push('');
+        if (rawDetail.removed && rawDetail.removed.length > 0) {
+            const truncated = rawDetail.removed.find((r) => r.step === 'truncated');
+            const stripped = rawDetail.removed.filter((r) => r.step !== 'truncated').map((r) => `${r.step}(-${r.delta})`).join(', ');
+            parts.push(`HTML budget report: ${rawDetail.originalSize}B original -> ${rawDetail.finalSize}B final.`);
+            if (stripped) parts.push(`Stripped: ${stripped}`);
+            if (truncated) parts.push(`TRUNCATED ${truncated.delta}B -- content was cut. Reason from the visible portion, and note in your extractor comments that some detail HTML was truncated.`);
+            parts.push('');
+        }
+        parts.push('```html');
+        parts.push(rawDetail.html);
+        parts.push('```');
+        parts.push('');
+    }
+
     parts.push(FIELD_EVIDENCE_HEADER);
     parts.push('```');
     parts.push(formatFieldEvidenceForPrompt(listing, detail));
@@ -255,10 +413,66 @@ function buildPrompt({ name, type, url, listing, detail, detected }) {
     parts.push('- **JSON-LD present but incomplete** -- prefer JSON-LD where it exists, fall back to HTML selectors for missing fields.');
     parts.push('- **Multi-stage navigation** -- if entry URL leads to a category or homepage, navigate through it first.');
     parts.push('- **Retries** -- orchestrator retries the whole extract(). Do NOT add per-page retry inside extract().');
+    parts.push('- **Keep lines under 120 chars** -- long single-line regex literals over ~200 chars get truncated by clipboard tools. Break alternations with comments, use named constants for repeated patterns, or split into a chain of .replace() calls. If a regex has more than 8 alternations, split it into two variables.');
     parts.push(`- **Logging** -- log ONCE at the end of extract(), e.g. \`console.log('  [${name}] extracted ' + items.length)\`. Do NOT log inside per-item loops.`);
     parts.push('');
     parts.push('Do not invent selectors you have not seen in the field evidence. If a field cannot be extracted with confidence, use `<field>_status: "extraction_failed"` with the selector you tried.');
     parts.push('');
+
+    // Hard total budget. If the assembled prompt exceeds 118KB, drop the
+    // least-valuable sections until it fits. Order of sacrifice:
+    //   1. Evidence dump (sample detail page) -- raw HTML now covers it
+    //   2. Evidence dump (listing page) -- same
+    //   3. Raw HTML (detail role-body) -- trimmed to first 30KB
+    //   4. Raw HTML (card) -- trimmed to first 20KB
+    // Never drops: verdict section, field requirements, anti-patterns,
+    // reference example, contract, item shape, output instructions.
+    const MAX_PROMPT_BYTES = 118000;
+    let total = parts.join('\n').length;
+    if (total <= MAX_PROMPT_BYTES) return parts.join('\n');
+
+    const budget = MAX_PROMPT_BYTES;
+    const dropped = [];
+
+    // Helper: find first index matching prefix and drop the section body.
+    // Sections are line-based; find header, find next ## header, drop
+    // everything between.
+    const dropSectionByHeader = (headerPrefix) => {
+        const start = parts.findIndex((p) => p === headerPrefix);
+        if (start < 0) return false;
+        let end = start + 1;
+        while (end < parts.length && !parts[end].startsWith('## ')) end++;
+        parts.splice(start, end - start);
+        dropped.push(headerPrefix);
+        return true;
+    };
+
+    if (total > budget) {
+        // 1. Drop sample-detail evidence dump
+        const before = parts.join('\n').length;
+        dropSectionByHeader('## Evidence dump (sample detail page)');
+        total = parts.join('\n').length;
+        if (total <= budget) return parts.join('\n') + `\n\n<!-- prompt trimmed: dropped [${dropped.join(', ')}] to fit ${budget}B budget (was ${before}B) -->`;
+    }
+    if (total > budget) {
+        const before = parts.join('\n').length;
+        dropSectionByHeader('## Evidence dump (listing page)');
+        total = parts.join('\n').length;
+        if (total <= budget) return parts.join('\n') + `\n\n<!-- prompt trimmed: dropped [${dropped.join(', ')}] to fit ${budget}B budget (was ${before}B) -->`;
+    }
+    // If still over, truncate raw HTML blocks in place
+    if (total > budget) {
+        const trimmed = parts.map((p) => {
+            if (typeof p === 'string' && p.length > 30000) {
+                return p.slice(0, 30000) + '\n<!-- truncated -->';
+            }
+            return p;
+        });
+        parts.length = 0;
+        parts.push(...trimmed);
+        total = parts.join('\n').length;
+        dropped.push('truncated-oversized-blocks');
+    }
 
     return parts.join('\n');
 }

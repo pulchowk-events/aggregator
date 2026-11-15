@@ -102,6 +102,19 @@ function pickHtmlCardsCandidate(dump) {
     // Without it, a "Join our team" section passes hasJobishContent and
     // the template produces 0 real jobs after its own title filter.
     for (const c of candidates) {
+            // Skip sources already marked NOT_CAREERS_PAGE -- their prompt
+            // would just produce the same verdict again. --force regenerates
+            // prompts unless the source is terminal.
+            try {
+                const rdPath = path.join(p.redirects, `${name}.json`);
+                if (fs.existsSync(rdPath)) {
+                    const rd = JSON.parse(fs.readFileSync(rdPath, 'utf8'));
+                    if (rd.type === 'NOT_CAREERS_PAGE') {
+                        continue;
+                    }
+                }
+            } catch (e) { /* ignore, fall through to normal generate */ }
+
         // Tag-only selector (`div`, `a`, `li`, `section` -- no class) matches
         // too broadly at runtime. The dump reported count=3 because it
         // counted children under one parent, but querySelectorAll('div')
@@ -178,8 +191,14 @@ async function runWizardPrompt(url, name, type, withPageFn, utils, log) {
         .filter((g) => !/^#/.test(g.pattern))
         .filter((g) => !/^\/$/.test(g.pattern))
         .sort((a, b) => b.count - a.count)[0];
-    if (detailPattern) {
-        const detailUrl = detailPattern.samples[0].href;
+    // Guard: the top anchor group may have an empty samples array (older
+    // dumps, or groups built without sample lists). Skip detail dump rather
+    // than crash the whole generate phase.
+    const detailUrl = (detailPattern
+        && Array.isArray(detailPattern.samples)
+        && detailPattern.samples[0]
+        && detailPattern.samples[0].href) || null;
+    if (detailPattern && detailUrl) {
         log(`detail pattern: ${detailPattern.pattern} (${detailPattern.count} matches)`);
         log(`  sample: ${detailUrl}`);
         log(`  goto (domcontentloaded, 30s timeout)`);
@@ -196,6 +215,8 @@ async function runWizardPrompt(url, name, type, withPageFn, utils, log) {
         } catch (e) {
             log(`  detail dump failed: ${e.message} -- continuing with listing-only evidence`);
         }
+    } else if (detailPattern) {
+        log(`detail pattern ${detailPattern.pattern} matched but samples empty -- treating as single-page source`);
     } else {
         log(`no detail candidates -- treating as single-page source`);
     }
@@ -409,6 +430,7 @@ async function runGenerate(opts) {
                 const elapsed = ((Date.now() - started) / 1000).toFixed(1);
                 const failReason = (e.message && e.message.startsWith('dump-save')) ? 'dump-save' : 'wizard-dump';
                 summary.failed.push({ name, reason: failReason, detail: e.message });
+                if (e.stack) console.error('\n=== WIZARD CRASH STACK ===\n' + e.stack + '\n=== END ===\n');
                 logFail(`${elapsed}s · ${e.message}`);
                 audit.wizardPrompt(runDir, { name, url: targetUrl, siteType: null, ok: false, error: e.message });
             }

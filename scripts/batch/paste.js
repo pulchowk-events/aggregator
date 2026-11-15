@@ -311,6 +311,7 @@ function extractCodeFromClipboard(raw) {
 
 function parseArgs(argv) {
     const args = {
+        includeSmall: false,
         runId: null,
         only: null,
         provider: 'deepseek',
@@ -325,6 +326,7 @@ function parseArgs(argv) {
         else if (a === '--provider' && argv[i + 1]) { args.provider = argv[++i]; }
         else if (a === '--no-browser') { args.skipBrowser = true; }
         else if (a === '--no-poll') { args.usePoll = false; }
+        else if (a === '--include-small') { args.includeSmall = true; }
         else if (a === '--timeout' && argv[i + 1]) {
             const secs = parseInt(argv[++i], 10);
             if (secs > 0) args.timeoutMs = secs * 1000;
@@ -373,6 +375,40 @@ async function runPaste(opts) {
         const t = readRedirectType(n);
         return t === null || t === 'FOLLOWED';
     });
+
+
+    // Starved-prompt filter. A prompt under 40KB lacks enough raw HTML to
+    // give the LLM real structure -- it will produce hollow code that
+    // fails verify. Skip unless --include-small was passed. The threshold
+    // matches the triage output: sites under 40K after chrome-strip
+    // either have tiny content (legit) or wrong-content fallback (bug).
+    if (!opts.includeSmall) {
+        const MIN_PROMPT_BYTES = 40000;
+        const starved = [];
+        const kept = [];
+        for (const name of pending) {
+            const promptPath = path.join(p.prompts, `${name}.md`);
+            try {
+                const stat = fs.statSync(promptPath);
+                if (stat.size < MIN_PROMPT_BYTES) {
+                    starved.push({ name, size: stat.size });
+                } else {
+                    kept.push(name);
+                }
+            } catch (e) {
+                kept.push(name);  // can't stat = pass through, don't block
+            }
+        }
+        if (starved.length > 0) {
+            ui.warn(`skipping ${starved.length} starved prompt(s) (<${MIN_PROMPT_BYTES / 1000}KB)`);
+            for (const item of starved) {
+                ui.info(`  ${item.name.padEnd(22)} ${item.size}B`);
+            }
+            ui.info('pass --include-small to force-include');
+            pending.length = 0;
+            pending.push(...kept);
+        }
+    }
 
     ui.banner({
         title: 'Batch Paste',

@@ -67,6 +67,13 @@ const MESSAGES = {
         severity: 'fail'
     },
 
+    semantic_garbage: {
+        label: 'Extractor returned unusable data',
+        explanation: 'The extractor returned the right count of fields, but the values are semantically wrong: same description on every item (listing page dump), location strings that are prose, all items sharing one URL (never visited detail pages). Coverage gates cannot detect this -- only structural checks can.',
+        fix: 'Run `pulchowk-events batch refine --only <site>`. The refine prompt now includes the specific semantic failure (description duplicated / no unique url / bloated / insane location) so the LLM targets the actual bug. Common fix: fetch per-role detail pages, extract the role-body element only, never use listing card text as description.',
+        severity: 'error'
+    },
+
     llm_lazy: {
         label: 'LLM claimed field missing but DOM has it',
         explanation: 'The extractor returned items with <field>_status=site_absent, but the wizard\u2019s field-evidence scan found that element in the DOM. The LLM skipped an extractable field and lied about why. This ships hollow items.',
