@@ -30,6 +30,47 @@ async function detectPageState(page) {
     }, BLOCK_PATTERN_SOURCE);
 }
 
+// Quality signal: how much of the critical field set did the extractor
+// actually populate across the item set it returned? classifyOutcome's
+// 'ok' verdict says "we got some items", but doesn't say whether those
+// items are usable. A source returning 5 items with empty descriptions
+// is 'ok' by the old rules -- but it's garbage data reaching /pending,
+// Discord, and the website. Quality is separate from status: status is
+// pass/fail, quality is depth-of-extraction. Batch verify, batch report,
+// and batch deploy can gate on quality independently of verdict.
+//
+// Coverage is per-field across all items in the source run. Default
+// thresholds: >= 90 average = high, >= 50 = medium, < 50 = low.
+//
+// Populated means: description >= 20 chars (prose, not label dump),
+// location non-empty, image non-null (post-enrichment), and deadline
+// non-null (applicationEndsRaw / applicationEndsDate / date /
+// deadlineParsed -- whichever the type uses).
+function computeQuality(items) {
+    if (!Array.isArray(items) || items.length === 0) return null;
+    const n = items.length;
+    let withDesc = 0, withLoc = 0, withImg = 0, withDeadline = 0;
+    for (const it of items) {
+        if (typeof it.description === 'string' && it.description.trim().length > 20) withDesc++;
+        if (it.location && String(it.location).trim()) withLoc++;
+        if (it.image) withImg++;
+        if (it.applicationEndsRaw || it.applicationEndsDate || it.date || it.deadlineParsed) withDeadline++;
+    }
+    const pct = (k) => Math.round(100 * k / n);
+    const avg = Math.round((pct(withDesc) + pct(withLoc) + pct(withImg) + pct(withDeadline)) / 4);
+    const quality = avg >= 90 ? 'high' : avg >= 50 ? 'medium' : 'low';
+    return {
+        quality,
+        score: avg,
+        coverage: {
+            description: `${withDesc}/${n}`,
+            location: `${withLoc}/${n}`,
+            image: `${withImg}/${n}`,
+            deadline: `${withDeadline}/${n}`
+        }
+    };
+}
+
 // Source result shape that classifyOutcome understands:
 //   { items: Item[], meta: { ... } }
 // meta fields (all optional; omitted = unknown):
@@ -55,12 +96,30 @@ async function detectPageState(page) {
 //                                 is configured but not yet wired.
 function classifyOutcome({ items = [], meta = {} } = {}) {
     const count = items.length;
-    if (count > 0) return { status: 'ok', count };
+
+    // Items > 0: ok, with quality signal attached. Callers that want
+    // depth-aware gating can check quality; callers that only care about
+    // "did it work" can ignore it.
+    if (count > 0) {
+        const q = computeQuality(items);
+        return { status: 'ok', count, ...(q || {}) };
+    }
 
     if (meta.extractorMissing) return { status: 'extractor_not_implemented' };
     if (meta.looksBlocked) {
         return { status: 'blocked', bodySnippet: meta.bodySnippet || null };
     }
+
+    // atsEmpty: extractor confirmed the page loaded but has no postings
+    // (e.g. Workable API returned jobs: [], proshore careers page
+    // rendered 78KB but no /careers/<section>/<slug> URLs exist). This
+    // is a legitimate empty state, not drift. Must check BEFORE
+    // listingHits === 0, otherwise every atsEmpty source gets
+    // misclassified as dom_drift_listing.
+    if (meta.atsEmpty) {
+        return { status: 'empty', reason: 'atsEmpty', pagesVisited: meta.pagesVisited || 0 };
+    }
+
     if (meta.listingHits === 0) {
         return { status: 'dom_drift_listing', pagesVisited: meta.pagesVisited || 0 };
     }
