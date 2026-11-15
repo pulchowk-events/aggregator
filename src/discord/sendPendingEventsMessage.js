@@ -102,4 +102,4 @@ async function sendOnePendingEmbed(bot, channel, event) {
     }
 }
 
-module.exports = { sendPendingEventsMessage };
+module.exports = { sendPendingEventsMessage, sendOnePendingEmbed };

@@ -25,7 +25,12 @@ const path = require('path');
 // runtime state stay separated so a forker never has to gitignore a data
 // file they accidentally created next to the source.
 const DATA_DIR = path.resolve(__dirname, '..', '..', 'data');
-const AUDIT_LOG_FILE = path.join(DATA_DIR, 'audit-log.jsonl');
+// Allow tests / tools to redirect audit writes away from data/audit-log.jsonl
+// by setting AUDIT_FILE to an alternate path. Production never sets this, so
+// behavior is unchanged unless explicitly opted in.
+const AUDIT_LOG_FILE = process.env.AUDIT_FILE
+    ? path.resolve(process.env.AUDIT_FILE)
+    : path.join(DATA_DIR, 'audit-log.jsonl');
 
 // Rotation: cap the local file so it can't grow unbounded (mirrors the same
 // pattern already used for cache.expiredEvents, capped at CACHE_CAP). We cap
@@ -62,7 +67,8 @@ function registerDiscordAuditChannel(client, channelId) {
 
 function ensureDataDir() {
     try {
-        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+        const target = path.dirname(AUDIT_LOG_FILE);
+        if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
     } catch (e) {
         console.error('❌ Failed to create data directory for audit log:', e);
     }
@@ -76,9 +82,25 @@ function rotateIfNeeded() {
 
         const content = fs.readFileSync(AUDIT_LOG_FILE, 'utf8');
         const lines = content.split('\n').filter(Boolean);
-        if (lines.length <= MAX_AUDIT_LINES) return;
+        // Drop oldest lines until BOTH constraints are satisfied.
+        // Line-count-only trim is insufficient when recent entries are
+        // large (sanitize_scraped_event embeds the full event object --
+        // ~1KB per line). 5000 lines of fat entries can exceed the 5MB
+        // byte cap on their own, so the file oscillated at 5001 lines /
+        // ~5.6MB forever, never under 5MB.
+        let start = 0;
+        let bytes = stat.size;
+        while (start < lines.length && (lines.length - start) > MAX_AUDIT_LINES) {
+            bytes -= Buffer.byteLength(lines[start], 'utf8') + 1;
+            start++;
+        }
+        while (start < lines.length && bytes > MAX_AUDIT_BYTES) {
+            bytes -= Buffer.byteLength(lines[start], 'utf8') + 1;
+            start++;
+        }
 
-        const trimmed = lines.slice(-MAX_AUDIT_LINES);
+        if (start === 0) return;
+        const trimmed = lines.slice(start);
         fs.writeFileSync(AUDIT_LOG_FILE, trimmed.join('\n') + '\n');
     } catch (error) {
         console.error('❌ Failed to rotate local audit log:', error);
