@@ -49,6 +49,13 @@ async function sendOnePendingEmbed(bot, channel, event) {
     if (!eventHasImage) {
         description += '\n\n🖼️ **No image** - this can never go to a LIVE channel until one is added. Use Customize to add an image URL, or it will stay Test-only.';
     }
+    if (event.locationReview) {
+        const loc = event.location ? '`' + String(event.location).slice(0, 80) + '`' : 'empty';
+        const why = event.locationReview === 'unknown'
+            ? 'filter could not classify'
+            : (event.locationReview === 'geo-error' ? 'classifier error' : 'location was empty');
+        description += `\n\n\u{1F30D} **Location review** - ${why} (${loc}). Verify this is Nepal-relevant before posting live.`;
+    }
     if (event.imageSource === 'placeholder') {
         description += '\n\n\u{1F5BC}\u{FE0F} **Placeholder image** - source site exposed no og:image or favicon; using generated brand PNG. Use Customize to override with a real logo.';
     }

@@ -29,6 +29,7 @@ const { withRetry } = require('../retry');
 const { trimDescriptionToLastSentence } = require('../text');
 const { sanitizeScrapedEvent, sanitizeImageUrl } = require('../sanitize');
 const { deriveImageForUrl, derivePlaceholderForSource } = require('../ogImage');
+const { isNepalRelevant } = require('../../core/geo');
 
 async function runSource(name, type, { withPage, progress }) {
     const { extractor, isStub } = loadExtractor(type, name);
@@ -104,6 +105,32 @@ async function runSource(name, type, { withPage, progress }) {
     // the live-post hasValidImage gate will reject it (same as before).
     // Cost: ~1s latency for the first scrape per domain; cache hit after
     // that. data/og-image-cache.json TTL is 30 days.
+    // Nepal relevance filter (jobs only). Drops foreign items before
+    // enrichment so we don't fetch og:image for posts that will never
+    // be queued. Base-4 sources short-circuit inside geo.js (Nepal-only
+    // by construction). Empty/unknown locations pass through with a
+    // locationReview tag so /pending shows a review badge.
+    if (type === 'jobs') {
+        const before = items.length;
+        items = items.filter((item) => {
+            try {
+                const v = isNepalRelevant(item, name);
+                if (!v.keep) return false;
+                if (v.review) item.locationReview = v.review;
+                return true;
+            } catch (e) {
+                // Fail open -- unknown geo errors keep the item for review
+                item.locationReview = 'geo-error';
+                return true;
+            }
+        });
+        const dropped = before - items.length;
+        if (dropped > 0) {
+            meta.locationDropped = dropped;
+            console.log(`   [${name}] dropped ${dropped} non-Nepal job item(s)`);
+        }
+    }
+
     if (type === 'jobs') {
         const itemsNeedingImage = items.filter((it) => it && !it.image);
         if (itemsNeedingImage.length > 0) {
