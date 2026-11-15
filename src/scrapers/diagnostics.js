@@ -49,20 +49,37 @@ async function detectPageState(page) {
 function computeQuality(items) {
     if (!Array.isArray(items) || items.length === 0) return null;
     const n = items.length;
-    let withDesc = 0, withLoc = 0, withImg = 0, withDeadline = 0;
+    let withTitle = 0, withCompany = 0, withDesc = 0, withLoc = 0, withImg = 0, withDeadline = 0;
     for (const it of items) {
+        if (typeof it.title === 'string' && it.title.trim().length > 0) withTitle++;
+        // company OR organizer OR provider (job/event/scholarship variants)
+        const companyVal = it.company || it.organizer || it.provider;
+        if (companyVal && String(companyVal).trim()) withCompany++;
         if (typeof it.description === 'string' && it.description.trim().length > 20) withDesc++;
         if (it.location && String(it.location).trim()) withLoc++;
         if (it.image) withImg++;
         if (it.applicationEndsRaw || it.applicationEndsDate || it.date || it.deadlineParsed) withDeadline++;
     }
     const pct = (k) => Math.round(100 * k / n);
-    const avg = Math.round((pct(withDesc) + pct(withLoc) + pct(withImg) + pct(withDeadline)) / 4);
-    const quality = avg >= 90 ? 'high' : avg >= 50 ? 'medium' : 'low';
+    // Weighting: title + company are TIER 1 (must extract). Description +
+    // location are Tier 1 for jobs. Image + deadline Tier 2/3. Overall score
+    // weights: title 20% company 20% desc 20% loc 20% img 10% dl 10%.
+    const weighted = (
+        pct(withTitle) * 0.2 +
+        pct(withCompany) * 0.2 +
+        pct(withDesc) * 0.2 +
+        pct(withLoc) * 0.2 +
+        pct(withImg) * 0.1 +
+        pct(withDeadline) * 0.1
+    );
+    const avg = Math.round(weighted);
+    const quality = avg >= 90 ? 'high' : avg >= 60 ? 'medium' : 'low';
     return {
         quality,
         score: avg,
         coverage: {
+            title: `${withTitle}/${n}`,
+            company: `${withCompany}/${n}`,
             description: `${withDesc}/${n}`,
             location: `${withLoc}/${n}`,
             image: `${withImg}/${n}`,

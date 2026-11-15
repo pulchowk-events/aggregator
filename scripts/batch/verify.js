@@ -258,6 +258,8 @@ function parseVerifyOutput(rawStdout) {
     const blockedMatch = stdout.match(/^looksBlocked:\s*(true|false)/m);
     const qualityMatch = stdout.match(/^quality:\s*(high|medium|low)/m);
     const qualityScoreMatch = stdout.match(/^qualityScore:\s*(\d+)/m);
+    const covTitle = stdout.match(/^coverageTitle:\s*(\d+\/\d+)/m);
+    const covCompany = stdout.match(/^coverageCompany:\s*(\d+\/\d+)/m);
     const covDesc = stdout.match(/^coverageDesc:\s*(\d+\/\d+)/m);
     const covLoc = stdout.match(/^coverageLoc:\s*(\d+\/\d+)/m);
     const covImg = stdout.match(/^coverageImg:\s*(\d+\/\d+)/m);
@@ -276,7 +278,9 @@ function parseVerifyOutput(rawStdout) {
         looksBlocked: blockedMatch ? blockedMatch[1] === 'true' : null,
         quality: qualityMatch ? qualityMatch[1] : null,
         qualityScore: qualityScoreMatch ? parseInt(qualityScoreMatch[1], 10) : null,
-        coverage: (covDesc || covLoc || covImg || covDl) ? {
+        coverage: (covTitle || covCompany || covDesc || covLoc || covImg || covDl) ? {
+            title: covTitle ? covTitle[1] : null,
+            company: covCompany ? covCompany[1] : null,
             description: covDesc ? covDesc[1] : null,
             location: covLoc ? covLoc[1] : null,
             image: covImg ? covImg[1] : null,
@@ -362,7 +366,67 @@ function decidePass(parsed, { isTemplate, isHtmlTemplate, resolution, dumpEviden
             };
         }
     }
-    if (parsed.verdict === 'ok') return { pass: true, reason: 'ok' };
+    if (parsed.verdict === 'ok') {
+        // Field coverage gate. An 'ok' verdict means items were returned --
+        // not that they're complete. Any field that's supposed to be present
+        // on every item being missing on most items is a hard fail, because
+        // the extractor is shipping hollow items to /pending, Discord, and
+        // the website. Tier thresholds chosen to be conservative (nepal-based
+        // sources auto-pass empty locations via geo, so 50% is generous).
+        const cov = parsed.coverage || {};
+        const parseCov = (s) => {
+            if (!s) return 1.0;   // no coverage data = pass (empty-ats, etc.)
+            const [a, b] = s.split('/').map(Number);
+            return b > 0 ? a / b : 1.0;
+        };
+        const titlePct = parseCov(cov.title);
+        const companyPct = parseCov(cov.company);
+        const descPct = parseCov(cov.description);
+        const locPct = parseCov(cov.location);
+
+        // Tier 1 mandatory gates. A source that returns N items where any
+        // item has no title is fundamentally broken -- title is the sole
+        // field we can't infer. Company is Tier 1 too (user decision);
+        // anything below 90% suggests an extractor that's not reaching the
+        // employer element. Description at <50% means extractor misses the
+        // role body. Location at <50% is a Tier 1 miss but nepal-based
+        // sources pass empty locations through geo, so it's blocked only
+        // for mixed/foreign sources... handled by the gate failing here
+        // and human deciding whether the source is genuinely location-less.
+        if (titlePct < 1.0) {
+            return {
+                pass: false,
+                reason: 'low_field_coverage',
+                field: 'title',
+                warn: `title missing on ${100 - Math.round(titlePct * 100)}% of items (${cov.title}) -- extractor is not producing usable items`
+            };
+        }
+        if (companyPct < 0.9) {
+            return {
+                pass: false,
+                reason: 'low_field_coverage',
+                field: 'company',
+                warn: `company missing on ${100 - Math.round(companyPct * 100)}% of items (${cov.company}) -- extractor is not reaching the employer element`
+            };
+        }
+        if (descPct < 0.5) {
+            return {
+                pass: false,
+                reason: 'low_field_coverage',
+                field: 'description',
+                warn: `description missing on ${100 - Math.round(descPct * 100)}% of items (${cov.description}) -- extractor is not extracting the role body`
+            };
+        }
+        if (locPct < 0.5) {
+            return {
+                pass: false,
+                reason: 'low_field_coverage',
+                field: 'location',
+                warn: `location missing on ${100 - Math.round(locPct * 100)}% of items (${cov.location}) -- extractor is not reaching the location element`
+            };
+        }
+        return { pass: true, reason: 'ok' };
+    }
 
     if (parsed.verdict === 'empty') {
         if (isTemplate) return { pass: true, reason: 'empty-ats' };

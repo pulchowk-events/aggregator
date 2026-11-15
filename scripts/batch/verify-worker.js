@@ -179,6 +179,8 @@ async function runSite(name) {
             lines.push(`quality: ${verdict.quality}`);
             lines.push(`qualityScore: ${verdict.score}`);
             if (verdict.coverage) {
+                lines.push(`coverageTitle: ${verdict.coverage.title}`);
+                lines.push(`coverageCompany: ${verdict.coverage.company}`);
                 lines.push(`coverageDesc: ${verdict.coverage.description}`);
                 lines.push(`coverageLoc: ${verdict.coverage.location}`);
                 lines.push(`coverageImg: ${verdict.coverage.image}`);

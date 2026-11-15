@@ -130,6 +130,87 @@ For \`${type}\` items that map to a different domain shape (jobs,
 scholarships), see \`src/scrapers/jobs.js\` and
 \`src/scrapers/scholarships.js\` for the additional fields.
 
+## Field requirements
+
+The extractor MUST attempt each field below. Verify rejects extractors
+that produce items missing required fields — a source returning 8 items
+where 0 have a company is a failed extraction, not a passing one.
+
+### Tier 1 — MANDATORY
+
+- **title**: the role name. No title = the item is rejected. Every item
+  MUST have a title.
+- **company**: the employer name. Almost always present in the DOM —
+  site chrome (header logo, og:site_name meta, footer copyright),
+  employment cards, or detail page breadcrumbs. Only mark as
+  `site_absent` when the SITE genuinely does not name the employer
+  anywhere (rare — check first).
+- **url**: the detail page URL, apply URL, or listing-card link. Must
+  be absolute. If the site has no per-item URL, use the listing URL.
+- **location**: the job's physical location. Most sites publish this
+  in a card or detail-page header. Nepla-based sources auto-pass
+  empty locations through the geo filter, but the extractor should
+  still attempt to grab it.
+- **description**: the role body. Usually the largest prose block on
+  the detail page or a dedicated card section. If the site genuinely
+  publishes no role body (rare — check the detail page before
+  claiming), the description can be null but the extractor must
+  still attempt the query.
+
+### Tier 2 — EXPECTED
+
+- **employmentType**: full-time / part-time / contract / internship.
+- **applicationEndsRaw**: the raw apply-by date string. The
+  orchestrator parses it into ISO and drops expired jobs — if you
+  don't set this and the site publishes it, expired jobs will be
+  queued.
+- **image**: per-item image URL. If the site has no per-item image,
+  skip — the orchestrator will synthesize a placeholder.
+- **salary**: any salary/compensation string.
+
+### Tier 3 — OPTIONAL
+
+`experience`, `level`, `openings`, `responsibilities`,
+`requirements`, `skills`, `publishedAt`, `companyUrl`,
+`companyLogoUrl`, `companyDescription`, `companyLocation`,
+`companyAddress`, `attendanceMode`.
+
+### How to report each field's extraction status
+
+For every Tier 1 / Tier 2 field that comes out null on a given item,
+include a sibling field with status + evidence:
+
+\`\`\`js
+{
+    title: "Senior Engineer",
+    company: null,
+    company_status: "site_absent",
+    company_evidence: "searched [class*='company'], [class*='employer'], header logo, og:site_name — no employer name found on listing or detail page",
+    // ...
+}
+\`\`\`
+
+Valid values for `<field>_status`:
+- \`extracted\` — value present, nothing more needed
+- \`site_absent\` — site genuinely does not publish this field; evidence must describe what you searched
+- \`extraction_failed\` — element IS in the DOM but you could not select it cleanly; evidence should include the selector you tried
+
+Verify rejects \`extraction_failed\` on Tier 1 fields and warns on
+\`site_absent\` if the field-evidence block below shows an element
+that matches.
+
+### Traversal strategy (important)
+
+- If the detected site type is \`single-page-cards\` AND the cards
+  contain full role bodies, extract from cards — that's faster.
+- If cards contain only titles / apply CTAs / vacancy counts (no
+  description, no company), DO NOT extract from cards alone — follow
+  each card's link to the detail page and extract there. The
+  \`info_starved_cards\` site type means cards are pointers, not
+  data; navigate to detail pages.
+- For \`listing-to-detail\` sites, always fetch detail pages —
+  the listing card is not the data.
+
 ## Reference example — a working ${detected.type} extractor
 
 \`\`\`js
@@ -149,6 +230,20 @@ ${detail ? `## Evidence dump (sample detail page)
 ${JSON.stringify(detail, null, 2)}
 \`\`\`
 ` : ''}
+
+## Field evidence from this site
+
+Field-oriented DOM evidence — where each field lives on THIS site,
+found by the wizard's per-field scan (JSON-LD JobPosting if present,
+OpenGraph meta, and selector hints). Use this to write selectors that
+actually target the right element. If a field is NOT listed below,
+the wizard found no matching element — that's the site's genuine
+structure, and it's evidence you can cite when setting
+\`<field>_status: "site_absent"\`.
+
+\`\`\`
+${formatFieldEvidenceForPrompt(listing, detail)}
+\`\`\`
 
 ## Verdict (required)
 
@@ -265,6 +360,29 @@ function buildAssumptionsSection(detected, listing, detail) {
     }
 
     return lines.join('\n');
+}
+
+// Format the field-evidence block for the prompt. Falls back gracefully
+// if the dump is from before fieldEvidence.js was wired in.
+function formatFieldEvidenceForPrompt(listing, detail) {
+    try {
+        const { formatEvidenceForPrompt } = require('./fieldEvidence');
+        const parts = [];
+        if (listing && listing.fieldEvidence) {
+            parts.push('### From the listing page');
+            parts.push(formatEvidenceForPrompt(listing.fieldEvidence, 'listing'));
+        }
+        if (detail && detail.fieldEvidence) {
+            parts.push('### From the sample detail page (authoritative for per-item fields)');
+            parts.push(formatEvidenceForPrompt(detail.fieldEvidence, 'detail'));
+        }
+        if (parts.length === 0) {
+            return 'No field evidence captured (dump predates field-evidence scan). Fall back to DOM reasoning from the evidence dump below.';
+        }
+        return parts.join('\n\n');
+    } catch (e) {
+        return 'Field evidence unavailable: ' + e.message;
+    }
 }
 
 module.exports = { buildPrompt };

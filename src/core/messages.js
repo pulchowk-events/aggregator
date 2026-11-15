@@ -66,6 +66,13 @@ const MESSAGES = {
         fix: 'Run `pulchowk-events batch refine --only <site>` to have the LLM take another pass with the failure details in front of it.',
         severity: 'fail'
     },
+
+    low_field_coverage: {
+        label: 'Incomplete field extraction',
+        explanation: 'Extractor returned items, but one or more required fields (title, company, description, or location) are missing on most of them. The site has the data — the extractor is not reaching it. This means hollow items would reach /pending, Discord, and the website.',
+        fix: 'Run `pulchowk-events batch refine --only <site>` — the refine prompt will include field-specific evidence showing which DOM elements the extractor missed. Or manually inspect the extractor and add the missing field extraction.',
+        severity: 'error'
+    },
     'dom_drift_listing': {
         label: 'Could not find the job listing',
         explanation: 'The page loaded fine, but the extractor\'s CSS selectors matched zero elements. The site probably restructured its HTML, or the extractor was written against a page shape that no longer exists.',
