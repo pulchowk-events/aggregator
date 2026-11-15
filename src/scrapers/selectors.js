@@ -20,6 +20,42 @@
 //
 // `opts.attr` selects what to read from the element:
 //   'textContent' (default) | 'href' | 'src' | any attribute name
+//
+// Warning de-duplication: a 20-page scrape previously emitted 20 identical
+// "fell back" warnings, one per page. Now the warning fires ONCE per
+// (source, label, primary, fallback) tuple per scrape cycle. The caller
+// resets the dedup set by calling setSelectorContext(name) at scrape start.
+// Warnings are prefixed with [+Xs] elapsed time and the source name so the
+// log line tells you WHICH source drifted, HOW LONG into the scrape, and
+// WHAT the fallback was — not just "something drifted somewhere."
+
+// ---------- scrape-scoped context ----------
+let _contextSource = null;
+let _contextStartTs = null;
+const _seenFallbackKeys = new Set();
+
+function setSelectorContext(source) {
+    _contextSource = source || null;
+    _contextStartTs = Date.now();
+    _seenFallbackKeys.clear();
+}
+
+function elapsedPrefix() {
+    if (!_contextStartTs) return '';
+    const s = ((Date.now() - _contextStartTs) / 1000).toFixed(2);
+    return `[+${s}s] `;
+}
+
+function emitFallbackWarning(label, primary, fallback) {
+    const key = `${_contextSource || ''}|${label}|${primary}|${fallback}`;
+    if (_seenFallbackKeys.has(key)) return;
+    _seenFallbackKeys.add(key);
+    const src = _contextSource ? `[${_contextSource}] ` : '';
+    console.warn(
+        `${elapsedPrefix()}\u26a0 ${src}${label}: primary "${primary}" matched 0, fell back to "${fallback}". ` +
+        `Further occurrences this scrape are suppressed.`
+    );
+}
 
 async function pickOne(page, selectors, options = {}) {
     const { label = 'value', attr = 'textContent' } = options;
@@ -41,9 +77,7 @@ async function pickOne(page, selectors, options = {}) {
     }, { sels: selectors, attr });
 
     const fellBack = result.index > 0;
-    if (fellBack) {
-        console.warn(`⚠️ [selectors] ${label}: primary "${selectors[0]}" matched nothing, fell back to "${selectors[result.index]}" — update the primary when convenient.`);
-    }
+    if (fellBack) emitFallbackWarning(label, selectors[0], selectors[result.index]);
     return { ...result, fellBack };
 }
 
@@ -70,10 +104,8 @@ async function pickAll(page, selectors, options = {}) {
     }, { sels: selectors, attr });
 
     const fellBack = result.index > 0;
-    if (fellBack) {
-        console.warn(`⚠️ [selectors] ${label}: primary "${selectors[0]}" matched nothing, fell back to "${selectors[result.index]}" — update the primary when convenient.`);
-    }
+    if (fellBack) emitFallbackWarning(label, selectors[0], selectors[result.index]);
     return { ...result, fellBack };
 }
 
-module.exports = { pickOne, pickAll };
+module.exports = { pickOne, pickAll, setSelectorContext };

@@ -25,12 +25,13 @@
 // signal.
 
 const { loadExtractor } = require('../extractors');
+const { setSelectorContext } = require('../selectors');
 const { withRetry } = require('../retry');
 const { trimDescriptionToLastSentence, stripHtml } = require('../text');
 const { sanitizeScrapedEvent, sanitizeImageUrl } = require('../sanitize');
 const { deriveImageForUrl, derivePlaceholderForSource } = require('../ogImage');
 const { isNepalRelevant } = require('../../core/geo');
-const { normalizeDescription } = require('../descriptionNormalize');
+const { applyItemFilters } = require('../itemFilter');
 
 async function runSource(name, type, { withPage, progress }) {
     const { extractor, isStub } = loadExtractor(type, name);
@@ -39,6 +40,10 @@ async function runSource(name, type, { withPage, progress }) {
         console.warn(`⚠️ [${name}] extractor not implemented (only .example.js present) — see src/scrapers/extractors/README.md`);
         return { items: [], meta: { extractorMissing: true } };
     }
+
+    // Set selector context for warning dedup + elapsed prefix. Cleared
+    // per runSource so each source's warnings use its own timer.
+    setSelectorContext(name);
 
     const startedAt = Date.now();
     const meta = {
@@ -82,13 +87,6 @@ async function runSource(name, type, { withPage, progress }) {
         try {
             if (extractor.preprocessItem) item = extractor.preprocessItem(item);
             if (item.description) item.description = stripHtml(item.description);
-            if (type === 'jobs') {
-                item = normalizeDescription(item, name);
-                if (item === null) {
-                    meta.descriptionDropped = (meta.descriptionDropped || 0) + 1;
-                    return null;
-                }
-            }
             if (item.description) item.description = trimDescriptionToLastSentence(item.description, 1500);
             if (item.image) item.image = sanitizeImageUrl(item.image);
             sanitizeScrapedEvent(item, { source: name });
@@ -137,6 +135,38 @@ async function runSource(name, type, { withPage, progress }) {
         if (dropped > 0) {
             meta.locationDropped = dropped;
             console.log(`   [${name}] dropped ${dropped} non-Nepal job item(s)`);
+        }
+    }
+
+    // Universal content-hygiene filter (all item types). Base-4 sources
+    // short-circuit inside itemFilter -- their extractors produce clean
+    // output and any change to already-posted items is regression risk.
+    // Rules in src/config/item-filter-rules.json. Actions:
+    //   drop             -> item = null (never reaches /pending)
+    //   clear_field      -> field = null (item kept)
+    //   strip_from_field -> exact bytes removed (item kept)
+    //   split_field      -> paragraph breaks inserted (content preserved)
+    //   fix_field        -> regex replace (title/description cleanup)
+    //   flag_for_review  -> reviewFlags[] tagged (shown in /pending)
+    if (items.length > 0) {
+        let filterDropped = 0;
+        items = items.filter((item) => {
+            try {
+                const res = applyItemFilters(item, type);
+                if (res.item === null) {
+                    filterDropped++;
+                    return false;
+                }
+                item = res.item;
+                return true;
+            } catch (e) {
+                console.warn(`\u26a0\ufe0f [${name}] itemFilter error on "${item.title || '?'}": ${e.message}`);
+                return true;  // fail open
+            }
+        });
+        if (filterDropped > 0) {
+            meta.descriptionDropped = (meta.descriptionDropped || 0) + filterDropped;
+            console.log(`   [${name}] dropped ${filterDropped} no-role item(s)`);
         }
     }
 

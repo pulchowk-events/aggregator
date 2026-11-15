@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "note": "Universal item-filter rules. Content hygiene only — scope (Nepal relevance) stays in src/core/geo.js. Base-4 sources (sathijob, kumarijob, merojob, internsathi) skip ALL filters here; their extractors produce clean output and any change to posted items is regression risk. Each rule is one decision: drop the item, clear a field, strip bytes from a field, split a field into sections, fix bytes in a field, or flag for human review. Batch refine-filters phase proposes additions to this file from LLM analysis of real scraped items. Hand-edits are for one-off fixes with a stated reason in the rule's `reason` field.",
+  "rules": [
+    {
+      "id": "job-drop-no-roles-markers",
+      "itemType": "job",
+      "action": "drop",
+      "field": "description",
+      "matcher": { "kind": "substring_any", "patterns": [
+        "open_roles = []",
+        "open_roles=[]",
+        "sorry, there are no positions available at this time"
+      ]},
+      "reason": "Extractor scraped a 'no current roles' state message as if it were a job listing.",
+      "risk": "dangerous"
+    },
+    {
+      "id": "job-drop-hard-close-short",
+      "itemType": "job",
+      "action": "drop",
+      "field": "description",
+      "matcher": { "kind": "substring_any", "patterns": [
+        "this vacancy is already fulfilled",
+        "this position has been filled",
+        "this role has been filled",
+        "this role is no longer available",
+        "this position is closed"
+      ]},
+      "guards": [{ "field": "description", "matcher": { "kind": "field_length", "max": 500 } }],
+      "reason": "Short description that is entirely a 'role closed' message. Long descriptions that mention closure in passing are NOT dropped (guarded on length).",
+      "risk": "dangerous"
+    },
+    {
+      "id": "job-clear-evolveasia-marketing",
+      "itemType": "job",
+      "action": "clear_field",
+      "field": "description",
+      "matcher": { "kind": "substring", "pattern": "Mobile platform Web Platform Infrastructure Product, Project Management & Collaboration Product Design Our areas of interest #CloudComputing #SaaS #Kubernetes #DataEngineering #CloudStorage #DataWarehouse #ProductDesign #DistributedComputing #DeepLearning #ArtificialIntelligence #DataVisualization #MaterialDesign" },
+      "reason": "Evolveasia footer/nav blob scraped as description content. Real job, bad description. Item survives with empty description.",
+      "risk": "risky"
+    },
+    {
+      "id": "job-strip-yarsalabs-boilerplate-v1",
+      "itemType": "job",
+      "action": "strip_from_field",
+      "field": "description",
+      "matcher": { "kind": "substring", "pattern": "We are always looking for nice people to join our team. Even if you don't find a role that suits your experience, you can submit your CV for a position that you are interested in. Electronics and Mechanical Engineers, please apply at Yarsa Tech Jobs website." },
+      "reason": "Yarsalabs footer boilerplate. Strip wherever found; real role content (if any) is preserved.",
+      "risk": "safe"
+    },
+    {
+      "id": "job-strip-yarsalabs-boilerplate-v2",
+      "itemType": "job",
+      "action": "strip_from_field",
+      "field": "description",
+      "matcher": { "kind": "substring", "pattern": "We are always looking for nice people to join our team. Even if you don't find a role that suits your experience, you can still send us your resume at careers@yarsalabs.com" },
+      "reason": "Yarsalabs footer boilerplate variant.",
+      "risk": "safe"
+    },
+    {
+      "id": "job-strip-yarsalabs-boilerplate-v3",
+      "itemType": "job",
+      "action": "strip_from_field",
+      "field": "description",
+      "matcher": { "kind": "substring", "pattern": "We are always looking for nice people to join our team. Even if you don't find a role that suits your experience, you can send your resume to careers@yarsalabs.com" },
+      "reason": "Yarsalabs footer boilerplate variant.",
+      "risk": "safe"
+    },
+    {
+      "id": "job-clear-if-only-boilerplate",
+      "itemType": "job",
+      "action": "clear_field",
+      "field": "description",
+      "matcher": { "kind": "regex", "pattern": "^\\s*(We are always looking for nice people[^\\n]*|We are always on the lookout for[^\\n]*|We're always looking for nice people[^\\n]*|We are always looking for talented[^\\n]*|We're always looking for talented[^\\n]*)\\s*$" },
+      "reason": "Description is ENTIRELY a boilerplate prefix with no real content following. Clear rather than strip-to-empty (matches the intent: item survives, description becomes null).",
+      "risk": "risky"
+    },
+    {
+      "id": "job-strip-teslatech-company-prefix",
+      "itemType": "job",
+      "action": "strip_from_field",
+      "field": "description",
+      "matcher": { "kind": "substring", "pattern": "Company Description: Teslatech is an independent mobile game developer based in Lalitpur, Nepal." },
+      "reason": "Teslatech company intro paragraph that appears as the first paragraph of every role.",
+      "risk": "safe"
+    },
+    {
+      "id": "job-strip-neptechpal-company-prefix",
+      "itemType": "job",
+      "action": "strip_from_field",
+      "field": "description",
+      "matcher": { "kind": "substring", "pattern": "Careers At NepTechPal \" Join our teams of professional developers and marketers.\" Careers" },
+      "reason": "NepTechPal company intro paragraph.",
+      "risk": "safe"
+    },
+    {
+      "id": "job-strip-nav-fragments",
+      "itemType": "job",
+      "action": "strip_from_field",
+      "field": "description",
+      "matcher": { "kind": "pipe_segment", "labels": [
+        "apply now", "apply before", "view details", "read more", "share", "save",
+        "learn more", "click here", "apply here",
+        "Home Careers", "Work With Us"
+      ]},
+      "reason": "Navigation labels that get scraped as pipe-delimited description fragments. Only removes them when they appear as standalone pipe segments — never inside prose.",
+      "risk": "safe"
+    },
+    {
+      "id": "job-split-structural-labels",
+      "itemType": "job",
+      "action": "split_field",
+      "field": "description",
+      "matcher": { "kind": "substring_any", "patterns": [
+        "Qualifications:", "Requirements:", "Experience Required:", "Experience:",
+        "Responsibilities:", "Role Summary:", "Job Summary:", "Job Description:",
+        "About Us:", "About the role:", "About this role:", "What you'll do:",
+        "What we offer:", "Benefits:", "Compensation:",
+        "Job Level :", "Department :", "Openings :", "Date Posted :",
+        "Job Type :", "Experience :", "Deadline :", "The Mission",
+        "Experience Level:", "Vacancy:"
+      ]},
+      "reason": "Split run-on descriptions at known section headers. Content preserved verbatim; paragraph breaks inserted at each boundary.",
+      "risk": "safe"
+    },
+    {
+      "id": "job-fix-title-gender-suffix",
+      "itemType": "job",
+      "action": "fix_field",
+      "field": "title",
+      "matcher": { "kind": "regex", "pattern": "\\s*\\((?:f\\/m\\/d|m\\/f\\/d|f\\/m\\/x)\\)\\s*$", "flags": "i" },
+      "replacement": "",
+      "reason": "German gender-notation suffix (f/m/d, m/f/d, f/m/x) is site chrome, not part of the role title.",
+      "risk": "risky"
+    },
+    {
+      "id": "job-fix-title-openings-suffix",
+      "itemType": "job",
+      "action": "fix_field",
+      "field": "title",
+      "matcher": { "kind": "regex", "pattern": "\\s*[-\u2013\u2014]\\s*\\d+\\s*Openings?\\s*$", "flags": "i" },
+      "replacement": "",
+      "reason": "Opening-count suffix appears as site data, not role title.",
+      "risk": "risky"
+    }
+  ]
+}
