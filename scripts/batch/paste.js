@@ -41,19 +41,47 @@ function sleep(ms) {
 }
 
 // Parse-check JS via `node --check` before committing to disk.
+// WSL's clipboard bridge mangles ₹ (U+20B9) to '?' on round-trip. That
+// corrupts currency regexes: /(NPR|Rs\.?|₹|\$)/ becomes
+// /(NPR|Rs\.?|?|\$)/ which won't parse as a regex literal. Detection:
+// a bare '?' between two alternation pipes ('|?|') never appears in
+// valid JS regex -- it's the mangling signature. Restore ₹ before
+// re-validating.
+function autoHealClipboard(code) {
+    return String(code).replace(/\|\?\|/g, '|\u20B9|');
+}
+
 function validateJs(code) {
-    const tmp = path.join(os.tmpdir(), `batch-paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.js`);
-    try {
-        fs.writeFileSync(tmp, code);
-        const r = spawnSync('node', ['--check', tmp], { encoding: 'utf8', timeout: 10000 });
-        if (r.status === 0) return { ok: true };
-        const msg = (r.stderr || r.stdout || 'syntax error').split('\n').slice(0, 3).join(' ').trim();
-        return { ok: false, reason: msg };
-    } catch (e) {
-        return { ok: false, reason: e.message };
-    } finally {
-        try { fs.unlinkSync(tmp); } catch (e) { /* ignore */ }
+    const tryCheck = (c) => {
+        const tmp = path.join(os.tmpdir(), `batch-paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.js`);
+        try {
+            fs.writeFileSync(tmp, c);
+            const r = spawnSync('node', ['--check', tmp], { encoding: 'utf8', timeout: 10000 });
+            if (r.status === 0) return { ok: true, code: c };
+            const msg = (r.stderr || r.stdout || 'syntax error').split('\n').slice(0, 3).join(' ').trim();
+            return { ok: false, reason: msg };
+        } catch (e) {
+            return { ok: false, reason: e.message };
+        } finally {
+            try { fs.unlinkSync(tmp); } catch (e) { /* ignore */ }
+        }
+    };
+
+    const first = tryCheck(code);
+    if (first.ok) return first;
+
+    // Only auto-heal when the failure mode is the clipboard corruption
+    // pattern. Other syntax errors pass through untouched so we don't
+    // mask real bugs in the LLM's output.
+    const healed = autoHealClipboard(code);
+    if (healed !== code) {
+        const second = tryCheck(healed);
+        if (second.ok) {
+            console.warn('  \u26a0\ufe0f  auto-healed clipboard mangling (₹ restored)');
+            return second;
+        }
     }
+    return first;
 }
 
 // Normalize text for clipboard comparison. WSL's clip.exe writes CRLF while
@@ -112,16 +140,27 @@ async function pollClipboardForReply({ timeoutMs, promptBody, name, targetUrl })
         }
 
         // Parse-check + identity check only when the reply is code.
+        let parsed = null;
         if (isExtractorShaped) {
-            const parsed = validateJs(code);
+            parsed = validateJs(code);
             if (!parsed.ok) {
-                if (Date.now() - lastWarn > 30000) {
+                // Broken code for the RIGHT site still advances. Refine
+                // will retry with the specific parse error as evidence.
+                // Broken code for the WRONG site is a stale clipboard --
+                // keep polling.
+                if (!looksLikeRightSite(code, name, targetUrl)) {
+                    if (Date.now() - lastWarn > 15000) {
+                        ui.warn(`parse failed AND does not reference "${name}" -- wrong clipboard? still polling`);
+                        lastWarn = Date.now();
+                    }
+                    continue;
+                }
+                if (Date.now() - lastWarn > 5000) {
                     ui.blank();
-                    ui.warn(`clipboard has JS-shaped content that does not parse: ${parsed.reason.slice(0, 100)}`);
-                    ui.info('copy ONLY the code block from DeepSeek, not the prose around it -- still polling');
+                    ui.warn(`parse failed, writing anyway (refine will retry): ${parsed.reason.slice(0, 100)}`);
                     lastWarn = Date.now();
                 }
-                continue;
+                return { code, raw: cur, parse_failed: true, parse_error: parsed.reason };
             }
             // Identity check: does this extractor reference the current site?
             // If not, likely the user copied a previous site's reply.
@@ -136,7 +175,36 @@ async function pollClipboardForReply({ timeoutMs, promptBody, name, targetUrl })
             }
         }
 
-        return { code, raw: cur };
+        // Negative verdicts (NOT_CAREERS_PAGE, REDIRECT) must reference
+        // the site -- otherwise a stale clipboard from a previous site
+        // could incorrectly mark THIS site as dead, silently losing the
+        // source.
+        if (hasNegativeVerdict && !isExtractorShaped) {
+            const verdictText = (verdictProbe.raw || '') + ' ' + (verdictProbe.evidence || '') + ' ' + cur;
+            if (!looksLikeRightSite(verdictText, name, targetUrl)) {
+                if (Date.now() - lastWarn > 15000) {
+                    ui.warn(`negative verdict does not reference "${name}" -- likely stale clipboard`);
+                    ui.info('ask LLM to include site name in the reason, or copy the reply again');
+                    lastWarn = Date.now();
+                }
+                continue;
+            }
+            // Duplicate-detection: byte-identical negative verdict accepted
+            // for another site in the last 5 min is almost certainly stale.
+            const crypto = require('crypto');
+            const rawHash = crypto.createHash('sha1').update(cur).digest('hex').slice(0, 12);
+            if (module._lastNegVerdictHash === rawHash && Date.now() - (module._lastNegVerdictAt || 0) < 300000) {
+                if (Date.now() - lastWarn > 15000) {
+                    ui.warn(`identical negative verdict accepted for another site recently -- likely stale clipboard`);
+                    lastWarn = Date.now();
+                }
+                continue;
+            }
+            module._lastNegVerdictHash = rawHash;
+            module._lastNegVerdictAt = Date.now();
+        }
+
+        return { code: (parsed && parsed.code) ? parsed.code : code, raw: cur };
     }
     return null;
 }
@@ -195,6 +263,14 @@ function stripVerdictLine(code) {
 //   3. name appears as a word-boundary token in the first 1000 chars
 //      (header comment area -- where LLMs put "// Extractor: <name>")
 function looksLikeRightSite(code, name, targetUrl) {
+    // Collision tolerance: for names ending in -N (e.g. 'adex-2'), accept
+    // if the code references the base name ('adex'). The LLM writes the
+    // site's natural name even when told to use 'adex-2' -- that IS the
+    // correct identity. The -N suffix is only internal file naming.
+    const baseName = name.replace(/-\d+$/, '');
+    if (baseName !== name && code && String(code).includes(baseName)) {
+        return true;
+    }
     if (!code || !name) return false;
     const escName = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -517,8 +593,23 @@ async function runPaste(opts) {
             }
             const parsed = validateJs(finalCode);
             if (!parsed.ok) {
-                ui.fail(`reply is not valid JavaScript: ${parsed.reason}`);
-                ui.info('likely cause: LLM added prose before/after the code block.');
+                // Write the broken code so verify + refine handle it. Log
+                // to parse-fails.jsonl for diagnostics. User is not forced
+                // to fix syntax manually -- refine retries with the error.
+                const outPathBroken = path.join(p.generated, `${name}.js`);
+                fs.writeFileSync(outPathBroken, finalCode);
+                try {
+                    const parseFailLog = path.join(runDir, 'parse-fails.jsonl');
+                    fs.appendFileSync(parseFailLog, JSON.stringify({
+                        name,
+                        at: new Date().toISOString(),
+                        error: parsed.reason.slice(0, 300),
+                        bytes: finalCode.length
+                    }) + '\n');
+                } catch (e) { /* best-effort */ }
+                audit.llmWrite(runDir, { name, lineCount: finalCode.split('\n').length, bytes: finalCode.length });
+                ui.warn(`wrote generated/${name}.js (parse failed: ${parsed.reason.slice(0, 80)})`);
+                ui.info('verify will catch, refine will retry with specific error');
                 failed++;
                 siteDone = true;
                 break;

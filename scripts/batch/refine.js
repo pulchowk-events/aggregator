@@ -36,7 +36,7 @@ const { paths, readClasses, writeClasses, readLatest, resolveRunDir, ensureRunLa
 const { audit } = require('./lib/audit');
 const ui = require('./lib/ui');
 
-const MAX_ATTEMPTS = 5;
+const MAX_ATTEMPTS = 2;
 const STDERR_TAIL_LINES = 40;
 const RETRY_MARKER = '## Prior attempts';
 const RETRY_HEADER = '\n\n---\n\n';

@@ -190,18 +190,10 @@ function runReport(opts) {
     const counts = {};
     for (const r of rows) counts[r.bucket] = (counts[r.bucket] || 0) + 1;
 
-    if (opts.json) {
-        const report = {
-            runDir,
-            generatedAt: new Date().toISOString(),
-            counts,
-            rows
-        };
-            // NEEDS-REVIEW bucket: sources that all recovery strategies failed on.
-    // Previously these landed in needs-review/*.json silently -- the
-    // pipeline finished with N sources vanished. Now they surface in the
-    // report with the dominant failure reason so the human sees exactly
-    // why each source is gone.
+    // NEEDS-REVIEW bucket: sources rejected at discovery AND recovery
+    // exhausted. Collected here (outside the JSON/table branching) so
+    // both output modes see the data. dominant is the most common
+    // failure class across attempts.
     const needsReviewDir = path.join(runDir, 'needs-review');
     const needsReviewRows = [];
     if (fs.existsSync(needsReviewDir)) {
@@ -209,7 +201,6 @@ function runReport(opts) {
             if (!f.endsWith('.json')) continue;
             try {
                 const rec = JSON.parse(fs.readFileSync(path.join(needsReviewDir, f), 'utf8'));
-                // Extract the most common failure reason as a one-liner.
                 const reasons = {};
                 for (const a of rec.attemptedUrls || []) {
                     const r = (a.reason || '').toLowerCase();
@@ -232,6 +223,14 @@ function runReport(opts) {
             } catch (e) { /* skip malformed */ }
         }
     }
+
+    if (opts.json) {
+        const report = {
+            runDir,
+            generatedAt: new Date().toISOString(),
+            counts,
+            rows
+        };
 
 fs.writeFileSync(p.report, JSON.stringify(report, null, 2));
         console.log(JSON.stringify(report, null, 2));
