@@ -197,7 +197,43 @@ function runReport(opts) {
             counts,
             rows
         };
-        fs.writeFileSync(p.report, JSON.stringify(report, null, 2));
+            // NEEDS-REVIEW bucket: sources that all recovery strategies failed on.
+    // Previously these landed in needs-review/*.json silently -- the
+    // pipeline finished with N sources vanished. Now they surface in the
+    // report with the dominant failure reason so the human sees exactly
+    // why each source is gone.
+    const needsReviewDir = path.join(runDir, 'needs-review');
+    const needsReviewRows = [];
+    if (fs.existsSync(needsReviewDir)) {
+        for (const f of fs.readdirSync(needsReviewDir)) {
+            if (!f.endsWith('.json')) continue;
+            try {
+                const rec = JSON.parse(fs.readFileSync(path.join(needsReviewDir, f), 'utf8'));
+                // Extract the most common failure reason as a one-liner.
+                const reasons = {};
+                for (const a of rec.attemptedUrls || []) {
+                    const r = (a.reason || '').toLowerCase();
+                    const cls = r.includes('0 bytes') || r.includes('empty response') ? 'fetch-blocked'
+                        : r.includes('404') ? 'url-404'
+                        : r.includes('no job anchors') || r.includes('marketing page') ? 'no-careers'
+                        : r.includes('timeout') ? 'timeout'
+                        : 'other';
+                    reasons[cls] = (reasons[cls] || 0) + 1;
+                }
+                const dominant = Object.entries(reasons).sort((a,b) => b[1]-a[1])[0];
+                needsReviewRows.push({
+                    name: rec.name || f.replace('.json',''),
+                    originalUrl: rec.originalUrl,
+                    originalReason: rec.originalReason,
+                    attempts: (rec.attemptedUrls || []).length,
+                    dominant: dominant ? dominant[0] : 'unknown',
+                    dominantCount: dominant ? dominant[1] : 0
+                });
+            } catch (e) { /* skip malformed */ }
+        }
+    }
+
+fs.writeFileSync(p.report, JSON.stringify(report, null, 2));
         console.log(JSON.stringify(report, null, 2));
         return report;
     }
@@ -209,7 +245,30 @@ function runReport(opts) {
     console.log(`▶ report: ${runDir}`);
     console.log(`  sources: ${rows.length}`);
     console.log('');
+    if (needsReviewRows.length > 0) {
+        console.log(`    ${String(needsReviewRows.length).padStart(3)}  NEEDS-REVIEW`);
+    }
     console.log('  bucket counts:');
+    // NEEDS-REVIEW section (separate from PASS/FAIL buckets because it's
+    // a distinct outcome: rejected at discovery, recovery exhausted).
+    if (needsReviewRows.length > 0) {
+        console.log('');
+        console.log(`=== NEEDS-REVIEW (${needsReviewRows.length}) ===`);
+        console.log('');
+        console.log('  Sources that were rejected at discovery AND recovery failed.');
+        console.log('  Inspect needs-review/<name>.json for the full attempt log.');
+        console.log('');
+        for (const r of needsReviewRows) {
+            const nameStr = pad(r.name, 22);
+            const reasonStr = (r.originalReason || '').slice(0, 60);
+            console.log(`  ${nameStr}  ${String(r.attempts).padStart(2)} attempts · ${r.dominant} (${r.dominantCount}x) · ${reasonStr}`);
+            console.log(`  ${' '.repeat(22)}  ${r.originalUrl}`);
+        }
+        console.log('');
+        console.log('  To fix: add a working careers URL to urls.txt and re-init, or');
+        console.log('  drop the source. See docs/batch.md#failure-modes.');
+    }
+
     for (const b of BUCKET_ORDER) {
         if (counts[b]) console.log(`    ${String(counts[b]).padStart(3)}  ${b}`);
     }

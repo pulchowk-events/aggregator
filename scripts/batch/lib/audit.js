@@ -79,6 +79,13 @@ const audit = {
         writeAudit(runDir, { phase: 'classify', event: 'collision', name, url, decision: 'renamed', reason: `base name "${baseName}" was taken; using "${name}"`, data: { baseName } })
 };
 
+// Attach writeAudit as a method on the audit object so calls like
+// `audit.writeAudit(runDir, {...})` (used by refine-filters.js and
+// retry-rejected.js) resolve. Prior versions exported writeAudit as a
+// sibling only, so those call sites threw "not a function" at runtime
+// and silently failed on every non-trivial path.
+audit.writeAudit = writeAudit;
+
 // Read all entries for a run. Returns array (possibly empty). Never throws
 // -- returns [] if file missing or unparseable line found (with a warning).
 function readAudit(runDir) {
@@ -92,4 +99,4 @@ function readAudit(runDir) {
     return out;
 }
 
-module.exports = { audit, readAudit };
+module.exports = { audit, writeAudit, readAudit };
