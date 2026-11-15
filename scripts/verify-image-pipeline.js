@@ -28,13 +28,23 @@ try { _fs.mkdirSync(_path.dirname(process.env.AUDIT_FILE), { recursive: true });
 try { _fs.truncateSync(process.env.AUDIT_FILE, 0); } catch { /* missing on first run */ }
 
 const ui = require('../src/core/ui');
-const { runSource }                  = require('../src/scrapers/sources/_orchestrate');
+const axios                          = require('axios');
+const { AttachmentBuilder }          = require('discord.js');
 const { normalizeJobToEventShape }   = require('../src/core/shape');
 const { derivePlaceholderForSource } = require('../src/scrapers/ogImage');
 const { withPage }                   = require('../src/scrapers/browser');
-const axios                          = require('axios');
-const { AttachmentBuilder }          = require('discord.js');
 const { sendOnePendingEmbed }        = require('../src/discord/sendPendingEventsMessage');
+
+// Patch ogImage BEFORE _orchestrate destructures its exports. `_orchestrate`
+// captures `deriveImageForUrl` at require-time, so post-hoc monkey-patching
+// has no effect -- the binding is already resolved. Requiring ogImage here
+// (first), patching it, then requiring _orchestrate below is the only order
+// that works.
+const FORCE_PLACEHOLDER = process.argv.includes('--force-placeholder');
+if (FORCE_PLACEHOLDER) {
+    require('../src/scrapers/ogImage').deriveImageForUrl = async () => null;
+}
+const { runSource } = require('../src/scrapers/sources/_orchestrate');
 
 const SOURCE = process.argv[2] || 'cloudfactory';
 
@@ -202,8 +212,10 @@ async function testPendingRender() {
 
 (async () => {
     ui.banner({
-        title: `verify-image-pipeline: ${SOURCE}`,
-        sub: 'unit + live integration, no Discord, no cache writes'
+        title: `verify-image-pipeline: ${SOURCE}${FORCE_PLACEHOLDER ? ' [force-placeholder]' : ''}`,
+        sub: FORCE_PLACEHOLDER
+            ? 'og:image derivation stubbed to null -- exercises placeholder fallback'
+            : 'unit + live integration, no Discord, no cache writes'
     });
     await testUnit();
     testShape();

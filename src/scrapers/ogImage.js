@@ -64,6 +64,59 @@ function hostOf(url) {
     try { return new URL(url).hostname.toLowerCase(); } catch (e) { return null; }
 }
 
+// Resolve a possibly-relative image URL against the page URL, and upgrade
+// http -> https unconditionally. Two reasons:
+//   1. Discord's CDN serves embeds over https; a raw http URL in
+//      embed.setImage() renders silently with no image in /pending.
+//   2. Most career sites host the same og:image/favicon on both schemes,
+//      so the upgrade almost never 404s. If it does, the embed just
+//      drops the image -- no worse than today's silent http case.
+// Absolute values already on https pass through unchanged.
+function absolutize(candidate, baseUrl) {
+    if (!candidate || typeof candidate !== 'string') return null;
+    try {
+        const abs = new URL(candidate, baseUrl || candidate).href;
+        return abs.replace(/^http:/i, 'https:');
+    } catch (e) {
+        return null;
+    }
+}
+
+// HEAD-check that an upgraded https URL actually resolves. Sites that serve
+// og:image only over http would 404 after the scheme upgrade, silently
+// breaking BOTH /pending (Discord CDN needs https) and the post path
+// (axios.get needs a real resource). Returning null on 404 lets the caller
+// fall through to the GitHub-raw placeholder, which always resolves.
+// Cached alongside the og/favicon entry so this runs once per host/30 days.
+async function probeHttps(url) {
+    if (!url) return null;
+    try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 5000);
+        try {
+            const res = await fetch(url, {
+                method: 'HEAD',
+                signal: ctrl.signal,
+                redirect: 'follow',
+                headers: { 'User-Agent': 'Mozilla/5.0' }
+            });
+            if (res.ok) return url;
+            // Some CDNs refuse HEAD; try a one-byte GET as fallback.
+            const res2 = await fetch(url, {
+                method: 'GET',
+                signal: ctrl.signal,
+                redirect: 'follow',
+                headers: { 'User-Agent': 'Mozilla/5.0', 'Range': 'bytes=0-0' }
+            });
+            return res2.ok ? url : null;
+        } finally {
+            clearTimeout(timer);
+        }
+    } catch (e) {
+        return null;
+    }
+}
+
 // Match a meta tag value by property or name, both attribute orders.
 function matchMeta(html, key) {
     const patterns = [
@@ -96,11 +149,20 @@ async function fetchAndExtract(url) {
         });
         if (!res.ok) return { og: null, favicon: null, status: res.status, error: `HTTP ${res.status}` };
         const html = await res.text();
-        const og = matchMeta(html, 'og:image')
+        const ogRaw = matchMeta(html, 'og:image')
             || matchMeta(html, 'og:image:url')
             || matchMeta(html, 'twitter:image')
             || matchMeta(html, 'twitter:image:src');
-        const favicon = matchFavicon(html, res.url || url);
+        const baseUrl = res.url || url;
+        const ogCandidate = absolutize(ogRaw, baseUrl);
+        const favCandidate = absolutize(matchFavicon(html, baseUrl), baseUrl);
+        // Probe only if we actually upgraded from http (upgrade is the only
+        // path where reachability is uncertain). Pure-https URLs are trusted
+        // as-is -- they came from the site with the right scheme.
+        const ogWasHttp = ogRaw && /^http:\/\//i.test(ogRaw);
+        const favWasHttp = matchFavicon(html, baseUrl) && /^http:\/\//i.test(matchFavicon(html, baseUrl));
+        const og = ogWasHttp ? await probeHttps(ogCandidate) : ogCandidate;
+        const favicon = favWasHttp ? await probeHttps(favCandidate) : favCandidate;
         return { og, favicon, status: res.status };
     } catch (e) {
         return { og: null, favicon: null, status: null, error: e.message };
@@ -126,11 +188,13 @@ async function deriveImageForUrl(url) {
 
     // Successful cache hit within TTL: return immediately.
     if (existing && existing.ok && (now - (existing.fetchedAt || 0)) < TTL_MS) {
-        return existing.og || existing.favicon || null;
+        // Re-absolutize on read so cached http entries from before this
+        // fix get upgraded without waiting for TTL expiry.
+        return absolutize(existing.og, url) || absolutize(existing.favicon, url) || null;
     }
     // Recent failure: don't hammer, return current cached value (null).
     if (existing && !existing.ok && (now - (existing.fetchedAt || 0)) < FAILURE_TTL_MS) {
-        return existing.og || existing.favicon || null;
+        return absolutize(existing.og, url) || absolutize(existing.favicon, url) || null;
     }
 
     // Choose fetch target. Prefer homepage -- deep pages often drop meta tags.
