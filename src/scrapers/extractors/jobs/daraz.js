@@ -37,7 +37,7 @@ module.exports = {
         console.log('??? [daraz] Scraping Alibaba/Daraz careers (filtering to Nepal)...');
 
         meta.pagesVisited++;
-        await page.goto(LISTING_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(LISTING_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
         const state = await detectPageState(page);
         if (state.looksBlocked) {
@@ -216,4 +216,4 @@ module.exports = {
         // Empty result is valid (Nepal may have no openings).
         return { items, meta };
     },
-};
+};

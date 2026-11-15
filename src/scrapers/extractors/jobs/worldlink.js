@@ -42,7 +42,7 @@ module.exports = {
 
             try {
                 meta.pagesVisited++;
-                await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(Math.random() * 1000 + 500);
             } catch (error) {
                 console.warn(`?? [worldlink] Failed to load page ${pageNum} (${pageUrl}): ${error.message}`);
@@ -152,4 +152,4 @@ module.exports = {
 
         return { items, meta };
     }
-};
+};

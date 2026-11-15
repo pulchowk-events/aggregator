@@ -23,7 +23,7 @@ module.exports = {
         console.log('??? [alpastechnology] Scraping Alpas Technology careers...');
 
         meta.pagesVisited++;
-        await page.goto(ALPAS_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(ALPAS_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // let client-side sections settle
 
@@ -177,4 +177,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

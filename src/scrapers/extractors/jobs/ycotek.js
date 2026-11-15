@@ -31,7 +31,7 @@ module.exports = {
         console.log('??? [ycotek] Scraping Ycotek careers...');
 
         meta.pagesVisited++;
-        await page.goto(CAREERS_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
         const state = await detectPageState(page);
         if (state.looksBlocked) {
@@ -165,4 +165,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

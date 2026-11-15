@@ -34,7 +34,7 @@ module.exports = {
         console.log('??? [genesesolution] Scraping Genese Solution careers...');
 
         meta.pagesVisited++;
-        await page.goto(GENESE_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(GENESE_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(3000); // Next.js hydration
 
@@ -252,4 +252,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

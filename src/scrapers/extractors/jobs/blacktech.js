@@ -23,7 +23,7 @@ module.exports = {
         console.log('??? [blacktech] Scraping Black Tech careers...');
 
         meta.pagesVisited++;
-        await page.goto(BLACKTECH_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(BLACKTECH_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000); // Next.js hydration
 
@@ -123,7 +123,7 @@ module.exports = {
             try {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(l.url, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(l.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(800);
 
                 const titleResult = await pickOne(page, [
@@ -218,4 +218,4 @@ module.exports = {
         console.log(`? [blacktech] extracted ${items.length} item(s)`);
         return { items, meta };
     },
-};
+};

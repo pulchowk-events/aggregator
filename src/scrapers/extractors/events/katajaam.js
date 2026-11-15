@@ -46,7 +46,7 @@ module.exports = {
 
             try {
                 meta.pagesVisited++;
-                await page.goto(categoryUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(Math.random() * 1000 + 500);
             } catch (error) {
                 console.warn(`⚠️ [katajaam] Failed to load category ${category}: ${error.message}`);
@@ -82,7 +82,7 @@ module.exports = {
                     console.log(`  📄 [katajaam] Scraping event: ${link}`);
                     meta.pagesVisited++;
                     meta.detailPagesVisited++;
-                    await page.goto(link, { waitUntil: 'networkidle2', timeout: 30000 });
+                    await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 });
                     await delay(Math.random() * 1000 + 500);
 
                     const titleResult = await pickOne(page, SEL.title, { label: `detail title (${link})` });

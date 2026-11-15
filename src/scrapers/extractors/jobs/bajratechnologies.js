@@ -25,7 +25,7 @@ module.exports = {
         console.log('??? [bajratechnologies] Scraping Bajra Technologies jobs...');
 
         meta.pagesVisited++;
-        await page.goto(BAJRA_JOBS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(BAJRA_JOBS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(3000); // Odoo site - let any AJAX job list settle
 
@@ -233,4 +233,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

@@ -42,7 +42,7 @@ module.exports = {
         console.log('??? [manaram] Scraping Manaram Group careers...');
 
         meta.pagesVisited++;
-        await page.goto(MANARAM_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(MANARAM_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // allow any client-side role list to hydrate
 
@@ -288,4 +288,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

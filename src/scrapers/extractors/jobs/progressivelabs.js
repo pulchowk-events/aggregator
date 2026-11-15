@@ -45,7 +45,7 @@ module.exports = {
         console.log('??? [progressivelabs] Scraping Progressive Labs vacancies...');
 
         meta.pagesVisited++;
-        await page.goto(PL_VACANCY_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(PL_VACANCY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000); // Elementor + any lazy section hydration
 
@@ -232,4 +232,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

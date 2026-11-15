@@ -31,6 +31,7 @@ const { ScrapeProgressTracker } = require(path.join(REPO, 'src', 'scrapers', 'pr
 const { loadExtractor } = require(path.join(REPO, 'src', 'scrapers', 'extractors'));
 const { classifyOutcome } = require(path.join(REPO, 'src', 'scrapers', 'diagnostics'));
 const { normalizeByType } = require(path.join(REPO, 'src', 'scrapers', 'scrapeAll'));
+const { runSource } = require(path.join(REPO, 'src', 'scrapers', 'sources', '_orchestrate'));
 
 const TYPES = ['events', 'jobs', 'scholarships'];
 
@@ -100,75 +101,117 @@ async function runSite(name) {
     // Parent's stderrTail in results/<name>.json captures the tail.
     const dbg = (msg) => process.stderr.write(`::: DBG ${name} +${((Date.now()-t0)/1000).toFixed(1)}s ${msg}\n`);
 
-    let work;
-    let browserLaunchMs = 0;
-    if (extractor.browserless) {
-        dbg('extract start (browserless)');
-        work = Promise.resolve().then(() => extractor.extract(null, { progress, meta }));
-    } else {
-        const launchT0 = Date.now();
-        dbg('extract start (browser)');
-        work = withPage((page) => {
-            browserLaunchMs = Date.now() - launchT0;
-            dbg(`browser ready in ${browserLaunchMs}ms, extract running`);
-            return extractor.extract(page, { progress, meta });
-        });
-    }
+    // Production-pipeline verification: runSource applies the full
+    // layer chain (geo filter -> itemFilter -> universalNormalize ->
+    // image enrichment -> shape). Items returned here are what would
+    // reach pendingEvents after a real scrape, not raw extractor output.
+    //
+    // Raw count is derived from layer drop counters rather than a second
+    // extraction pass. Every layer increments its own counter on drop:
+    //   meta.locationDropped    (geo)
+    //   meta.descriptionDropped (itemFilter)
+    //   meta.expiredSkipped     (universalNormalize)
+    // If a new layer is added that drops items, its counter MUST be
+    // added to rawCount below or the delta display will be wrong.
+    const dbgStart = Date.now();
+    dbg('runSource start (full pipeline)');
 
     let timer;
     const timeoutPromise = new Promise((_, reject) => {
         timer = setTimeout(() => reject(Object.assign(new Error('per-site timeout'), { __timedOut: true })), PER_SITE_TIMEOUT_MS);
     });
 
+    let runResult;
     try {
-        const result = await Promise.race([work, timeoutPromise]);
+        runResult = await Promise.race([
+            runSource(name, sourceType, { withPage, progress }),
+            timeoutPromise
+        ]);
         clearTimeout(timer);
-        const sec = Math.round((Date.now() - t0) / 1000);
-        dbg(`extract end (${sec}s, browserLaunch=${browserLaunchMs}ms)`);
-        const verdict = classifyOutcome(result);
-
-        const lines = [
-            `items: ${result.items.length}`,
-            `verdict: ${verdict.status}`,
-            `listingHits: ${meta.listingHits}`,
-            `detailPages: ${meta.detailPagesVisited}`,
-            `parseFailures: ${meta.detailParseFailures}`,
-            `looksBlocked: ${meta.looksBlocked}`,
-            `duration: ${sec}s`
-        ];
-        if (result.items.length > 0) {
-            lines.push('--- first 3 items ---');
-            for (let j = 0; j < Math.min(3, result.items.length); j++) {
-                const it = normalizeByType(result.items[j], sourceType);
-                lines.push(`[${j}] ${it.title}`);
-            }
-        }
-        emit(name, lines);
     } catch (e) {
         clearTimeout(timer);
         const sec = Math.round((Date.now() - t0) / 1000);
-        dbg(`extract FAILED (${sec}s): ${e && e.message}`);
+        dbg(`runSource FAILED (${sec}s): ${e && e.message}`);
         if (e && e.__timedOut) {
             emit(name, [
-                'items: 0', 'verdict: timeout',
+                'items: 0', 'rawItems: 0', 'verdict: timeout',
                 'listingHits: 0', 'detailPages: 0', 'parseFailures: 0', 'looksBlocked: false',
                 `duration: ${sec}s`,
                 `error: per-site timeout ${PER_SITE_TIMEOUT_MS}ms`
             ]);
-            // Exit cleanly instead of trying closeBrowser(). The wedged
-            // page's closeBrowser() call is what hung cloudfactory for
-            // 57s in a previous run. Cost of exit: next worker pays ~1-2s
-            // browser launch. Cost of hung closeBrowser: 40s starvation.
-            // Easy trade.
+            // Exit cleanly (same reasoning as prior extract timeout path).
             process.exit(0);
-        } else {
-            emit(name, [
-                'items: 0', 'verdict: parse_failed',
-                'listingHits: 0', 'detailPages: 0', 'parseFailures: 0', 'looksBlocked: false',
-                `duration: ${sec}s`,
-                `error: ${String(e && e.message || 'unknown').replace(/\n/g, ' ')}`
-            ]);
         }
+        emit(name, [
+            'items: 0', 'rawItems: 0', 'verdict: parse_failed',
+            'listingHits: 0', 'detailPages: 0', 'parseFailures: 0', 'looksBlocked: false',
+            `duration: ${sec}s`,
+            `error: ${String(e && e.message || 'unknown').replace(/\n/g, ' ')}`
+        ]);
+        return;
+    }
+
+    try {
+        const sec = Math.round((Date.now() - t0) / 1000);
+        dbg(`runSource end (${sec}s, total)`);
+
+        const result = runResult;
+        const rmeta = result.meta || {};
+        const verdict = classifyOutcome(result);
+
+        // Derive raw (pre-layer) item count from drop counters.
+        const rawCount = result.items.length
+            + (rmeta.locationDropped || 0)
+            + (rmeta.descriptionDropped || 0)
+            + (rmeta.expiredSkipped || 0);
+
+        const lines = [
+            `items: ${result.items.length}`,
+            `rawItems: ${rawCount}`,
+            `verdict: ${verdict.status}`,
+            `listingHits: ${rmeta.listingHits || 0}`,
+            `detailPages: ${rmeta.detailPagesVisited || 0}`,
+            `parseFailures: ${rmeta.detailParseFailures || 0}`,
+            `looksBlocked: ${rmeta.looksBlocked || false}`,
+            `duration: ${sec}s`
+        ];
+        if (verdict.quality) {
+            lines.push(`quality: ${verdict.quality}`);
+            lines.push(`qualityScore: ${verdict.score}`);
+            if (verdict.coverage) {
+                lines.push(`coverageDesc: ${verdict.coverage.description}`);
+                lines.push(`coverageLoc: ${verdict.coverage.location}`);
+                lines.push(`coverageImg: ${verdict.coverage.image}`);
+                lines.push(`coverageDeadline: ${verdict.coverage.deadline}`);
+            }
+        }
+        // Per-layer drop breakdown. Only emit nonzero counters so the
+        // stdout stays compact for clean sources.
+        if (rmeta.locationDropped > 0) lines.push(`layerGeoDropped: ${rmeta.locationDropped}`);
+        if (rmeta.descriptionDropped > 0) lines.push(`layerFilterDropped: ${rmeta.descriptionDropped}`);
+        if (rmeta.expiredSkipped > 0) lines.push(`layerExpiredDropped: ${rmeta.expiredSkipped}`);
+        if (rmeta.navDumpsCleared > 0) lines.push(`layerNavCleared: ${rmeta.navDumpsCleared}`);
+        if (rmeta.qualLeaksCleared > 0) lines.push(`layerQualCleared: ${rmeta.qualLeaksCleared}`);
+        if (rmeta.imagesEnriched > 0) lines.push(`layerImagesAdded: ${rmeta.imagesEnriched}`);
+        if (rmeta.timedOut) lines.push(`timedOut: true`);
+
+        if (result.items.length > 0) {
+            lines.push('--- first 3 items ---');
+            for (let j = 0; j < Math.min(3, result.items.length); j++) {
+                lines.push(`[${j}] ${result.items[j].title}`);
+            }
+        }
+        emit(name, lines);
+    } catch (e) {
+        // Inner try/catch tail for unexpected errors during emit processing.
+        const sec = Math.round((Date.now() - t0) / 1000);
+        dbg(`emit processing FAILED (${sec}s): ${e && e.message}`);
+        emit(name, [
+            'items: 0', 'rawItems: 0', 'verdict: parse_failed',
+            'listingHits: 0', 'detailPages: 0', 'parseFailures: 0', 'looksBlocked: false',
+            `duration: ${sec}s`,
+            `error: ${String(e && e.message || 'unknown').replace(/\n/g, ' ')}`
+        ]);
     }
 }
 

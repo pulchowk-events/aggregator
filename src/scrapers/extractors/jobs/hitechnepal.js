@@ -40,7 +40,7 @@ module.exports = {
         console.log('??? [hitechnepal] Scraping HiTech Nepal careers...');
 
         meta.pagesVisited++;
-        await page.goto(HITECH_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(HITECH_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 
@@ -272,4 +272,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

@@ -38,7 +38,7 @@ module.exports = {
         console.log('??? [intuji] Scraping Intuji careers...');
 
         meta.pagesVisited++;
-        await page.goto(INTUJI_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(INTUJI_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // Next.js hydration
 
@@ -267,4 +267,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

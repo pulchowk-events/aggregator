@@ -27,7 +27,7 @@ module.exports = {
         console.log('??? [cloco] Scraping Cloco careers...');
 
         meta.pagesVisited++;
-        await page.goto(CLOCO_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(CLOCO_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // Vue hydration
 
@@ -261,7 +261,7 @@ module.exports = {
             try {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(link, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(800);
 
                 const detail = await page.evaluate(() => {
@@ -349,4 +349,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

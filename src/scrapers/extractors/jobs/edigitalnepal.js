@@ -34,7 +34,7 @@ module.exports = {
         console.log('??? [edigitalnepal] Scraping eDigital Nepal careers...');
 
         meta.pagesVisited++;
-        await page.goto(EDIGITAL_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(EDIGITAL_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(3500); // Next.js hydration + reveal animations
 
@@ -300,4 +300,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

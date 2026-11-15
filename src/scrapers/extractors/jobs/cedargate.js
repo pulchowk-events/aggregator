@@ -29,7 +29,7 @@ module.exports = {
         console.log('??? [cedargate] Scraping Cedar Gate careers...');
 
         meta.pagesVisited++;
-        await page.goto(CEDARGATE_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(CEDARGATE_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(3000); // WP + possible ATS iframe
 
@@ -258,4 +258,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

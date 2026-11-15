@@ -225,7 +225,26 @@ function runReport(opts) {
             const v = (r.verdict || '-').padEnd(18);
             const items = r.items === null || r.items === undefined ? '-' : String(r.items);
             const collTag = r.collided ? ` ${r.baseName}->${r.name}` : '';
-            console.log(`  ${pad(r.name, 22)}  ${t}  ${v}  items=${items.padStart(3)}  ${r.reason || ''}${collTag}`);
+            // Quality + raw-delta column. r.verify (the persisted verify
+            // result) carries quality, score, rawItems, and per-layer
+            // counters when the worker ran through runSource.
+            const vv = verifySummary[r.name];
+            let qtag = '';
+            if (vv && vv.quality) {
+                const q = vv.quality.padEnd(6);
+                const marker = vv.quality === 'high' ? 'high  ' : vv.quality === 'medium' ? 'med   ' : 'LOW   ';
+                qtag = `  quality=${marker}`;
+            }
+            let rawDelta = '';
+            if (vv && vv.rawItems != null && vv.rawItems !== r.items) {
+                const drops = [];
+                if (vv.layers && vv.layers.geoDropped) drops.push(`geo-${vv.layers.geoDropped}`);
+                if (vv.layers && vv.layers.filterDropped) drops.push(`filter-${vv.layers.filterDropped}`);
+                if (vv.layers && vv.layers.expiredDropped) drops.push(`expired-${vv.layers.expiredDropped}`);
+                const dropStr = drops.length ? ` (${drops.join(',')})` : '';
+                rawDelta = `  raw=${vv.rawItems}->${r.items}${dropStr}`;
+            }
+            console.log(`  ${pad(r.name, 22)}  ${t}  ${v}  items=${items.padStart(3)}${qtag}${rawDelta}  ${r.reason || ''}${collTag}`);
             if (opts.verbose && r.url) console.log(`    ${r.url}`);
             if (opts.verbose && r.followedFrom) console.log(`    (followed from ${r.followedFrom})`);
             if (opts.verbose && r.redirectUrl) console.log(`    (redirect target: ${r.redirectUrl} · hop ${r.redirectHop})`);

@@ -25,7 +25,7 @@ module.exports = {
         console.log('??? [adex] Scraping Adex careers...');
 
         meta.pagesVisited++;
-        await page.goto(ADEX_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(ADEX_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(3000); // let any JS-rendered careers section settle
 
@@ -168,4 +168,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

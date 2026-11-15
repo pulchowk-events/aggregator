@@ -42,7 +42,7 @@ module.exports = {
         console.log('??? [hazesoft] Scraping Hazesoft careers...');
 
         meta.pagesVisited++;
-        await page.goto(HAZESOFT_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(HAZESOFT_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000);
 
@@ -278,4 +278,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

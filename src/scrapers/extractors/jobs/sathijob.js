@@ -210,7 +210,7 @@ module.exports = {
     async extract(page, { progress, meta }) {
         console.log('🕷️ [sathijob] Scraping listing...');
         meta.pagesVisited++;
-        await page.goto(SATHIJOB_LIST_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(SATHIJOB_LIST_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
         await delay(2000 + Math.random() * 1500);
 
         try {
@@ -233,7 +233,7 @@ module.exports = {
                 console.log(`  📄 [sathijob] Scraping job: ${link}`);
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(link, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(800 + Math.random() * 800);
 
                 const raw = await scrapeDetail(page);

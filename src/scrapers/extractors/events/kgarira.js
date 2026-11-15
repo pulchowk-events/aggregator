@@ -75,7 +75,7 @@ module.exports = {
             console.log(`🕷️ [kgarira] Scraping listing page ${pageNum}`);
             try {
                 meta.pagesVisited++;
-                await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(Math.random() * 1000 + 500);
                 // Container may differ; wait for any event link or fall through.
                 await page.waitForSelector('a[href^="/events/"]', { timeout: 10000 });
@@ -115,7 +115,7 @@ module.exports = {
                     console.log(`  📄 [kgarira] Scraping event: ${link}`);
                     meta.pagesVisited++;
                     meta.detailPagesVisited++;
-                    await page.goto(link, { waitUntil: 'networkidle2', timeout: 30000 });
+                    await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 });
                     await delay(Math.random() * 1000 + 500);
 
                     const extracted = await page.evaluate(() => {

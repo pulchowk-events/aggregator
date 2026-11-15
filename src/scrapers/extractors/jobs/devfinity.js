@@ -28,7 +28,7 @@ module.exports = {
         console.log('??? [devfinity] Scraping Devfinity careers...');
 
         meta.pagesVisited++;
-        await page.goto(DEVFINITY_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(DEVFINITY_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // WP + possible JS-rendered job list
 
@@ -245,4 +245,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

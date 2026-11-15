@@ -71,11 +71,57 @@ if (!sourceType) {
         console.log('=== result ===');
         console.log('items:',        result.items.length);
         console.log('verdict:',      verdict.status);
+        if (verdict.quality) {
+            // Quality signal computed on RAW extractor output. This runs
+            // extractor.extract directly -- it does NOT run the production
+            // pipeline layers (geo filter, itemFilter, universalNormalize,
+            // image enrichment, shape). So:
+            //   - item count here != items that reach pendingEvents
+            //     (geo drops foreign, itemFilter drops no-role markers,
+            //      universalNormalize drops expired)
+            //   - image coverage here will be 0/N unless the extractor
+            //     scrapes images itself (enrichment doesn't run)
+            //   - deadline coverage here may miss deadlines that
+            //     universalNormalize would parse from applicationEndsRaw
+            // Tagged [raw] so it's not confused with production quality.
+            // For post-layer quality, run `pulchowk-events verify <name>`
+            // through the full orchestrator (scrapeAll on one source).
+            console.log('quality:',      `[raw] ${verdict.quality} (score ${verdict.score})`);
+            if (verdict.coverage) {
+                const cov = verdict.coverage;
+                const fmt = (v) => {
+                    const [a, b] = String(v).split('/').map(Number);
+                    const pct = b > 0 ? a / b : 0;
+                    const mark = pct >= 0.9 ? 'ok' : pct >= 0.5 ? 'warn' : 'fail';
+                    return `${v}  ${mark}`;
+                };
+                console.log('  description ', fmt(cov.description));
+                console.log('  location    ', fmt(cov.location));
+                console.log('  image       ', fmt(cov.image));
+                console.log('  deadline    ', fmt(cov.deadline));
+                // Field-specific hint about the weakest field, if any.
+                const gaps = [
+                    { field: 'description', frac: numFrac(cov.description), hint: 'extractor missing role-body selector for some items' },
+                    { field: 'location',    frac: numFrac(cov.location),    hint: 'location not extracted on every item -- check selector' },
+                    { field: 'image',       frac: numFrac(cov.image),       hint: 'og:image / placeholder enrichment failed on some items' },
+                    { field: 'deadline',    frac: numFrac(cov.deadline),    hint: 'no applicationEndsRaw / date / deadlineParsed on some items' }
+                ].filter((g) => g.frac < 0.5).sort((a, b) => a.frac - b.frac);
+                if (gaps.length > 0) {
+                    console.log('  hint:', `${gaps[0].field} coverage weakest (${gaps[0].hint})`);
+                }
+            }
+        }
         console.log('listingHits:',  meta.listingHits);
         console.log('detailPages:',  meta.detailPagesVisited);
         console.log('parseFailures:', meta.detailParseFailures);
         console.log('looksBlocked:', meta.looksBlocked);
         console.log('duration:',     Math.round(durationMs / 1000) + 's');
+
+        // Small helper for coverage-fraction math used by quality display.
+        function numFrac(s) {
+            const [a, b] = String(s).split('/').map(Number);
+            return b > 0 ? a / b : 0;
+        }
 
         if (result.items.length > 0) {
             console.log('');

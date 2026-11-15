@@ -43,7 +43,7 @@ module.exports = {
         console.log('??? [vianet] Scraping Vianet vacancies...');
 
         meta.pagesVisited++;
-        await page.goto(VIANET_VACANCY_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(VIANET_VACANCY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 

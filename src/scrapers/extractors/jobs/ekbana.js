@@ -36,7 +36,7 @@ module.exports = {
         console.log('??? [ekbana] Scraping EKbana careers...');
 
         meta.pagesVisited++;
-        await page.goto(EKBANA_JOBS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(EKBANA_JOBS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000);
 
@@ -274,4 +274,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

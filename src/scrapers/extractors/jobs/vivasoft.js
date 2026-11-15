@@ -20,7 +20,7 @@ module.exports = {
         const items = [];
 
         meta.pagesVisited++;
-        await page.goto(VIVASOFT_ENTRY_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(VIVASOFT_ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await delay(Math.random() * 1000 + 500);
 
         try {
@@ -102,4 +102,4 @@ module.exports = {
 
         return { items, meta };
     }
-};
+};

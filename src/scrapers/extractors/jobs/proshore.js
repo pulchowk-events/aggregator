@@ -120,8 +120,39 @@ module.exports = {
         }
 
         if (jobLinks.length === 0 && cards.length === 0) {
-            console.log('?? [proshore] No openings found - returning empty.');
+
+            // Distinguish genuine empty from drift. The page might load fine
+            // but have no openings (this is a Webflow careers page that
+            // always has content -- nav, footer, marketing sections -- but
+            // job cards only appear when there are active roles). Confirm
+            // the page actually rendered by checking body text length.
+            // Genuine-empty sites have 10K+ chars of content; drift (SPA
+            // shell, capture page, blank load) has <500 chars.
+            //
+            // meta.atsEmpty = true is the same signal ATS templates use;
+            // classifyOutcome treats it as a pass, not dom_drift_listing.
+            try {
+                const bodyText = await page.evaluate(
+                    () => (document.body.innerText || '').trim()
+                );
+                if (bodyText.length > 500) {
+                    meta.atsEmpty = true;
+                    console.log(
+                        '?? [proshore] No openings found (page rendered ' +
+                        bodyText.length + ' chars) - genuine empty, not drift.'
+                    );
+                } else {
+                    console.log(
+                        '?? [proshore] No openings found but body text is only ' +
+                        bodyText.length + ' chars - treating as drift.'
+                    );
+                }
+            } catch (e) {
+                /* best-effort; leave meta.atsEmpty unset */
+            }
+
             return { items, meta };
+
         }
 
         // --- Stage 5a: follow per-job detail links ---------------------------
@@ -396,7 +427,15 @@ async function harvestJobLinks(page) {
         }
         if (u.origin !== ORIGIN) continue;
         if (NON_JOB_PATH.test(u.pathname)) continue;
-        if (/^\/careers?\/?$/i.test(u.pathname)) continue;
+
+        // Proshore's URL structure: /careers (listing), /careers/<section>
+        // (category tab like 'tech' or 'operations'), /careers/<section>/<slug>
+        // (real job detail). Filtering by segment count is more robust than a
+        // hardcoded section-name whitelist -- adding a new category tab
+        // doesn't need a code change.
+        const segs = u.pathname.split('/').filter(Boolean);
+        if (segs.length === 2 && /^careers?$/i.test(segs[0])) continue;
+
         if (!JOB_PATH.test(u.pathname)) continue;
         if (seen.has(u.href)) continue;
         seen.add(u.href);

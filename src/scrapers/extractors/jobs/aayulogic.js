@@ -28,7 +28,7 @@ module.exports = {
         console.log('??? [aayulogic] Scraping Aayulogic careers...');
 
         meta.pagesVisited++;
-        await page.goto(CAREERS_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
         // Cloudflare / captcha check on the first (and only) load.
         const state = await detectPageState(page);
@@ -227,4 +227,4 @@ module.exports = {
         // Empty listing is valid - return cleanly, don't throw.
         return { items, meta };
     }
-};
+};

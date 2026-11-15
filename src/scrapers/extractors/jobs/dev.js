@@ -31,7 +31,7 @@ module.exports = {
         console.log('??? [dev] Scraping Programiz careers...');
 
         meta.pagesVisited++;
-        await page.goto(CAREERS_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
         const state = await detectPageState(page);
         if (state.looksBlocked) {
@@ -93,7 +93,7 @@ module.exports = {
                 console.log(`  ?? [dev] detail: ${link.url}`);
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(link.url, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(link.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(400);
 
                 const detail = await page.evaluate(() => {
@@ -204,4 +204,4 @@ module.exports = {
         // Empty is valid when Programiz has no open roles.
         return { items, meta };
     },
-};
+};

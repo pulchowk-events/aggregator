@@ -34,7 +34,7 @@ module.exports = {
 
         // ---- Stage 1: listing ----
         meta.pagesVisited++;
-        await page.goto(FONEPAY_CAREER_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(FONEPAY_CAREER_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 
@@ -155,7 +155,7 @@ module.exports = {
             try {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(l.url, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(l.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(800);
 
                 const titleResult = await pickOne(page, [
@@ -248,4 +248,4 @@ module.exports = {
         console.log(`? [fonepay] extracted ${items.length} item(s)`);
         return { items, meta };
     },
-};
+};

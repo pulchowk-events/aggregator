@@ -33,7 +33,7 @@ module.exports = {
         console.log('??? [docsumo] Scraping Docsumo careers...');
 
         meta.pagesVisited++;
-        await page.goto(DOCSUMO_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(DOCSUMO_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // Next.js hydration
 
@@ -248,4 +248,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

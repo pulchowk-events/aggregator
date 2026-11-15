@@ -251,16 +251,46 @@ async function pool(items, concurrency, worker) {
 function parseVerifyOutput(rawStdout) {
     const stdout = stripAnsi(rawStdout);
     const itemsMatch = stdout.match(/^items:\s*(\d+)/m);
+    const rawItemsMatch = stdout.match(/^rawItems:\s*(\d+)/m);
     const listingHitsMatch = stdout.match(/^listingHits:\s*(\d+)/m);
     const verdictMatch = stdout.match(/^verdict:\s*(\w+)/m);
     const durMatch = stdout.match(/^duration:\s*(\d+)s/m);
     const blockedMatch = stdout.match(/^looksBlocked:\s*(true|false)/m);
+    const qualityMatch = stdout.match(/^quality:\s*(high|medium|low)/m);
+    const qualityScoreMatch = stdout.match(/^qualityScore:\s*(\d+)/m);
+    const covDesc = stdout.match(/^coverageDesc:\s*(\d+\/\d+)/m);
+    const covLoc = stdout.match(/^coverageLoc:\s*(\d+\/\d+)/m);
+    const covImg = stdout.match(/^coverageImg:\s*(\d+\/\d+)/m);
+    const covDl = stdout.match(/^coverageDeadline:\s*(\d+\/\d+)/m);
+    const layer = (key) => {
+        const m = stdout.match(new RegExp('^' + key + ':\s*(\\d+)', 'm'));
+        return m ? parseInt(m[1], 10) : 0;
+    };
+    const timedOutMatch = stdout.match(/^timedOut:\s*true/m);
     return {
         items: itemsMatch ? parseInt(itemsMatch[1], 10) : null,
+        rawItems: rawItemsMatch ? parseInt(rawItemsMatch[1], 10) : null,
         listingHits: listingHitsMatch ? parseInt(listingHitsMatch[1], 10) : null,
         verdict: verdictMatch ? verdictMatch[1] : null,
         durationSec: durMatch ? parseInt(durMatch[1], 10) : null,
-        looksBlocked: blockedMatch ? blockedMatch[1] === 'true' : null
+        looksBlocked: blockedMatch ? blockedMatch[1] === 'true' : null,
+        quality: qualityMatch ? qualityMatch[1] : null,
+        qualityScore: qualityScoreMatch ? parseInt(qualityScoreMatch[1], 10) : null,
+        coverage: (covDesc || covLoc || covImg || covDl) ? {
+            description: covDesc ? covDesc[1] : null,
+            location: covLoc ? covLoc[1] : null,
+            image: covImg ? covImg[1] : null,
+            deadline: covDl ? covDl[1] : null
+        } : null,
+        layers: {
+            geoDropped: layer('layerGeoDropped'),
+            filterDropped: layer('layerFilterDropped'),
+            expiredDropped: layer('layerExpiredDropped'),
+            navCleared: layer('layerNavCleared'),
+            qualCleared: layer('layerQualCleared'),
+            imagesAdded: layer('layerImagesAdded')
+        },
+        timedOut: Boolean(timedOutMatch)
     };
 }
 
@@ -316,14 +346,19 @@ function decidePass(parsed, { isTemplate, isHtmlTemplate, resolution, dumpEviden
     // culture/values section passed hasJobishContent and then produced
     // 0-2 "job titles" that were actually marketing copy. It "passes"
     // the verdict check but produces no real jobs -- fail it explicitly.
+    // low_precision guard: template matched wrong card group. Guard is
+    // FALSE POSITIVE when post-layer items are low but RAW items match
+    // listingHits -- that means the layers (geo/filter/expired) correctly
+    // dropped noise, not that the template is broken. Use raw count when
+    // available for the ratio, not post-layer count.
     if (parsed.verdict === 'ok' && parsed.listingHits && parsed.listingHits > 3) {
-        const kept = parsed.items || 0;
-        const ratio = kept / parsed.listingHits;
+        const keptForRatio = (parsed.rawItems != null) ? parsed.rawItems : (parsed.items || 0);
+        const ratio = keptForRatio / parsed.listingHits;
         if (ratio < 0.3) {
             return {
                 pass: false,
                 reason: 'low_precision',
-                warn: `extractor kept ${kept}/${parsed.listingHits} cards (${Math.round(ratio*100)}%) -- template matched the wrong group`
+                warn: `extractor kept ${keptForRatio}/${parsed.listingHits} cards (${Math.round(ratio*100)}%) -- template matched the wrong group`
             };
         }
     }

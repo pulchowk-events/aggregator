@@ -52,7 +52,7 @@ module.exports = {
 
         // ---- Stage 1: category selector page ----
         meta.pagesVisited++;
-        await page.goto(YARSA_JOBS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(YARSA_JOBS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await delay(Math.random() * 1000 + 500);
 
         try {
@@ -117,7 +117,7 @@ module.exports = {
 
             try {
                 meta.pagesVisited++;
-                await page.goto(categoryUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(Math.random() * 800 + 400);
             } catch (error) {
                 console.warn(`?? [yarsalabs] Failed to load category ${categoryUrl}: ${error.message}`);
@@ -164,7 +164,7 @@ module.exports = {
             try {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(job.url, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(job.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(Math.random() * 800 + 400);
 
                 const titleResult = await pickOne(page, SEL.title, { label: `detail title (${job.url})` });
@@ -230,4 +230,4 @@ module.exports = {
 
         return { items, meta };
     }
-};
+};

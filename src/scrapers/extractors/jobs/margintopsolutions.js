@@ -26,7 +26,7 @@ module.exports = {
 
         // --- Stage 1: load the /career listing ---------------------------------
         meta.pagesVisited++;
-        await page.goto(ENTRY_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await delay(800);
 
         try {
@@ -244,4 +244,4 @@ module.exports = {
 
         return { items, meta };
     }
-};
+};

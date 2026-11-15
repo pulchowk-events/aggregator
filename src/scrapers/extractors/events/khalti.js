@@ -11,7 +11,7 @@ module.exports = {
     async extract(page, { progress, meta }) {
         console.log('🕷️ [khalti] Scraping Khalti events...');
         meta.pagesVisited++;
-        await page.goto(KHALTI_EVENTS_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(KHALTI_EVENTS_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
         await page.waitForSelector('div.css-pm9gn2', { timeout: 15000 });
         await delay(6000); // let images finish loading
 

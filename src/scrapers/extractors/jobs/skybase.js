@@ -44,7 +44,7 @@ module.exports = {
 
         // ---- Stage 1: listing ----
         meta.pagesVisited++;
-        await page.goto(SKYBASE_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(SKYBASE_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 
@@ -133,7 +133,7 @@ module.exports = {
             try {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(l.url, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(l.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(700);
 
                 const titleResult = await pickOne(page, [
@@ -257,4 +257,4 @@ module.exports = {
         console.log(`? [skybase] extracted ${items.length} item(s)`);
         return { items, meta };
     },
-};
+};

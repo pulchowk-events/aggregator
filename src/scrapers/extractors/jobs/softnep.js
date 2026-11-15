@@ -39,7 +39,7 @@ module.exports = {
         console.log('??? [softnep] Scraping SoftNEP careers...');
 
         meta.pagesVisited++;
-        await page.goto(SOFTNEP_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(SOFTNEP_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000); // WordPress + wow.js fadeInUp
 
@@ -289,4 +289,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

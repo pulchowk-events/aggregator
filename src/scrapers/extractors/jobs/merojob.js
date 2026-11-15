@@ -72,7 +72,7 @@ async function gatherLinks(page) {
         if (!nextHref) break;
         const nextUrl = nextHref.startsWith('http') ? nextHref : `${MEROJOB_BASE_URL}${nextHref}`;
         await delay(1000 + Math.random() * 800);
-        await page.goto(nextUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
         await harvestVisible();
     }
 
@@ -183,7 +183,7 @@ module.exports = {
         for (const categoryUrl of MEROJOB_CATEGORY_URLS) {
             console.log(`🕷️ [merojob] Scraping category: ${categoryUrl}`);
             meta.pagesVisited++;
-            await page.goto(categoryUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+            await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
             await delay(1500 + Math.random() * 1000);
 
             if (meta.pagesVisited === 1) {
@@ -216,7 +216,7 @@ module.exports = {
                 console.log(`  📄 [merojob] Scraping job: ${link}`);
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(link, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await delay(800 + Math.random() * 800);
 
                 const raw = await scrapeDetail(page);

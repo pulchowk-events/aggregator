@@ -151,7 +151,7 @@ module.exports = {
 
             try {
                 meta.pagesVisited++;
-                await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+                await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
                 await delay(1000 + Math.random() * 800);
             } catch (error) {
                 console.warn(`⚠️ [erasmusmundus] failed to load page ${pageNum}: ${error.message}`);
@@ -197,7 +197,7 @@ module.exports = {
                     console.log(`  📄 [erasmusmundus] Scraping project: ${card.title}`);
                     meta.pagesVisited++;
                     meta.detailPagesVisited++;
-                    await page.goto(card.detailUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+                    await page.goto(card.detailUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
                     await delay(700 + Math.random() * 600);
 
                     const raw = await scrapeDetail(page);

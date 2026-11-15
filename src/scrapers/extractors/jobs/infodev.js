@@ -27,7 +27,7 @@ module.exports = {
         const items = [];
 
         meta.pagesVisited++;
-        await page.goto(ENTRY_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await delay(800);
 
         try {
@@ -206,4 +206,4 @@ module.exports = {
         safeUnitDone(progress, items.length);
         return { items, meta };
     }
-};
+};

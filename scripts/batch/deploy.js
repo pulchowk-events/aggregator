@@ -37,12 +37,13 @@ const SRC_SOURCES = path.join(REPO, 'src', 'scrapers', 'sources', 'jobs');
 const SRC_EXTRACTORS = path.join(REPO, 'src', 'scrapers', 'extractors', 'jobs');
 
 function parseArgs(argv) {
-    const args = { runId: null, only: null, force: false, type: 'jobs' };
+    const args = { runId: null, only: null, force: false, forceLowQuality: false, type: 'jobs' };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--run' && argv[i + 1]) { args.runId = argv[++i]; }
         else if (a === '--only' && argv[i + 1]) { args.only = argv[++i].split(',').map((s) => s.trim()).filter(Boolean); }
         else if (a === '--force') { args.force = true; }
+        else if (a === '--force-low-quality') { args.forceLowQuality = true; }
         else if (a === '--type' && argv[i + 1]) { args.type = argv[++i]; }
     }
     return args;
@@ -95,10 +96,20 @@ function runDeploy(opts) {
     const missingGenerated = [];
     const notPassing = [];
     const alreadyExists = [];
+    const lowQuality = [];
 
     for (const [name, r] of Object.entries(summary)) {
         if (opts.only && !opts.only.includes(name)) continue;
         if (!r.pass) { notPassing.push(name); continue; }
+        // Quality gate: 'low' quality extractors produce garbage in
+        // production (empty descriptions, missing locations, no deadline
+        // parsing). Refuse deploy unless operator overrides with
+        // --force-low-quality. Sources that returned zero items (empty-ats,
+        // empty-wizard) have r.quality === undefined and pass through.
+        if (r.quality === 'low' && !opts.forceLowQuality) {
+            lowQuality.push({ name, score: r.score, coverage: r.coverage, reason: r.reason });
+            continue;
+        }
         const genPath = path.join(p.generated, `${name}.js`);
         if (!fs.existsSync(genPath)) { missingGenerated.push(name); continue; }
         const extractorDest = path.join(srcExtractorsDir, `${name}.js`);
@@ -107,7 +118,7 @@ function runDeploy(opts) {
             alreadyExists.push(name);
             continue;
         }
-        deployable.push({ name, genPath, extractorDest, wrapperDest, items: r.items || 0, reason: r.reason });
+        deployable.push({ name, genPath, extractorDest, wrapperDest, items: r.items || 0, quality: r.quality || null, reason: r.reason });
     }
 
     ui.info(`passing: ${Object.values(summary).filter((x) => x.pass).length} / ${Object.keys(summary).length}`);
@@ -115,6 +126,14 @@ function runDeploy(opts) {
     if (alreadyExists.length > 0) ui.info(`  skipped (already in src/): ${alreadyExists.length} -- use --force to overwrite`);
     if (missingGenerated.length > 0) ui.info(`  skipped (no generated file): ${missingGenerated.length}`);
     if (notPassing.length > 0) ui.info(`  skipped (did not pass verify): ${notPassing.length}`);
+    if (lowQuality.length > 0) {
+        ui.info(`  skipped (low quality -- use --force-low-quality to override): ${lowQuality.length}`);
+        for (const lq of lowQuality) {
+            const cov = lq.coverage || {};
+            const covStr = [cov.description, cov.location, cov.image, cov.deadline].filter(Boolean).join(' ');
+            ui.info(`    ${lq.name.padEnd(22)} score=${lq.score}  ${covStr}`);
+        }
+    }
     ui.blank();
 
     if (deployable.length === 0) {

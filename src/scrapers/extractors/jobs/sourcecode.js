@@ -40,7 +40,7 @@ module.exports = {
         console.log('??? [sourcecode] Scraping Source Code join-us page...');
 
         meta.pagesVisited++;
-        await page.goto(SOURCECODE_CAREERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(SOURCECODE_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
         await page.waitForSelector('body', { timeout: 15000 });
 
         // Angular SPA - give the router + components time to hydrate.
@@ -305,4 +305,4 @@ module.exports = {
 
         return { items, meta };
     },
-};
+};

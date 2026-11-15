@@ -98,7 +98,7 @@ module.exports = {
 
                 try {
                     meta.pagesVisited++;
-                    await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+                    await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
                     await delay(1200 + Math.random() * 1000);
                 } catch (error) {
                     console.warn(`⚠️ [scholarshipsads] failed to load ${category.key} page ${pageNum}: ${error.message}`);
