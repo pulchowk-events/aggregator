@@ -30,7 +30,7 @@
 //   3. Emit one item per career-box; role description from the first
 //      meaningful <p>; location absent in evidence  null.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -41,7 +41,7 @@ module.exports = {
         console.log('??? [growbydata] Scraping GrowByData careers...');
 
         meta.pagesVisited++;
-        await page.goto(GBD_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, GBD_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 

@@ -28,7 +28,7 @@
 //   4) otherwise returns [] gracefully - never invents items from the
 //      marketing/legal copy.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -39,7 +39,7 @@ module.exports = {
         console.log('??? [gurkhatech] Scraping Gurkha Technology careers...');
 
         meta.pagesVisited++;
-        await page.goto(GURKHA_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, GURKHA_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 

@@ -34,7 +34,7 @@
 // Do not invent selectors beyond the evidence-based card pattern
 // (title  "Mode (Location)"  Apply); everything else is defensive.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -45,7 +45,7 @@ module.exports = {
         console.log('??? [progressivelabs] Scraping Progressive Labs vacancies...');
 
         meta.pagesVisited++;
-        await page.goto(PL_VACANCY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, PL_VACANCY_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000); // Elementor + any lazy section hydration
 

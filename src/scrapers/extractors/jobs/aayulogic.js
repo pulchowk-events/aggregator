@@ -10,7 +10,7 @@
 // inside header/nav/footer so CTA text like "Talk to Our Engineering Team"
 // can't be mistaken for a role.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 const { sanitizeImageUrl } = require('../../sanitize');
@@ -28,7 +28,7 @@ module.exports = {
         console.log('??? [aayulogic] Scraping Aayulogic careers...');
 
         meta.pagesVisited++;
-        await page.goto(CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await loadPage(page, CAREERS_URL, { timeout: 60000 });
 
         // Cloudflare / captcha check on the first (and only) load.
         const state = await detectPageState(page);

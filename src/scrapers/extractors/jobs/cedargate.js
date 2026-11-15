@@ -18,7 +18,7 @@
 //     iframe URL uniquely identifies the board, which we skip to avoid
 //     inventing items). Return an empty list if nothing real is found.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -29,7 +29,7 @@ module.exports = {
         console.log('??? [cedargate] Scraping Cedar Gate careers...');
 
         meta.pagesVisited++;
-        await page.goto(CEDARGATE_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, CEDARGATE_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(3000); // WP + possible ATS iframe
 

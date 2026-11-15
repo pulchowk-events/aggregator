@@ -28,7 +28,7 @@
 //   4) heading + sibling Apply control card fallback
 // Return [] gracefully when nothing real is found.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -39,7 +39,7 @@ module.exports = {
         console.log('??? [lunover] Scraping Lunover careers...');
 
         meta.pagesVisited++;
-        await page.goto(LUNOVER_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, LUNOVER_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // Next.js hydration
 

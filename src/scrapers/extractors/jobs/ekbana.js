@@ -25,7 +25,7 @@
 //     is required (we still try a job-detail href if the card exposes one).
 //   - No pagination evidence - skip pagination loops.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -36,7 +36,7 @@ module.exports = {
         console.log('??? [ekbana] Scraping EKbana careers...');
 
         meta.pagesVisited++;
-        await page.goto(EKBANA_JOBS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, EKBANA_JOBS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000);
 

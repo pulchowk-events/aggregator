@@ -31,7 +31,7 @@
 // Return [] gracefully when nothing real is found - never invent items
 // from marketing copy.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -42,7 +42,7 @@ module.exports = {
         console.log('??? [hazesoft] Scraping Hazesoft careers...');
 
         meta.pagesVisited++;
-        await page.goto(HAZESOFT_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, HAZESOFT_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000);
 

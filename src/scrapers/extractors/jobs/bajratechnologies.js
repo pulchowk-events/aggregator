@@ -14,7 +14,7 @@
 //     "Openings"/"Jobs"). Return empty list if none found rather than
 //     invent items.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -25,7 +25,7 @@ module.exports = {
         console.log('??? [bajratechnologies] Scraping Bajra Technologies jobs...');
 
         meta.pagesVisited++;
-        await page.goto(BAJRA_JOBS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, BAJRA_JOBS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(3000); // Odoo site - let any AJAX job list settle
 

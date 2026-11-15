@@ -12,7 +12,7 @@
 // intentionally avoid inventing a brittle card class and instead anchor
 // on the /jobs/<slug> href pattern and general <main> heading structure.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 const { sanitizeImageUrl } = require('../../sanitize');
@@ -30,7 +30,7 @@ module.exports = {
         console.log('??? [sussol] Scraping Sussol jobs...');
 
         meta.pagesVisited++;
-        await page.goto(LISTING_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await loadPage(page, LISTING_URL, { timeout: 60000 });
 
         const state = await detectPageState(page);
         if (state.looksBlocked) {
@@ -87,7 +87,7 @@ module.exports = {
                 console.log(`  ?? [sussol] detail: ${link.url}`);
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(link.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, link.url);
                 await delay(400);
 
                 const detail = await page.evaluate(() => {

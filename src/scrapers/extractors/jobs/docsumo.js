@@ -22,7 +22,7 @@
 // headings inside an "Open roles"-style block. If no roles are found,
 // return [] gracefully (the site's current behaviour is email-only).
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -33,7 +33,7 @@ module.exports = {
         console.log('??? [docsumo] Scraping Docsumo careers...');
 
         meta.pagesVisited++;
-        await page.goto(DOCSUMO_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, DOCSUMO_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // Next.js hydration
 

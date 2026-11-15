@@ -29,7 +29,7 @@
 // Return [] gracefully if the roles section is empty (the page may only
 // have a "Send your CV" mailto and nothing else).
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -40,7 +40,7 @@ module.exports = {
         console.log('??? [hitechnepal] Scraping HiTech Nepal careers...');
 
         meta.pagesVisited++;
-        await page.goto(HITECH_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, HITECH_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 

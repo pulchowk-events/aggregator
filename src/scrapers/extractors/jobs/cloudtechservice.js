@@ -19,7 +19,7 @@
 // (JSON-LD JobPosting  job-shaped detail anchors  role headings inside
 // the #cr-positions block). If none are found, return [] gracefully.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -30,7 +30,7 @@ module.exports = {
         console.log('??? [cloudtechservice] Scraping CloudTechService careers...');
 
         meta.pagesVisited++;
-        await page.goto(CLOUDTECH_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, CLOUDTECH_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000);
 

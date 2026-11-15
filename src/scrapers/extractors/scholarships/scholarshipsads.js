@@ -11,7 +11,7 @@
 // Cloudflare-challenged, so the round-trip cost more than the coverage it
 // added. See docs/scrapers.md "Reference: the 10 current sources".
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 const { buildScholarship } = require('../../scholarships');
@@ -98,7 +98,7 @@ module.exports = {
 
                 try {
                     meta.pagesVisited++;
-                    await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                    await loadPage(page, pageUrl, { timeout: 60000 });
                     await delay(1200 + Math.random() * 1000);
                 } catch (error) {
                     console.warn(`⚠️ [scholarshipsads] failed to load ${category.key} page ${pageNum}: ${error.message}`);

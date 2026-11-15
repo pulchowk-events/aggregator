@@ -10,7 +10,7 @@
 //      it only when it's a well-formed http(s) URL; otherwise registrationUrl
 //      falls back to the KumariJob detail page itself.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 const {
@@ -83,7 +83,7 @@ async function gatherLinks(page) {
         if (!nextHref) break;
         const nextUrl = nextHref.startsWith('http') ? nextHref : `${KUMARIJOB_BASE_URL}${nextHref}`;
         await delay(1000 + Math.random() * 800);
-        await page.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await loadPage(page, nextUrl, { timeout: 60000 });
         await harvestVisible();
     }
 
@@ -143,7 +143,7 @@ module.exports = {
         for (const categoryUrl of KUMARIJOB_CATEGORY_URLS) {
             console.log(`🕷️ [kumarijob] Scraping category: ${categoryUrl}`);
             meta.pagesVisited++;
-            await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await loadPage(page, categoryUrl, { timeout: 60000 });
             await delay(1500 + Math.random() * 1000);
 
             if (meta.pagesVisited === 1) {
@@ -175,7 +175,7 @@ module.exports = {
                 console.log(`  📄 [kumarijob] Scraping job: ${link}`);
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, link);
                 await delay(800 + Math.random() * 800);
 
                 const raw = await scrapeDetail(page);

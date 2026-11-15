@@ -9,7 +9,7 @@
 // / deadline, then navigate each detail page for the full job description.
 // Detail title selector confirmed from evidence: h2.primary-gradient-text.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { pickOne } = require('../../selectors');
 const { detectPageState } = require('../../diagnostics');
@@ -23,7 +23,7 @@ module.exports = {
         console.log('??? [blacktech] Scraping Black Tech careers...');
 
         meta.pagesVisited++;
-        await page.goto(BLACKTECH_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, BLACKTECH_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000); // Next.js hydration
 
@@ -123,7 +123,7 @@ module.exports = {
             try {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(l.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, l.url);
                 await delay(800);
 
                 const titleResult = await pickOne(page, [

@@ -14,7 +14,7 @@
 //               containing a.group[href^="mailto:"] with a per-job
 //               data shape: "NN | <type> | <title> | <blurb>".
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -26,7 +26,7 @@ module.exports = {
 
         // --- Stage 1: load the /career listing ---------------------------------
         meta.pagesVisited++;
-        await page.goto(ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, ENTRY_URL);
         await delay(800);
 
         try {

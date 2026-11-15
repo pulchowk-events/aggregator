@@ -28,7 +28,7 @@
 //      block headings and site chrome.
 // Return [] gracefully if the openings list is empty.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -39,7 +39,7 @@ module.exports = {
         console.log('??? [softnep] Scraping SoftNEP careers...');
 
         meta.pagesVisited++;
-        await page.goto(SOFTNEP_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, SOFTNEP_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000); // WordPress + wow.js fadeInUp
 

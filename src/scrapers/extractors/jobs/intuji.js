@@ -27,7 +27,7 @@
 //      crawl it - the target extractor is a different domain.
 //   5. Return [] gracefully if no roles are found.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -38,7 +38,7 @@ module.exports = {
         console.log('??? [intuji] Scraping Intuji careers...');
 
         meta.pagesVisited++;
-        await page.goto(INTUJI_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, INTUJI_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // Next.js hydration
 

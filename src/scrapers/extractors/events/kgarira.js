@@ -11,7 +11,7 @@
 //     JSON-LD (Event) still present on detail pages — this is the primary
 //     data source; HTML fallback only fills gaps.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 const { pickOne } = require('../../selectors');
@@ -75,7 +75,7 @@ module.exports = {
             console.log(`🕷️ [kgarira] Scraping listing page ${pageNum}`);
             try {
                 meta.pagesVisited++;
-                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, url);
                 await delay(Math.random() * 1000 + 500);
                 // Container may differ; wait for any event link or fall through.
                 await page.waitForSelector('a[href^="/events/"]', { timeout: 10000 });
@@ -115,7 +115,7 @@ module.exports = {
                     console.log(`  📄 [kgarira] Scraping event: ${link}`);
                     meta.pagesVisited++;
                     meta.detailPagesVisited++;
-                    await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                    await loadPage(page, link);
                     await delay(Math.random() * 1000 + 500);
 
                     const extracted = await page.evaluate(() => {

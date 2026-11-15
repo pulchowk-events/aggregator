@@ -16,7 +16,7 @@
 //     block. If roles have real detail links, we navigate them. If not, we
 //     keep listing-only items. Return an empty list if nothing real exists.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -27,7 +27,7 @@ module.exports = {
         console.log('??? [cloco] Scraping Cloco careers...');
 
         meta.pagesVisited++;
-        await page.goto(CLOCO_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, CLOCO_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // Vue hydration
 
@@ -261,7 +261,7 @@ module.exports = {
             try {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, link);
                 await delay(800);
 
                 const detail = await page.evaluate(() => {

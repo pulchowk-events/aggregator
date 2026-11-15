@@ -21,7 +21,7 @@
 // Selector drift history:
 //   2026-11-14: initial robust extractor - replaces the 0-item attempt.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { pickOne } = require('../../selectors');
 const { detectPageState } = require('../../diagnostics');
@@ -59,10 +59,7 @@ module.exports = {
         // --- Stage 1: load /career/ ------------------------------------------
         meta.pagesVisited++;
         try {
-            await page.goto(ENTRY_URL, {
-                waitUntil: 'domcontentloaded',
-                timeout: 45000
-            });
+            await loadPage(page, ENTRY_URL, { timeout: 45000 });
         } catch (error) {
             console.warn(
                 `?? [technorio] navigation failed: ${error.message}`
@@ -287,10 +284,7 @@ module.exports = {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
 
-                await page.goto(c.href, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 45000
-                });
+                await loadPage(page, c.href, { timeout: 45000 });
                 await delay(1000);
 
                 const titleResult = await pickOne(page, SEL.detailTitle, {
@@ -405,4 +399,4 @@ module.exports = {
 
         return { items, meta };
     }
-};
+};

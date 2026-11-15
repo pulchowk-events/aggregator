@@ -31,7 +31,7 @@
 //      benefit/path headings from the dump.
 // Return [] gracefully if nothing real is found.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -42,7 +42,7 @@ module.exports = {
         console.log('??? [manaram] Scraping Manaram Group careers...');
 
         meta.pagesVisited++;
-        await page.goto(MANARAM_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, MANARAM_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // allow any client-side role list to hydrate
 

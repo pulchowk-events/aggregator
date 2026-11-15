@@ -16,7 +16,7 @@
 //    required by the site type.
 //   Description is not on the card; left null.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 const { sanitizeImageUrl } = require('../../sanitize');
@@ -37,7 +37,7 @@ module.exports = {
         console.log('??? [daraz] Scraping Alibaba/Daraz careers (filtering to Nepal)...');
 
         meta.pagesVisited++;
-        await page.goto(LISTING_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await loadPage(page, LISTING_URL, { timeout: 60000 });
 
         const state = await detectPageState(page);
         if (state.looksBlocked) {

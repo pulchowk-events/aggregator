@@ -29,7 +29,7 @@
 //   5) Return [] gracefully if there are no real roles - never emit
 //      product cards or footer links as jobs.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -40,7 +40,7 @@ module.exports = {
         console.log('??? [sourcecode] Scraping Source Code join-us page...');
 
         meta.pagesVisited++;
-        await page.goto(SOURCECODE_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, SOURCECODE_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
 
         // Angular SPA - give the router + components time to hydrate.

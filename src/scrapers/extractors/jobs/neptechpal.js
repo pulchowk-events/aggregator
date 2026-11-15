@@ -17,7 +17,7 @@
 //     we use conservative H1 + main-text selectors and rely on the
 //     listing-provided title + metadata when the detail page is thin.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { pickOne } = require('../../selectors');
 const { detectPageState } = require('../../diagnostics');
@@ -40,10 +40,7 @@ module.exports = {
         // --- Stage 1: load the /careers listing ---------------------------------
         meta.pagesVisited++;
         try {
-            await page.goto(ENTRY_URL, {
-                waitUntil: 'domcontentloaded',
-                timeout: 45000
-            });
+            await loadPage(page, ENTRY_URL, { timeout: 45000 });
         } catch (error) {
             console.warn(
                 `?? [neptechpal] listing navigation failed: ${error.message}`
@@ -173,10 +170,7 @@ module.exports = {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
 
-                await page.goto(card.href, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 45000
-                });
+                await loadPage(page, card.href, { timeout: 45000 });
                 await delay(700);
 
                 const titleResult = await pickOne(page, SEL.detailTitle, {
@@ -348,4 +342,4 @@ function parseCardMeta(cardText) {
     if (expMatch) out.experience = expMatch[1];
 
     return out;
-}
+}

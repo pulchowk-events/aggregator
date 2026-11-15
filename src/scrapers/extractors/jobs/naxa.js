@@ -32,7 +32,7 @@
 // Return [] gracefully when nothing real is found - never emit culture
 // cards or nav links as jobs.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -43,7 +43,7 @@ module.exports = {
         console.log('??? [naxa] Scraping NAXA Work-With-Us page...');
 
         meta.pagesVisited++;
-        await page.goto(NAXA_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, NAXA_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // React SPA hydration
 

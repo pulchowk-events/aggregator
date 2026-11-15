@@ -13,7 +13,7 @@
 //    in H1.title-section__title, description in the main content block.
 //    We use generic fallbacks since the job-page DOM wasn't in the dump.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 const { sanitizeImageUrl } = require('../../sanitize');
@@ -31,7 +31,7 @@ module.exports = {
         console.log('??? [dev] Scraping Programiz careers...');
 
         meta.pagesVisited++;
-        await page.goto(CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await loadPage(page, CAREERS_URL, { timeout: 60000 });
 
         const state = await detectPageState(page);
         if (state.looksBlocked) {
@@ -93,7 +93,7 @@ module.exports = {
                 console.log(`  ?? [dev] detail: ${link.url}`);
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(link.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, link.url);
                 await delay(400);
 
                 const detail = await page.evaluate(() => {

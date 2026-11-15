@@ -23,7 +23,7 @@
 //               title anchor = h3 > a[href^="https://teslatech.com.np/hiring/"];
 //               meta = ul.job-nature li items (Office / Full Time / etc.).
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -39,10 +39,7 @@ module.exports = {
         // --- Stage 1: load the /careers/ listing -----------------------------
         meta.pagesVisited++;
         try {
-            await page.goto(ENTRY_URL, {
-                waitUntil: 'domcontentloaded',
-                timeout: 20000
-            });
+            await loadPage(page, ENTRY_URL, { timeout: 20000 });
         } catch (error) {
             console.warn(
                 `?? [teslatech] listing navigation failed: ${error.message}`

@@ -12,7 +12,7 @@
 //     headings from that section defensively. If no role headings exist,
 //     we return an empty list rather than inventing items.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -23,7 +23,7 @@ module.exports = {
         console.log('??? [alpastechnology] Scraping Alpas Technology careers...');
 
         meta.pagesVisited++;
-        await page.goto(ALPAS_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, ALPAS_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // let client-side sections settle
 

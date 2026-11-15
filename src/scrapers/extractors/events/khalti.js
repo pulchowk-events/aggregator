@@ -2,7 +2,7 @@
 // Ported to contract form: browser lifecycle + retry + sanitize now live
 // in sources/_orchestrate.js, so this file is ONLY the DOM work.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 
 const KHALTI_EVENTS_URL = 'https://events.khalti.com/';
@@ -11,7 +11,7 @@ module.exports = {
     async extract(page, { progress, meta }) {
         console.log('🕷️ [khalti] Scraping Khalti events...');
         meta.pagesVisited++;
-        await page.goto(KHALTI_EVENTS_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await loadPage(page, KHALTI_EVENTS_URL, { timeout: 60000 });
         await page.waitForSelector('div.css-pm9gn2', { timeout: 15000 });
         await delay(6000); // let images finish loading
 

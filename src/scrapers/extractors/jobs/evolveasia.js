@@ -17,7 +17,7 @@
 //   - Role titles have a leading zero-width space (U+200B) - strip it.
 //   - No pagination on the listing (hasNextRel false, no load-more).
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { pickOne } = require('../../selectors');
 const { detectPageState } = require('../../diagnostics');
@@ -32,7 +32,7 @@ module.exports = {
 
         // ---- Stage 1: listing page ----
         meta.pagesVisited++;
-        await page.goto(EVOLVE_JOBS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, EVOLVE_JOBS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 
@@ -113,7 +113,7 @@ module.exports = {
             try {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(l.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, l.url);
                 await delay(700);
 
                 // Detail H1 is the global hero, so still trust the listing

@@ -20,7 +20,7 @@
 //   2026-11-14: detail link pattern is per-card anchor, not /news/.
 //   2026-11-14: pagination is /career/page/N/ (cap at 10 pages).
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -42,7 +42,7 @@ module.exports = {
 
             try {
                 meta.pagesVisited++;
-                await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, pageUrl);
                 await delay(Math.random() * 1000 + 500);
             } catch (error) {
                 console.warn(`?? [worldlink] Failed to load page ${pageNum} (${pageUrl}): ${error.message}`);

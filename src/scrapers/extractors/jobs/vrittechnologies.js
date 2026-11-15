@@ -19,7 +19,7 @@
 //               to the text node preceding "Experience Level:".
 //   2026-11-14: listing anchor pattern is /jobs/<slug>, NOT /vrittech/.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -34,7 +34,7 @@ module.exports = {
         const items = [];
 
         meta.pagesVisited++;
-        await page.goto(VRIT_JOBS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, VRIT_JOBS_URL);
         await delay(Math.random() * 1000 + 500);
 
         try {

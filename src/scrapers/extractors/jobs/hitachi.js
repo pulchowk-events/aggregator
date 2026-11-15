@@ -12,7 +12,7 @@
 //   - site structure changed (cards nested differently)
 //   -> run \`pulchowk-events diagnose hitachi\` or \`pulchowk-events fix hitachi\`
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 const { sanitizeJobFields } = require('../../jobs');
@@ -24,7 +24,7 @@ module.exports = {
     async extract(page, { progress, meta }) {
         console.log('🕷️ [hitachi] Scraping listing...');
         meta.pagesVisited++;
-        await page.goto(LISTING_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await loadPage(page, LISTING_URL, { timeout: 60000 });
         await delay(1500 + Math.random() * 1000);
 
         // Block check before doing any DOM work.

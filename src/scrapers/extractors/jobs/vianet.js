@@ -32,7 +32,7 @@
 //   3. safeDiscovered + safeUnitDone, meta.listingHits.
 //   4. Return [] if there are no cards.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -43,7 +43,7 @@ module.exports = {
         console.log('??? [vianet] Scraping Vianet vacancies...');
 
         meta.pagesVisited++;
-        await page.goto(VIANET_VACANCY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, VIANET_VACANCY_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 

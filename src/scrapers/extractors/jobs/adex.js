@@ -14,7 +14,7 @@
 //     we extract defensively: prefer JSON-LD JobPosting, then anchor heuristics,
 //     and return an empty array gracefully if nothing scrapeable exists.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -25,7 +25,7 @@ module.exports = {
         console.log('??? [adex] Scraping Adex careers...');
 
         meta.pagesVisited++;
-        await page.goto(ADEX_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, ADEX_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(3000); // let any JS-rendered careers section settle
 

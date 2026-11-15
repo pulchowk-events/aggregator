@@ -5,7 +5,7 @@
 // H3.elementor-heading-title.elementor-size-default. No detail links exist.
 // Per-unit progress still reported in finally blocks for ETA accuracy.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -20,7 +20,7 @@ module.exports = {
         const items = [];
 
         meta.pagesVisited++;
-        await page.goto(VIVASOFT_ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, VIVASOFT_ENTRY_URL);
         await delay(Math.random() * 1000 + 500);
 
         try {

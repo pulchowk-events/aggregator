@@ -31,7 +31,7 @@
 //      /search? or /categories/ URL), visit it once to pull a longer
 //      description into the item.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -135,7 +135,7 @@ module.exports = {
 
         // ---- Stage 1: navigate to the full /jobs listing ----
         meta.pagesVisited++;
-        await page.goto(F1SOFT_JOBS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, F1SOFT_JOBS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 
@@ -160,7 +160,7 @@ module.exports = {
         if (cards.length === 0) {
             try {
                 meta.pagesVisited++;
-                await page.goto(F1SOFT_HOME_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, F1SOFT_HOME_URL);
                 await delay(1200);
                 await page.waitForSelector('.features-job, div.col-lg-6', { timeout: 8000 });
                 cards = await harvestCards(page);
@@ -194,7 +194,7 @@ module.exports = {
                     meta.pagesVisited++;
                     meta.detailPagesVisited++;
                     try {
-                        await page.goto(c.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                        await loadPage(page, c.url);
                         await delay(600);
 
                         const detail = await page.evaluate(() => {

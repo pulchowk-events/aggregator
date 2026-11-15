@@ -29,7 +29,7 @@
 //      as the canonical item url.
 //   3) Return [] gracefully when nothing real is found.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -40,7 +40,7 @@ module.exports = {
         console.log('??? [nimble] Scraping Nimble Infosys job list...');
 
         meta.pagesVisited++;
-        await page.goto(NIMBLE_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, NIMBLE_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 

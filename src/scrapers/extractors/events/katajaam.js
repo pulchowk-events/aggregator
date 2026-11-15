@@ -10,7 +10,7 @@
 //               [class*="text-xl"] fallback misses it; explicit
 //               text-display entry is required.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { pickOne, pickAll } = require('../../selectors');
 const { detectPageState } = require('../../diagnostics');
@@ -46,7 +46,7 @@ module.exports = {
 
             try {
                 meta.pagesVisited++;
-                await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, categoryUrl);
                 await delay(Math.random() * 1000 + 500);
             } catch (error) {
                 console.warn(`⚠️ [katajaam] Failed to load category ${category}: ${error.message}`);
@@ -82,7 +82,7 @@ module.exports = {
                     console.log(`  📄 [katajaam] Scraping event: ${link}`);
                     meta.pagesVisited++;
                     meta.detailPagesVisited++;
-                    await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                    await loadPage(page, link);
                     await delay(Math.random() * 1000 + 500);
 
                     const titleResult = await pickOne(page, SEL.title, { label: `detail title (${link})` });

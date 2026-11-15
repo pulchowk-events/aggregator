@@ -25,7 +25,7 @@
 //   4) headings inside an "Open Positions"-style block.
 // Return [] gracefully if none found.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -36,7 +36,7 @@ module.exports = {
         console.log('??? [dishhome] Scraping DishHome careers...');
 
         meta.pagesVisited++;
-        await page.goto(DISHHOME_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, DISHHOME_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(3500); // Next.js hydration - job cards render client-side
 

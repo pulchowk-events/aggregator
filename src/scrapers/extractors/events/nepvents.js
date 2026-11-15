@@ -3,7 +3,7 @@
 // Registration URL discovery uses anchor-click / new-tab detection and is
 // not migrated to pickOne (it's an interaction, not a DOM read).
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { cleanNepVentsDescription } = require('../../text');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { pickOne } = require('../../selectors');
@@ -39,7 +39,7 @@ module.exports = {
             console.log(`🕷️ [nepvents] Scraping category: ${category.name}`);
             try {
                 meta.pagesVisited++;
-                await page.goto(category.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                await loadPage(page, category.url, { timeout: 60000 });
                 await delay(2000 + Math.random() * 2000);
             } catch (error) {
                 console.warn(`⚠️ [nepvents] Failed to load ${category.name}: ${error.message}`);
@@ -94,7 +94,7 @@ module.exports = {
                     console.log(`  📄 [nepvents] Scraping event: ${link}`);
                     meta.pagesVisited++;
                     meta.detailPagesVisited++;
-                    await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                    await loadPage(page, link);
                     await delay(1000 + Math.random() * 1000);
 
                     let registrationUrl = await page.evaluate(() => {

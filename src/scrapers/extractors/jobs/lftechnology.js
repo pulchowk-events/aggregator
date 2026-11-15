@@ -22,7 +22,7 @@
 //      JobPosting, fall back to H1 + description div.
 //   3. safeUnitDone in finally; dedupe by canonical href.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -36,7 +36,7 @@ module.exports = {
 
         // ---- Stage 1: listing ----
         meta.pagesVisited++;
-        await page.goto(LF_LISTING_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, LF_LISTING_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 
@@ -153,7 +153,7 @@ module.exports = {
             try {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(l.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, l.url);
                 await delay(700);
 
                 const detail = await page.evaluate(() => {

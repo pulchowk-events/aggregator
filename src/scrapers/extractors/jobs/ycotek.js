@@ -14,7 +14,7 @@
 //   Location is only captured when the card text explicitly names a
 //    city/remote/hybrid/on-site marker.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 const { sanitizeImageUrl } = require('../../sanitize');
@@ -31,7 +31,7 @@ module.exports = {
         console.log('??? [ycotek] Scraping Ycotek careers...');
 
         meta.pagesVisited++;
-        await page.goto(CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await loadPage(page, CAREERS_URL, { timeout: 60000 });
 
         const state = await detectPageState(page);
         if (state.looksBlocked) {

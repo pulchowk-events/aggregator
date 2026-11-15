@@ -12,7 +12,7 @@
 // page structure changes (titles no longer headings, descriptions no longer
 // <p>), items will drop rather than emit low-confidence titles.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -27,7 +27,7 @@ module.exports = {
         const items = [];
 
         meta.pagesVisited++;
-        await page.goto(VIVEKA_ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, VIVEKA_ENTRY_URL);
         await delay(Math.random() * 1000 + 500);
 
         try {

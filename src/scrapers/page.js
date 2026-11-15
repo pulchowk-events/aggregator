@@ -166,4 +166,30 @@ async function setupStealthPage(page) {
     await delay(2000 + Math.random() * 3000);
 }
 
-module.exports = { setupStealthPage, delay };
+// Central page-load helper. Every extractor calls this instead of
+// page.goto directly so the wait strategy and timeout are:
+//   1. Env-driven defaults (SCRAPER_WAIT_UNTIL, SCRAPER_GOTO_TIMEOUT_MS)
+//   2. Hardcoded fallbacks when the env vars are unset
+//   3. Per-call overrides for the rare source that needs something else
+//
+// Defaults: domcontentloaded + 12s. networkidle2 + long timeouts are the
+// root cause of the per-source hangs we kept hitting -- analytics sockets
+// never idle, so networkidle2 always burns its full timeout. 12s is
+// generous for server-rendered content; SPA-heavy sources pass
+// { waitUntil: 'networkidle2', timeout: 30000 } explicitly.
+//
+// Read process.env directly (not config/env.js) so a new SCRAPER_* var
+// works the moment it's set -- no env.js schema change required.
+const DEFAULT_WAIT_UNTIL = 'domcontentloaded';
+const DEFAULT_TIMEOUT_MS = 12000;
+
+async function loadPage(page, url, opts = {}) {
+    const waitUntil = opts.waitUntil
+        ?? process.env.SCRAPER_WAIT_UNTIL
+        ?? DEFAULT_WAIT_UNTIL;
+    const timeout = opts.timeout
+        ?? (parseInt(process.env.SCRAPER_GOTO_TIMEOUT_MS, 10) || DEFAULT_TIMEOUT_MS);
+    return page.goto(url, { waitUntil, timeout });
+}
+
+module.exports = { setupStealthPage, delay, loadPage };

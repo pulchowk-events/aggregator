@@ -23,7 +23,7 @@
 // Selector drift history:
 //   2026-11-14: initial robust extractor - multi-strategy harvest.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { pickOne } = require('../../selectors');
 const { detectPageState } = require('../../diagnostics');
@@ -45,10 +45,7 @@ module.exports = {
         // --- Stage 1: load careers page (domcontentloaded to avoid net-idle hang)
         meta.pagesVisited++;
         try {
-            await page.goto(ENTRY_URL, {
-                waitUntil: 'domcontentloaded',
-                timeout: 12000
-            });
+            await loadPage(page, ENTRY_URL);
         } catch (error) {
             console.warn(
                 `?? [proshore] initial navigation failed: ${error.message}`
@@ -97,10 +94,7 @@ module.exports = {
             );
             try {
                 meta.pagesVisited++;
-                await page.goto(FALLBACK_URL, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 12000
-                });
+                await loadPage(page, FALLBACK_URL);
                 await delay(800);
                 await interactAndSettle(page);
                 jobLinks = await harvestJobLinks(page);
@@ -165,10 +159,7 @@ module.exports = {
                 try {
                     meta.pagesVisited++;
                     meta.detailPagesVisited++;
-                    await page.goto(link.href, {
-                        waitUntil: 'domcontentloaded',
-                        timeout: 12000
-                    });
+                    await loadPage(page, link.href);
                     await delay(1200);
 
                     const titleResult = await pickOne(page, SEL.detailTitle, {

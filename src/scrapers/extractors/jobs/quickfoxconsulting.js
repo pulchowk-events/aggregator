@@ -13,7 +13,7 @@
 //     is generic ("View More") so we harvest by href prefix, not text.
 //   - Detail page H1 not captured in dump; use main h1 + h3 fallback.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { pickOne } = require('../../selectors');
 const { detectPageState } = require('../../diagnostics');
@@ -38,10 +38,7 @@ module.exports = {
         meta.pagesVisited++;
         try {
             // Next.js app keeps analytics sockets open  domcontentloaded
-            await page.goto(ENTRY_URL, {
-                waitUntil: 'domcontentloaded',
-                timeout: 45000
-            });
+            await loadPage(page, ENTRY_URL, { timeout: 45000 });
         } catch (error) {
             console.warn(
                 `?? [quickfoxconsulting] listing navigation failed: ${error.message}`
@@ -197,10 +194,7 @@ module.exports = {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
 
-                await page.goto(card.detailHref, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 45000
-                });
+                await loadPage(page, card.detailHref, { timeout: 45000 });
                 await delay(900);
 
                 const titleResult = await pickOne(page, SEL.detailTitle, {
@@ -368,4 +362,4 @@ module.exports = {
 
         return { items, meta };
     }
-};
+};

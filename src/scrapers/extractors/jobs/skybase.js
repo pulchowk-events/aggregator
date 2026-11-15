@@ -29,7 +29,7 @@
 //      On detail failure, keep the listing-card item (title from card).
 //   3. safeUnitDone in finally per item.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { pickOne } = require('../../selectors');
 const { detectPageState } = require('../../diagnostics');
@@ -44,7 +44,7 @@ module.exports = {
 
         // ---- Stage 1: listing ----
         meta.pagesVisited++;
-        await page.goto(SKYBASE_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, SKYBASE_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(1500);
 
@@ -133,7 +133,7 @@ module.exports = {
             try {
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(l.url, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, l.url);
                 await delay(700);
 
                 const titleResult = await pickOne(page, [

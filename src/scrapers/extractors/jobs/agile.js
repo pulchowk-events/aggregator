@@ -17,7 +17,7 @@
 //     extract defensively: JSON-LD first, then href-pattern anchors,
 //     then heading-based cards. Return empty gracefully otherwise.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -28,7 +28,7 @@ module.exports = {
         console.log('??? [agile] Scraping Agile Solutions careers...');
 
         meta.pagesVisited++;
-        await page.goto(AGILE_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, AGILE_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2500); // let Elementor widgets settle
 

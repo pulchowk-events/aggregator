@@ -16,7 +16,7 @@
 //               div.border-b.rounded-lg card. Meta (location, level,
 //               deadline) lives in a sibling md:grid-cols-3 block.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -27,7 +27,7 @@ module.exports = {
         const items = [];
 
         meta.pagesVisited++;
-        await page.goto(ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, ENTRY_URL);
         await delay(800);
 
         try {

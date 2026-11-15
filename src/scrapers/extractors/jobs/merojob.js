@@ -10,7 +10,7 @@
 //   2. Company logos go through Next.js's /_next/image proxy; the real
 //      URL is decoded out via extractRealImageUrl.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 const {
@@ -72,7 +72,7 @@ async function gatherLinks(page) {
         if (!nextHref) break;
         const nextUrl = nextHref.startsWith('http') ? nextHref : `${MEROJOB_BASE_URL}${nextHref}`;
         await delay(1000 + Math.random() * 800);
-        await page.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await loadPage(page, nextUrl, { timeout: 60000 });
         await harvestVisible();
     }
 
@@ -183,7 +183,7 @@ module.exports = {
         for (const categoryUrl of MEROJOB_CATEGORY_URLS) {
             console.log(`🕷️ [merojob] Scraping category: ${categoryUrl}`);
             meta.pagesVisited++;
-            await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await loadPage(page, categoryUrl, { timeout: 60000 });
             await delay(1500 + Math.random() * 1000);
 
             if (meta.pagesVisited === 1) {
@@ -216,7 +216,7 @@ module.exports = {
                 console.log(`  📄 [merojob] Scraping job: ${link}`);
                 meta.pagesVisited++;
                 meta.detailPagesVisited++;
-                await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await loadPage(page, link);
                 await delay(800 + Math.random() * 800);
 
                 const raw = await scrapeDetail(page);

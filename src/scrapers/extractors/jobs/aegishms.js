@@ -10,7 +10,7 @@
 //   2026-11-14: initial extractor. Job cards are <button aria-controls="job-content-N">
 //               with an <h3> title and location/meta spans. No job detail URLs exist.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -26,7 +26,7 @@ module.exports = {
         // long-running analytics sockets; networkidle2 never fires and
         // goto waits its full 30s timeout. domcontentloaded returns in
         // ~1-3s and content is already server-rendered.
-        await page.goto(ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, ENTRY_URL);
         await delay(800);
 
         // Block / captcha check on first load only

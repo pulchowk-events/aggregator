@@ -28,7 +28,7 @@
 //      openings" intro that the evidence gives us verbatim.
 // Return [] gracefully when nothing is found.
 
-const { delay } = require('../../page');
+const { delay, loadPage } = require('../../page');
 const { safeDiscovered, safeUnitDone } = require('../../progress');
 const { detectPageState } = require('../../diagnostics');
 
@@ -39,7 +39,7 @@ module.exports = {
         console.log('??? [eminenceways] Scraping Eminence Ways careers...');
 
         meta.pagesVisited++;
-        await page.goto(EMINENCE_CAREERS_URL, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await loadPage(page, EMINENCE_CAREERS_URL);
         await page.waitForSelector('body', { timeout: 15000 });
         await delay(2000);
 
