@@ -320,6 +320,24 @@ async function runBatch(opts) {
     ui.blank();
 
     const failed = results.filter((r) => r.ran && r.ok === false);
+
+    // Post-run suggestions. refine-filters is the LLM-driven rule
+    // refinement phase (itemFilter / nepal-gazetteer). It's a separate
+    // explicit command, not part of the pipeline -- but the human needs
+    // to know it exists after a big run so new sources/rules get folded
+    // back into the config files.
+    ui.blank();
+    ui.divider('Post-run reminders');
+    ui.blank();
+    if (failed.length === 0) {
+        ui.line(`  ${ui.tag('info')}  every phase completed cleanly.`);
+        ui.line(`  ${ui.colors.GRAY}next: if you added sources or filter rules drifted, run${ui.colors.R}`);
+        ui.line(`  ${ui.colors.CYAN}pulchowk-events batch refine-filters --type jobs --run ${runId} --dry${ui.colors.R}`);
+    } else {
+        ui.line(`  ${ui.tag('warn')}  ${failed.length} phase(s) failed. Fix and re-run \`batch run --run ${runId}\`.`);
+    }
+    ui.blank();
+
     return { runId, results, ok: failed.length === 0 };
 }
 

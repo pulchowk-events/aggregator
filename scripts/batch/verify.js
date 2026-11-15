@@ -610,6 +610,17 @@ async function runVerify(opts) {
             reason: decision.reason,
             warn: decision.warn || null,
             verdict: parsed.verdict,
+            // Coverage + quality + layer breakdown. Populated by
+            // parseVerifyOutput from worker stdout. Downstream:
+            //   - report.js shows quality column + raw delta
+            //   - deploy.js refuses quality='low'
+            //   - refine.js uses coverage to build a field-specific
+            //     retry prompt when reason='low_field_coverage'
+            quality: parsed.quality || null,
+            score: parsed.qualityScore || null,
+            coverage: parsed.coverage || null,
+            rawItems: parsed.rawItems || null,
+            layers: parsed.layers || null,
             items: parsed.items,
             durationSec: parsed.durationSec,
             exitCode: null,

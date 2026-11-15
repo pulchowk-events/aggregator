@@ -107,6 +107,36 @@ function buildPriorAttemptsSection(attempts) {
             if (a.durationSec !== null && a.durationSec !== undefined) {
                 lines.push('- duration: ' + a.durationSec + 's');
             }
+            // Field coverage — this is the meat when the failure is
+            // low_field_coverage. Point at exactly which field is
+            // missing, and how many items have it.
+            if (a.coverage) {
+                const cov = a.coverage;
+                lines.push('');
+                lines.push('Field coverage (how many items have each field):');
+                for (const f of ['title','company','description','location','image','deadline']) {
+                    if (cov[f] == null) continue;
+                    const [a1,b1] = String(cov[f]).split('/').map(Number);
+                    const pct = b1 > 0 ? Math.round(100 * a1 / b1) : 0;
+                    const flag = pct === 0 ? ' ❌ MISSING' : pct < 50 ? ' ⚠ LOW' : pct < 90 ? ' ⚠' : ' ✓';
+                    lines.push('  - ' + f.padEnd(12) + cov[f].padEnd(8) + ' (' + pct + '%)' + flag);
+                }
+                if (a.decisionField) {
+                    lines.push('');
+                    lines.push('FAILED FIELD: ' + a.decisionField);
+                }
+                if (a.quality) {
+                    lines.push('');
+                    lines.push('Overall quality: ' + a.quality + (a.score != null ? ' (score ' + a.score + ')' : ''));
+                }
+                lines.push('');
+                lines.push('CRITICAL: A field being present in the DOM but null in your output');
+                lines.push('means you did not extract it. Re-read the "## Field requirements"');
+                lines.push('section of the original prompt and the "## Field evidence" block.');
+                lines.push('Every Tier 1 field (title, company, location, description) must be');
+                lines.push('populated for every item — or you must report a per-field');
+                lines.push('<field>_status="site_absent" with evidence of what you searched.');
+            }
             if (a.stderrTail) {
                 lines.push('');
                 lines.push('Extractor stderr (verbatim, last ~' + STDERR_TAIL_LINES + ' lines):');
@@ -254,7 +284,21 @@ function runRefine(opts) {
             reason: c.result.reason,
             durationSec: c.result.durationSec,
             stderrTail: c.result.stderrTail,
-            stdoutTail: c.result.stdoutTail
+            stdoutTail: c.result.stdoutTail,
+            // Coverage + quality from verify.js's results[name] (persisted
+            // in the same commit as this patch). When reason is
+            // low_field_coverage, these carry the exact field breakdown
+            // the LLM needs to fix the extractor.
+            coverage: c.result.coverage || null,
+            quality: c.result.quality || null,
+            score: c.result.score || null,
+            decisionField: (() => {
+                // Pull the specific field from the warn string,
+                // e.g. "company missing on 100% of items (0/8)"
+                const w = c.result.warn || '';
+                const m = w.match(/^(title|company|description|location) missing on/);
+                return m ? m[1] : null;
+            })()
         });
 
         const newPrompt = base + '\n' + buildPriorAttemptsSection(attempts);
