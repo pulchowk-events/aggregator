@@ -108,16 +108,30 @@ function cleanNepVentsDescription(raw) {
 // the orchestrator. Shared-layer fix, not per-extractor.
 function stripHtml(s) {
     if (s == null) return s;
-    return String(s)
+    // Two-pass: block tags become newlines FIRST (so structure survives),
+    // then inline tags become spaces. Prior version had one regex that
+    // collapsed every tag to space — `<p>a</p><p>b</p>` became `a b` and
+    // every multi-paragraph description lost structure.
+    let out = String(s)
+        // Block-level tags -> double newline (paragraph break)
+        .replace(/<\/?(p|div|h[1-6]|br|hr|tr|section|article|blockquote|li|ul|ol)\b[^>]*>/gi, '\n\n')
+        // Inline tags -> single space
         .replace(/<[^>]+>/g, ' ')
+        // Entity decode
         .replace(/&nbsp;/g, ' ')
         .replace(/&amp;/g, '&')
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
         .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/\s+/g, ' ')
-        .trim();
+        .replace(/&#39;/g, "'");
+    // Trim each line, drop stray horizontal runs
+    out = out
+        .split('\n')
+        .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+        .join('\n');
+    // Collapse 3+ consecutive newlines down to 2 (one blank line between paragraphs)
+    out = out.replace(/\n{3,}/g, '\n\n');
+    return out.trim();
 }
 
 module.exports = {

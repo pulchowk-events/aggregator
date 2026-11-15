@@ -67,6 +67,13 @@ const MESSAGES = {
         severity: 'fail'
     },
 
+    llm_lazy: {
+        label: 'LLM claimed field missing but DOM has it',
+        explanation: 'The extractor returned items with <field>_status=site_absent, but the wizard\u2019s field-evidence scan found that element in the DOM. The LLM skipped an extractable field and lied about why. This ships hollow items.',
+        fix: 'Run `pulchowk-events batch refine --only <site>` \u2014 the refine prompt now carries the specific field evidence and points at the selector the LLM missed. Or manually inspect the extractor and add the extraction.',
+        severity: 'error'
+    },
+
     low_field_coverage: {
         label: 'Incomplete field extraction',
         explanation: 'Extractor returned items, but one or more required fields (title, company, description, or location) are missing on most of them. The site has the data — the extractor is not reaching it. This means hollow items would reach /pending, Discord, and the website.',

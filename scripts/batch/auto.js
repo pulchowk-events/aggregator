@@ -52,7 +52,7 @@ const DEFAULTS = {
     parallel: 10,
     timeoutMs: 60000,
     maxRounds: 5,
-    maxAttempts: 3
+    maxAttempts: 5
 };
 
 function parseArgs(argv) {

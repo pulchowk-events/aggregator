@@ -46,7 +46,7 @@ function parseArgs(argv) {
         parallel: 10,
         timeoutMs: 60000,
         maxRounds: 5,
-        maxAttempts: 3,
+        maxAttempts: 5,
         skipDeploy: false,
         dryRun: false
     };
@@ -57,7 +57,7 @@ function parseArgs(argv) {
         else if (a === '--parallel' && argv[i + 1]) args.parallel = Math.max(1, parseInt(argv[++i], 10) || 10);
         else if (a === '--timeout' && argv[i + 1]) args.timeoutMs = Math.max(15000, parseInt(argv[++i], 10) || 60000);
         else if (a === '--max-rounds' && argv[i + 1]) args.maxRounds = Math.max(1, parseInt(argv[++i], 10) || 5);
-        else if (a === '--max-attempts' && argv[i + 1]) args.maxAttempts = Math.max(1, parseInt(argv[++i], 10) || 3);
+        else if (a === '--max-attempts' && argv[i + 1]) args.maxAttempts = Math.max(1, parseInt(argv[++i], 10) || 5);
         else if (a === '--skip-deploy') args.skipDeploy = true;
         else if (a === '--dry-run') args.dryRun = true;
         else if (!a.startsWith('-') && !args.urlsFile) args.urlsFile = a;

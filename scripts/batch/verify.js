@@ -264,6 +264,13 @@ function parseVerifyOutput(rawStdout) {
     const covLoc = stdout.match(/^coverageLoc:\s*(\d+\/\d+)/m);
     const covImg = stdout.match(/^coverageImg:\s*(\d+\/\d+)/m);
     const covDl = stdout.match(/^coverageDeadline:\s*(\d+\/\d+)/m);
+    // site_absent counts (per-field). Items where the LLM explicitly
+    // reported "this field is not on this site" with evidence. Do not
+    // count against coverage -- they're truthful reports, not failures.
+    const saTitle = stdout.match(/^siteAbsentTitle:\s*(\d+)/m);
+    const saCompany = stdout.match(/^siteAbsentCompany:\s*(\d+)/m);
+    const saDesc = stdout.match(/^siteAbsentDesc:\s*(\d+)/m);
+    const saLoc = stdout.match(/^siteAbsentLoc:\s*(\d+)/m);
     const layer = (key) => {
         const m = stdout.match(new RegExp('^' + key + ':\s*(\\d+)', 'm'));
         return m ? parseInt(m[1], 10) : 0;
@@ -285,6 +292,12 @@ function parseVerifyOutput(rawStdout) {
             location: covLoc ? covLoc[1] : null,
             image: covImg ? covImg[1] : null,
             deadline: covDl ? covDl[1] : null
+        } : null,
+        siteAbsent: (saTitle || saCompany || saDesc || saLoc) ? {
+            title: saTitle ? parseInt(saTitle[1], 10) : 0,
+            company: saCompany ? parseInt(saCompany[1], 10) : 0,
+            description: saDesc ? parseInt(saDesc[1], 10) : 0,
+            location: saLoc ? parseInt(saLoc[1], 10) : 0
         } : null,
         layers: {
             geoDropped: layer('layerGeoDropped'),
@@ -343,7 +356,68 @@ function loadDumpEvidence(dumpsDir, name) {
     }
 }
 
-function decidePass(parsed, { isTemplate, isHtmlTemplate, resolution, dumpEvidence }) {
+// Cross-check the LLM's site_absent claims against field evidence in
+// the dump. Prevents the "LLM lazy" failure: LLM returns
+// description_status=site_absent even though fieldEvidence showed
+// [class*='job-description'] exists, so the coverage gate would
+// mistakenly pass items that skipped an extractable field.
+//
+// If fieldEvidence for a field exists AND LLM claimed site_absent on
+// >=50% of items, reject with llm_lazy:<field>. Otherwise respect the
+// claim (source genuinely doesn't publish that field).
+function crossCheckSiteAbsent(name, runDir, parsed) {
+    const sa = parsed.siteAbsent || {};
+    const cov = parsed.coverage || {};
+    const claims = ['title', 'company', 'description', 'location'].filter(
+        (f) => sa[f] > 0
+    );
+    if (claims.length === 0) return null;
+
+    const fs = require('fs');
+    const path = require('path');
+    const dumpPath = path.join(runDir, 'dumps', `${name}.json`);
+    if (!fs.existsSync(dumpPath)) return null;
+    let dump;
+    try { dump = JSON.parse(fs.readFileSync(dumpPath, 'utf8')); } catch (e) { return null; }
+
+    const ev = (dump.detail && dump.detail.fieldEvidence)
+             || (dump.listing && dump.listing.fieldEvidence)
+             || null;
+    if (!ev) return null;
+
+    const hasEvidence = (field) => {
+        // JSON-LD JobPosting hit for this field?
+        if ((ev.jsonLd || []).some((entry) => entry.field === field)) return 'json-ld';
+        // og: meta hit?
+        const ogMap = { title: 'title', description: 'description', company: 'site_name' };
+        if (ogMap[field] && ev.ogMeta && ev.ogMeta[ogMap[field]]) return 'og-meta';
+        // selector hint hit?
+        if (ev.fields && Array.isArray(ev.fields[field]) && ev.fields[field].length > 0) {
+            return 'selector:' + ev.fields[field][0].selector;
+        }
+        return null;
+    };
+
+    // Count items in the source and see how many made a site_absent claim.
+    const total = parsed.items || 0;
+    if (total === 0) return null;
+
+    for (const field of claims) {
+        const pctClaimed = sa[field] / total;
+        if (pctClaimed < 0.5) continue;  // isolated claims, not a pattern
+        const evidenceKind = hasEvidence(field);
+        if (evidenceKind) {
+            return {
+                field,
+                evidenceKind,
+                claimPct: Math.round(pctClaimed * 100)
+            };
+        }
+    }
+    return null;
+}
+
+function decidePass(parsed, { isTemplate, isHtmlTemplate, resolution, dumpEvidence, name, runDir }) {
     // Precision gate: if the extractor saw N cards (listingHits) but kept
     // fewer than 1/3 as items (after its own title-vocab filter), the
     // template was matching the wrong group. This is the case where a
@@ -367,63 +441,72 @@ function decidePass(parsed, { isTemplate, isHtmlTemplate, resolution, dumpEviden
         }
     }
     if (parsed.verdict === 'ok') {
+        // site_absent cross-check: reject if LLM claimed site_absent for a
+        // field that fieldEvidence proved exists in the DOM.
+        if (name && runDir) {
+            const lazy = crossCheckSiteAbsent(name, runDir, parsed);
+            if (lazy) {
+                return {
+                    pass: false,
+                    reason: 'llm_lazy',
+                    field: lazy.field,
+                    warn: `LLM claimed ${lazy.field}_status=site_absent on ${lazy.claimPct}% of items but fieldEvidence found the field via ${lazy.evidenceKind}. Refine with evidence.`
+                };
+            }
+        }
         // Field coverage gate. An 'ok' verdict means items were returned --
-        // not that they're complete. Any field that's supposed to be present
-        // on every item being missing on most items is a hard fail, because
-        // the extractor is shipping hollow items to /pending, Discord, and
-        // the website. Tier thresholds chosen to be conservative (nepal-based
-        // sources auto-pass empty locations via geo, so 50% is generous).
+        // not that they're complete. Tier thresholds:
+        //   title      100% (every item needs a name)
+        //   company     90% (every item needs an employer)
+        //   description 50% (role body expected on most items)
+        //   location    50%
+        //
+        // site_absent handling: an item with description_status='site_absent'
+        // is a truthful report ("this site publishes no role body") that the
+        // LLM backed with evidence in <field>_evidence. Those items do NOT
+        // count against coverage -- they're the LLM doing the right thing.
+        // The gate fails only when:
+        //   1. An item has NO field AND NO site_absent evidence (unexplained
+        //      gap -- LLM was lazy or the extractor missed the value)
+        //   2. Coverage among "expected" items (total - site_absent) drops
+        //      below threshold (real extraction failure)
         const cov = parsed.coverage || {};
+        const sa = parsed.siteAbsent || {};
         const parseCov = (s) => {
-            if (!s) return 1.0;   // no coverage data = pass (empty-ats, etc.)
-            const [a, b] = s.split('/').map(Number);
-            return b > 0 ? a / b : 1.0;
+            if (!s) return { present: 0, total: 0 };
+            const [a, b] = String(s).split('/').map(Number);
+            return { present: a || 0, total: b || 0 };
         };
-        const titlePct = parseCov(cov.title);
-        const companyPct = parseCov(cov.company);
-        const descPct = parseCov(cov.description);
-        const locPct = parseCov(cov.location);
 
-        // Tier 1 mandatory gates. A source that returns N items where any
-        // item has no title is fundamentally broken -- title is the sole
-        // field we can't infer. Company is Tier 1 too (user decision);
-        // anything below 90% suggests an extractor that's not reaching the
-        // employer element. Description at <50% means extractor misses the
-        // role body. Location at <50% is a Tier 1 miss but nepal-based
-        // sources pass empty locations through geo, so it's blocked only
-        // for mixed/foreign sources... handled by the gate failing here
-        // and human deciding whether the source is genuinely location-less.
-        if (titlePct < 1.0) {
-            return {
-                pass: false,
-                reason: 'low_field_coverage',
-                field: 'title',
-                warn: `title missing on ${100 - Math.round(titlePct * 100)}% of items (${cov.title}) -- extractor is not producing usable items`
-            };
-        }
-        if (companyPct < 0.9) {
-            return {
-                pass: false,
-                reason: 'low_field_coverage',
-                field: 'company',
-                warn: `company missing on ${100 - Math.round(companyPct * 100)}% of items (${cov.company}) -- extractor is not reaching the employer element`
-            };
-        }
-        if (descPct < 0.5) {
-            return {
-                pass: false,
-                reason: 'low_field_coverage',
-                field: 'description',
-                warn: `description missing on ${100 - Math.round(descPct * 100)}% of items (${cov.description}) -- extractor is not extracting the role body`
-            };
-        }
-        if (locPct < 0.5) {
-            return {
-                pass: false,
-                reason: 'low_field_coverage',
-                field: 'location',
-                warn: `location missing on ${100 - Math.round(locPct * 100)}% of items (${cov.location}) -- extractor is not reaching the location element`
-            };
+        const checkField = (field, threshold) => {
+            const { present, total } = parseCov(cov[field]);
+            if (total === 0) return { pass: true };  // no data, pass (empty-ats)
+            const siteAbsentCount = sa[field] || 0;
+            const unexplained = total - present - siteAbsentCount;
+            const expected = total - siteAbsentCount;  // items where field SHOULD exist
+            const adjusted = expected > 0 ? present / expected : 1.0;
+            if (unexplained > 0) {
+                return {
+                    pass: false,
+                    field,
+                    warn: `${field}: ${unexplained}/${total} items have neither a value NOR a ${field}_status=site_absent evidence. Extractor is silent on these. (coverage ${cov[field]}, ${siteAbsentCount} site_absent)`
+                };
+            }
+            if (adjusted < threshold) {
+                return {
+                    pass: false,
+                    field,
+                    warn: `${field}: ${present}/${expected} items with an expected value got one (${Math.round(adjusted * 100)}%, threshold ${Math.round(threshold * 100)}%). ${siteAbsentCount}/${total} marked site_absent with evidence -- those are correct and don't count.`
+                };
+            }
+            return { pass: true, field, adjusted, present, expected, siteAbsentCount };
+        };
+
+        for (const [field, threshold] of [['title', 1.0], ['company', 0.9], ['description', 0.5], ['location', 0.5]]) {
+            const r = checkField(field, threshold);
+            if (!r.pass) {
+                return { pass: false, reason: 'low_field_coverage', field: r.field, warn: r.warn };
+            }
         }
         return { pass: true, reason: 'ok' };
     }
@@ -597,7 +680,7 @@ async function runVerify(opts) {
             decision = { pass: false, reason: parsed.verdict, warn: errLine };
         } else {
             const dumpEvidence = loadDumpEvidence(path.join(runDir, 'dumps'), name);
-            decision = decidePass(parsed, { isTemplate, isHtmlTemplate, resolution: cls && cls.resolution, dumpEvidence });
+            decision = decidePass(parsed, { isTemplate, isHtmlTemplate, resolution: cls && cls.resolution, dumpEvidence, name, runDir });
         }
 
         results[name] = {
@@ -619,6 +702,7 @@ async function runVerify(opts) {
             quality: parsed.quality || null,
             score: parsed.qualityScore || null,
             coverage: parsed.coverage || null,
+            siteAbsent: parsed.siteAbsent || null,
             rawItems: parsed.rawItems || null,
             layers: parsed.layers || null,
             items: parsed.items,
