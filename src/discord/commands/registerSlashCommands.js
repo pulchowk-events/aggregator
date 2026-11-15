@@ -32,12 +32,48 @@ async function registerSlashCommands(bot) {
     try {
         const rest = new REST({ version: '10' }).setToken(env.DISCORD_TOKEN);
 
-        await rest.put(
-            Routes.applicationGuildCommands(bot.client.user.id, env.HOME_GUILD_ID),
-            { body: defs.map((cmd) => cmd.toJSON()) }
-        );
+        // Per-command POST loop, NOT bulk PUT. Reasons:
+        //
+        //   1. PUT on /guilds/{id}/commands REPLACES the entire guild
+        //      command list. Extensions (supabase, websiteSync, extensions/
+        //      index.js) each POST their own commands at ready time. Both
+        //      run on the 'ready' event with no ordering guarantee. If the
+        //      base PUT fires LAST, it wipes every extension command that
+        //      was just added -- silently, because PUT succeeds. That is
+        //      why /website-sync and /supabase disappeared in production
+        //      after ~200ms last session.
+        //
+        //   2. POST is additive and idempotent by (name, type). Re-POSTing
+        //      an existing command updates it in place, doesn't error, and
+        //      doesn't wipe anything. Safe regardless of which listener
+        //      fires first.
+        //
+        //   3. Failures are isolated per-command. If one command's payload
+        //      is malformed (DiscordAPIError[50035]), the others still
+        //      register, and we log exactly which command failed.
+        //
+        // Note: POST body is ONE command dict, not an array. The first
+        // attempt at this fix sent an array and got DiscordAPIError[50035].
+        const failed = [];
+        for (const cmd of defs) {
+            const payload = cmd.toJSON();
+            try {
+                await rest.post(
+                    Routes.applicationGuildCommands(bot.client.user.id, env.HOME_GUILD_ID),
+                    { body: payload }
+                );
+            } catch (e) {
+                failed.push({ name: payload.name, error: e.message });
+                console.warn(`   \u26a0\ufe0f [registerSlashCommands] POST failed for "/${payload.name}": ${e.message}`);
+            }
+        }
+        const okCount = defs.length - failed.length;
+        console.log(`   [registerSlashCommands] ${okCount}/${defs.length} base command(s) registered to guild ${env.HOME_GUILD_ID} only${failed.length ? ' · ' + failed.length + ' failed' : ''}`);
 
         // One-time (idempotent) cleanup of previously-registered globals.
+        // Different route (/applications/{id}/commands, not /guilds/...).
+        // PUT with empty body is correct here -- it must REPLACE the global
+        // list with nothing, and no other listener registers globals.
         await rest.put(
             Routes.applicationCommands(bot.client.user.id),
             { body: [] }
