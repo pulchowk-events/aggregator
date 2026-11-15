@@ -126,7 +126,19 @@ module.exports = {
                     if (cityMatch) location = cityMatch[1];
                 }
 
-                out.push({ title, href: abs, nature, location });
+                // Listing-card metadata: extract raw text; do NOT parse or
+                // decide expiry here. Universal parsing happens in
+                // src/scrapers/universalNormalize.js.
+                const cardTxt = norm(el.textContent);
+                const openingsM = cardTxt.match(/Number of openings?:\s*(\d{1,3})/i);
+                const postedM = cardTxt.match(/Posted on:\s*(\d{4}-\d{2}-\d{2})/i);
+                const applyByM = cardTxt.match(/Apply before:\s*(\d{4}-\d{2}-\d{2})/i);
+
+                const openings = openingsM ? parseInt(openingsM[1], 10) : null;
+                const postedOn = postedM ? postedM[1] : null;
+                const applyBy = applyByM ? applyByM[1] : null;
+
+                out.push({ title, href: abs, nature, location, openings, postedOn, applyBy });
             }
 
             return out;
@@ -134,9 +146,7 @@ module.exports = {
 
         meta.listingHits = cards.length;
         safeDiscovered(progress, cards.length);
-        console.log(
-            `? [teslatech] Found ${cards.length} career card(s).`
-        );
+        console.log(`? [teslatech] Found ${cards.length} career card(s).`);
 
         if (cards.length === 0) {
             return { items, meta };
@@ -167,12 +177,17 @@ module.exports = {
                     // Description: prefer the main content wrapper used by
                     // this WordPress theme; fall back to <main> / largest div.
                     let description = null;
+                    // Removed raw 'main' from the chain: teslatech's main
+                    // includes site nav + footer + role body, so falling
+                    // through to 'main' yields a nav dump as description.
+                    // 'main article' is specific enough to be the role body.
+                    // If neither matches, description stays null -- better
+                    // than structurally wrong content reaching Discord.
                     const candidates = [
                         '.career-detail-content',
                         '.job-detail',
                         '.entry-content',
-                        'main article',
-                        'main'
+                        'main article'
                     ];
                     for (const sel of candidates) {
                         const el = document.querySelector(sel);
@@ -183,19 +198,11 @@ module.exports = {
                             break;
                         }
                     }
-                    if (!description) {
-                        const divs = Array.from(
-                            document.querySelectorAll('div')
-                        );
-                        divs.sort(
-                            (a, b) =>
-                                b.innerText.length - a.innerText.length
-                        );
-                        if (divs[0]) {
-                            const txt = norm(divs[0].innerText);
-                            if (txt && txt.length > 80) description = txt;
-                        }
-                    }
+                    // Removed the "largest div" fallback: same class of
+                    // bug as raw 'main' -- the largest div is usually the
+                    // page wrapper containing nav + footer, not the role
+                    // body. If none of the specific selectors above match,
+                    // leave description null. Cleaner data > more data.
 
                     let image = null;
                     const root =
@@ -254,6 +261,9 @@ module.exports = {
                     url: finalUrl,
                     registrationUrl: finalUrl,
                     attendanceMode,
+                    openings: card.openings,
+                    publishedAt: card.postedOn,
+                    applicationEndsRaw: card.applyBy,
                     source: 'teslatech'
                 });
 
@@ -271,4 +281,4 @@ module.exports = {
 
         return { items, meta };
     }
-};
+};

@@ -31,6 +31,7 @@ const { trimDescriptionToLastSentence, stripHtml } = require('../text');
 const { sanitizeScrapedEvent, sanitizeImageUrl } = require('../sanitize');
 const { deriveImageForUrl, derivePlaceholderForSource } = require('../ogImage');
 const { isNepalRelevant } = require('../../core/geo');
+const { applyUniversalNormalize } = require('../universalNormalize');
 const { applyItemFilters } = require('../itemFilter');
 
 async function runSource(name, type, { withPage, progress }) {
@@ -167,6 +168,36 @@ async function runSource(name, type, { withPage, progress }) {
         if (filterDropped > 0) {
             meta.descriptionDropped = (meta.descriptionDropped || 0) + filterDropped;
             console.log(`   [${name}] dropped ${filterDropped} no-role item(s)`);
+        }
+    }
+
+    // Universal post-itemFilter normalization (deadline parse + expiry drop,
+    // nav-dump description clear, qual-leak location clear). Base-4 short-
+    // circuits inside. Applies to ALL job sources uniformly.
+    if (type === 'jobs' && items.length > 0) {
+        let expiredCount = 0, navDumpCount = 0, qualLeakCount = 0;
+        items = items.filter((item) => {
+            try {
+                const r = applyUniversalNormalize(item, name);
+                if (r.dropped) { expiredCount++; return false; }
+                item = r.item;
+                for (const reason of r.reasons) {
+                    if (reason === 'nav_dump_cleared') navDumpCount++;
+                    if (reason === 'qual_leak_cleared') qualLeakCount++;
+                }
+                return true;
+            } catch (e) {
+                return true;  // fail open
+            }
+        });
+        if (expiredCount > 0) {
+            meta.expiredSkipped = (meta.expiredSkipped || 0) + expiredCount;
+            console.log(`   [${name}] dropped ${expiredCount} expired item(s)`);
+        }
+        if (navDumpCount > 0) meta.navDumpsCleared = (meta.navDumpsCleared || 0) + navDumpCount;
+        if (qualLeakCount > 0) meta.qualLeaksCleared = (meta.qualLeaksCleared || 0) + qualLeakCount;
+        if (items.length === 0 && (meta.listingHits || 0) > 0 && expiredCount === meta.listingHits) {
+            meta.atsEmpty = true;
         }
     }
 

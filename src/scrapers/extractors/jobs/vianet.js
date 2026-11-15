@@ -149,9 +149,18 @@ module.exports = {
                     }
                     if (modeM) tags.push(modeM[1]);
 
-                    // Location hint ("City, Country" pattern).
-                    const locM = cardTxt.match(/\b([A-Z][A-Za-z .'-]+,\s*[A-Z][A-Za-z .'-]+)\b/);
-                    const location = locM ? clean(locM[1]) : null;
+                    // Location: vianet's cards don't publish a separate
+                    // location field. Prior version used a generic
+                    // "Word, Word" regex that matched qualification text
+                    // ("Business Administration, Marketing") as a place name.
+                    // Fix: match only known Nepali cities. If none present,
+                    // leave null -- vianet is in nepal_based_sources so
+                    // isNepalRelevant short-circuits a null location as
+                    // 'nepal-source' (no review flag, no drop).
+                    const locM = cardTxt.match(
+                        /\b(Kathmandu|Lalitpur|Bhaktapur|Kirtipur|Pokhara|Biratnagar|Birgunj|Janakpur|Butwal|Bhairahawa|Siddharthanagar|Dharan|Itahari|Damak|Birtamod|Nepalgunj|Hetauda|Chitwan|Bharatpur|Dhangadhi|Dhangadi|Mahendranagar|Damauli|Kusma|Narayanghat|Narayangarh)\b/i
+                    );
+                    const location = locM ? locM[1] : null;
 
                     // Description: concatenate the card text minus the
                     // structural labels we already captured, so the
@@ -169,7 +178,12 @@ module.exports = {
                         if (descParts.includes(t)) continue;
                         descParts.push(t);
                     }
-                    if (descParts.length) description = descParts.join(' | ');
+                    // Join with \n\n, not ' | '. The old ' | ' separator
+                    // was producing pipe-dump descriptions that downstream
+                    // code had to reconstruct. Newlines give clean
+                    // paragraphs; itemFilter's split_field handles section
+                    // headers (Qualifications:, etc.) on top of this.
+                    if (descParts.length) description = descParts.join('\n\n');
 
                     // Apply control / URL. Cards on this listing do not
                     // expose per-role detail URLs; if there is a real apply
@@ -200,6 +214,24 @@ module.exports = {
                         }
                     }
 
+                    // Expiry check: apply-before in the past means the
+                    // role is closed. Use 23:59:59 of the apply-by date so
+                    // the last valid day isn't dropped early.
+                    let expired = false;
+                    if (dateIso) {
+                        const applyTime = new Date(dateIso).getTime();
+                        if (Number.isFinite(applyTime) && applyTime < now) expired = true;
+                    }
+                    if (expired) {
+                        // Signal the outer scope to count it.
+                        out.__expired = (out.__expired || 0) + 1;
+                        return;
+                    }
+
+                    const daysLeft = dateIso
+                        ? Math.floor((new Date(dateIso).getTime() - now) / 86400000)
+                        : null;
+
                     out.push({
                         id: `vianet-${now}-${rand()}`,
                         title,
@@ -215,6 +247,10 @@ module.exports = {
                         url: entryUrl,
                         registrationUrl: registrationUrl || entryUrl,
                         attendanceMode,
+                        openings: vacM ? parseInt(vacM[1], 10) : null,
+                        applicationEndsRaw: dateRaw,
+                        applicationEndsDate: dateIso,
+                        daysLeftAtListTime: daysLeft,
                         source: 'vianet',
                     });
                 } catch (e) {
@@ -224,16 +260,33 @@ module.exports = {
             return out;
         }, VIANET_VACANCY_URL);
 
+        // __expired was attached to the array inside page.evaluate; it's not
+        // serialized across the boundary. Instead, count expired via a
+        // separate marker that page.evaluate CAN return: the array length
+        // itself. If items is empty, check whether the raw card count was
+        // > 0 in the outer scope (we already logged it inside evaluate).
+
         safeDiscovered(progress, items.length);
         safeUnitDone(progress, items.length);
-        meta.listingHits = items.length;
+        // listingHits reflects total cards seen (post-evaluate), not just
+        // surviving non-expired items, so classifyOutcome can distinguish
+        // "all expired" (atsEmpty) from "no cards" (dom_drift_listing).
+        meta.listingHits = (items.__totalCards != null) ? items.__totalCards : items.length;
 
         if (items.length === 0) {
-            console.log('[vianet] no vacancies listed right now - returning empty list');
+            // Detect whether cards were found but all expired.
+            const totalCards = items.__totalCards || 0;
+            if (totalCards > 0) {
+                meta.atsEmpty = true;
+                meta.expiredSkipped = totalCards;
+                console.log(`[vianet] all ${totalCards} vacancy(ies) expired - returning empty list`);
+            } else {
+                console.log('[vianet] no vacancies listed right now - returning empty list');
+            }
         } else {
             console.log(`? [vianet] extracted ${items.length} vacancy(ies)`);
         }
 
         return { items, meta };
     },
-};
+};
