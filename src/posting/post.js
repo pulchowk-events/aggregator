@@ -190,7 +190,33 @@ async function _postEventToCategoryInner(bot, event, mode, categoryKeyOverride =
                 });
                 const buffer = Buffer.from(response.data);
                 markers.heartbeat(dedupKey, channelId);
-                const attachment = new AttachmentBuilder(buffer, { name: 'event.jpg' });
+
+                // Guard: reject non-image content-types. Some sites serve
+                // HTML error pages with 200 status; blindly attaching that
+                // shows a broken-file icon in Discord and confuses readers.
+                const contentType = (response.headers['content-type'] || '').toLowerCase();
+                const isImageContent = contentType.startsWith('image/');
+                if (!isImageContent && contentType !== '') {
+                    throw new Error(`image URL served ${contentType}, not an image`);
+                }
+
+                // Derive extension from content-type (authoritative) with
+                // URL extension fallback. Prior version hardcoded 'event.jpg'
+                // even for PNG placeholders -- Discord refuses to preview
+                // when extension mismatches actual bytes (PNG served as
+                // .jpg shows as a broken card, not an image preview).
+                let ext = 'jpg';
+                if (contentType.includes('png')) ext = 'png';
+                else if (contentType.includes('webp')) ext = 'webp';
+                else if (contentType.includes('gif')) ext = 'gif';
+                else if (contentType.includes('svg')) ext = 'svg';
+                else if (contentType.includes('jpeg') || contentType.includes('jpg')) ext = 'jpg';
+                else {
+                    const urlExt = (event.image || '').match(/\.(png|jpe?g|webp|gif|svg)(?:\?|$)/i);
+                    if (urlExt) ext = urlExt[1].toLowerCase().replace('jpeg', 'jpg');
+                }
+
+                const attachment = new AttachmentBuilder(buffer, { name: `event.${ext}` });
                 await channel.send({ content: message, files: [attachment] });
             } catch (error) {
                 console.error('Failed to fetch/send image, sending text only:', error.message);

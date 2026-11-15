@@ -84,7 +84,18 @@ async function buildLivePayload(item) {
             const axios = require('axios');
             const res = await axios.get(item.image, { responseType: 'arraybuffer', timeout: 15000 });
             const { AttachmentBuilder } = require('discord.js');
-            files.push(new AttachmentBuilder(Buffer.from(res.data), { name: 'event.jpg' }));
+            const buf = Buffer.from(res.data);
+            const ct = (res.headers['content-type'] || '').toLowerCase();
+            let ext = 'jpg';
+            if (ct.includes('png')) ext = 'png';
+            else if (ct.includes('webp')) ext = 'webp';
+            else if (ct.includes('gif')) ext = 'gif';
+            else if (ct.includes('svg')) ext = 'svg';
+            else {
+                const urlExt = (item.image || '').match(/\.(png|jpe?g|webp|gif|svg)(?:\?|$)/i);
+                if (urlExt) ext = urlExt[1].toLowerCase().replace('jpeg', 'jpg');
+            }
+            files.push(new AttachmentBuilder(buf, { name: `event.${ext}` }));
         } catch (e) {
             ui.line(`  warn: image fetch failed (${e.message}) -- sending text only`);
         }
