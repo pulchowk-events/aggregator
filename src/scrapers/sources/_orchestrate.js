@@ -30,6 +30,7 @@ const { trimDescriptionToLastSentence, stripHtml } = require('../text');
 const { sanitizeScrapedEvent, sanitizeImageUrl } = require('../sanitize');
 const { deriveImageForUrl, derivePlaceholderForSource } = require('../ogImage');
 const { isNepalRelevant } = require('../../core/geo');
+const { normalizeDescription } = require('../descriptionNormalize');
 
 async function runSource(name, type, { withPage, progress }) {
     const { extractor, isStub } = loadExtractor(type, name);
@@ -81,6 +82,13 @@ async function runSource(name, type, { withPage, progress }) {
         try {
             if (extractor.preprocessItem) item = extractor.preprocessItem(item);
             if (item.description) item.description = stripHtml(item.description);
+            if (type === 'jobs') {
+                item = normalizeDescription(item, name);
+                if (item === null) {
+                    meta.descriptionDropped = (meta.descriptionDropped || 0) + 1;
+                    return null;
+                }
+            }
             if (item.description) item.description = trimDescriptionToLastSentence(item.description, 1500);
             if (item.image) item.image = sanitizeImageUrl(item.image);
             sanitizeScrapedEvent(item, { source: name });
@@ -92,7 +100,7 @@ async function runSource(name, type, { withPage, progress }) {
             console.warn(`⚠️ [${name}] sanitize failed on "${item.title || '?'}": ${e.message}`);
         }
         return item;
-    });
+    }).filter(Boolean);
 
     // Enrichment: for job items that carry no image after extraction,
     // derive a per-site image from <meta og:image> or the site favicon.

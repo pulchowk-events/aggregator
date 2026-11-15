@@ -1,0 +1,61 @@
+{
+  "version": 3,
+  "note": "Shared description-normalize rules. Applied in _orchestrate.js after stripHtml, before trim. Jobs only (type === 'jobs'). Adding a new pattern = edit this file, no code change. Batch refine-filters phase (next session) proposes additions to this file from LLM analysis of real scraped data.",
+  "no_role_markers": [
+    "no positions available",
+    "no open roles",
+    "no roles posted",
+    "no roles available",
+    "no current openings",
+    "no current positions",
+    "sorry, there are no positions",
+    "open_roles = []",
+    "open_roles=[]",
+    "positions available at this time",
+    "this vacancy is already fulfilled",
+    "this position has been filled",
+    "this position is closed",
+    "this role has been filled",
+    "this role is no longer available"
+  ],
+  "boilerplate_prefixes": [
+    "We are always looking for nice people",
+    "We are always on the lookout for",
+    "We're always looking for nice people",
+    "We are always looking for talented",
+    "We're always looking for talented"
+  ],
+  "nav_labels": [
+    "apply now",
+    "apply before",
+    "view details",
+    "read more",
+    "share",
+    "save",
+    "learn more",
+    "click here",
+    "apply here"
+  ],
+  "structural_keywords": [
+    "Qualifications:",
+    "Requirements:",
+    "Experience Required:",
+    "Experience:",
+    "Responsibilities:",
+    "Role Summary:",
+    "Job Summary:",
+    "Job Description:",
+    "About Us:",
+    "About the role:",
+    "About this role:",
+    "What you'll do:",
+    "What we offer:",
+    "Benefits:",
+    "Compensation:"
+  ],
+  "boilerplate_full_paragraphs": [
+    "We are always looking for nice people to join our team. Even if you don't find a role that suits your experience, you can submit your CV for a position that you are interested in. Electronics and Mechanical Engineers, please apply at Yarsa Tech Jobs website.",
+    "We are always looking for nice people to join our team. Even if you don't find a role that suits your experience, you can still send us your resume at careers@yarsalabs.com",
+    "We are always looking for nice people to join our team. Even if you don't find a role that suits your experience, you can send your resume to careers@yarsalabs.com"
+  ]
+}
