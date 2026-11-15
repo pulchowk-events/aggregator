@@ -52,6 +52,7 @@ const { runAuto, parseArgs: parseAutoArgs } = require('./auto');
 const { runDeploy, parseArgs: parseDeployArgs } = require('./deploy');
 const { runBatch, parseArgs: parseBatchArgs } = require('./run');
 const { runPromote, parseArgs: parsePromoteArgs } = require('./promote');
+const { runRefineFilters, parseArgs: parseRefineFiltersArgs } = require('./refine-filters');
 
 const C = (code) => (process.stdout.isTTY ? `\x1b[${code}m` : '');
 const R = C('0'), B = C('1'), D = C('2');
@@ -78,6 +79,7 @@ function printHelp() {
     console.log(`  ${CYAN}deploy${R}            Copy verified-passing extractors into src/scrapers/ for production.`);
     console.log(`  ${CYAN}run${R} <urls>        One-shot: all phases with checkpointing -- the recommended entry point.`);
     console.log(`  ${CYAN}promote${R}           Promote template-failed sites to LLM prompts (dump-reuse, no re-scrape).`);
+    console.log(`  ${CYAN}refine-filters${R}    LLM-driven rule refinement for itemFilter (jobs|events|scholarships).`);
     console.log(`  ${CYAN}status${R}            Quick view of current run state (no verify).`);
     console.log(`  ${CYAN}help${R}              This help.`);
     console.log('');
@@ -284,6 +286,15 @@ function main() {
                 console.error(`${RED}✗ auto failed:${R} ${e.message}`);
                 return 1;
             });
+        }
+        case 'refine-filters': {
+            const opts = parseRefineFiltersArgs(rest);
+            return runRefineFilters(opts)
+                .then((r) => (r && r.error) ? 1 : 0)
+                .catch((e) => {
+                    console.error(`${RED}\u2717 refine-filters failed:${R} ${e.message}`);
+                    return 1;
+                });
         }
         case 'refine': {
             const opts = parseRefineArgs(rest);

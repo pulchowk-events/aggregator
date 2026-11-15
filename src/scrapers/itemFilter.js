@@ -171,9 +171,16 @@ function execSplitField(item, rule) {
         ? (rule.matcher.patterns || [])
         : rule.matcher.kind === 'substring' ? [rule.matcher.pattern] : [];
     for (const p of patterns) {
-        const re = new RegExp('(?<!\\n\\n)\\s*' + escapeRegex(String(p)), 'gi');
+        // Capture the matched content so replacement preserves the SOURCE's
+        // casing rather than the pattern's casing. Bug prior to this: with
+        // 'gi' flags the regex matched "the mission" against pattern
+        // "The Mission", then replaced with '\n\n' + pattern -> recased
+        // source content into the pattern's capitalization. That's a content
+        // mutation even though bytes aren't lost. $1 reinserts the actual
+        // matched bytes, so split is purely structural.
+        const re = new RegExp('(?<!\\n\\n)\\s*(' + escapeRegex(String(p)) + ')', 'gi');
         if (!re.test(s)) continue;
-        const newS = s.replace(re, '\n\n' + p.trim());
+        const newS = s.replace(re, '\n\n$1');
         if (newS !== s) { s = newS; changed = true; }
     }
     if (!changed) return { item, applied: false };
@@ -225,11 +232,15 @@ function escapeRegex(s) {
  * @param {Object} [rulesOverride]  optional; for refine-filters candidate testing
  * @returns {{ item: Object|null, actions: Array<{id,action,field,risk}> }}
  */
-function applyItemFilters(item, type, rulesOverride = null) {
+function applyItemFilters(item, type, rulesOverride = null, opts = {}) {
     if (!item) return { item, actions: [] };
 
     // Base-4 short-circuit: no filters fire. See module header.
-    if (BASE_4.has(item.source)) return { item, actions: [] };
+    // opts.respectBase4 === false bypasses this for tests (refine-filters
+    // safety checks candidate rules against base-4 items to prove the rule
+    // is conservative enough that even if short-circuit were off, base-4
+    // items would be unaffected).
+    if (opts.respectBase4 !== false && BASE_4.has(item.source)) return { item, actions: [] };
 
     const ruleset = rulesOverride || loadRules();
     const itemType = typeToItemType(type);
