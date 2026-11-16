@@ -291,7 +291,7 @@ async function runBatch(opts) {
                 const r = await runPaste({
                     runId,
                     only: opts.only,
-                    provider: 'deepseek',
+                    provider: null,
                     skipBrowser: false,
                     timeoutMs: 5 * 60 * 1000,
                     usePoll: true

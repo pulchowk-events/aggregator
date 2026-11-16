@@ -314,10 +314,11 @@ function parseArgs(argv) {
         includeSmall: false,
         runId: null,
         only: null,
-        provider: 'deepseek',
+        provider: null,  // null = --provider not passed; ProviderRouter decides
         skipBrowser: false,
         timeoutMs: DEFAULT_TIMEOUT_MS,
-        usePoll: true
+        usePoll: true,
+        mode: null  // 'manual' | 'extension' | null (=auto)
     };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -327,10 +328,21 @@ function parseArgs(argv) {
         else if (a === '--no-browser') { args.skipBrowser = true; }
         else if (a === '--no-poll') { args.usePoll = false; }
         else if (a === '--include-small') { args.includeSmall = true; }
+        else if (a === '--manual') { args.mode = 'manual'; }
+        else if (a === '--extension') { args.mode = 'extension'; }
         else if (a === '--timeout' && argv[i + 1]) {
             const secs = parseInt(argv[++i], 10);
             if (secs > 0) args.timeoutMs = secs * 1000;
         }
+    }
+    // Auto mode: extension if EXTENSION_TOKEN is present, manual otherwise.
+    // Explicit flags always win. --extension without a token is a hard
+    // error so the user isn't silently dropped into manual.
+    if (args.mode === null) {
+        args.mode = process.env.EXTENSION_TOKEN ? 'extension' : 'manual';
+    }
+    if (args.mode === 'extension' && !process.env.EXTENSION_TOKEN) {
+        throw new Error('--extension requires EXTENSION_TOKEN in .env');
     }
     return args;
 }
@@ -343,6 +355,11 @@ function pickRunDir(runId) {
 }
 
 async function runPaste(opts) {
+    // Dispatch to extension mode. Lazy require avoids a circular import
+    // (paste-extension.js requires helpers from this file).
+    if (opts.mode === 'extension') {
+        return require('./paste-extension').runPasteExtension(opts);
+    }
     const runDir = pickRunDir(opts.runId);
     const p = ensureRunLayout(runDir);
 
@@ -724,7 +741,7 @@ async function runPaste(opts) {
     return { written, redirected, skipped: already.length + terminal.length, failed, manualFollow, notCareers };
 }
 
-module.exports = { runPaste, parseArgs, validateJs, normalizeForCompare, extractCodeFromClipboard, looksLikeRightSite };
+module.exports = { runPaste, parseArgs, validateJs, normalizeForCompare, extractCodeFromClipboard, looksLikeRightSite, pickRunDir, stripVerdictLine };
 
 if (require.main === module) {
     const opts = parseArgs(process.argv.slice(2));
