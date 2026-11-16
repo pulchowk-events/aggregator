@@ -314,7 +314,7 @@ function parseArgs(argv) {
         includeSmall: false,
         runId: null,
         only: null,
-        provider: 'deepseek',
+        provider: null,  // null = --provider not passed; ProviderRouter decides
         skipBrowser: false,
         timeoutMs: DEFAULT_TIMEOUT_MS,
         usePoll: true,

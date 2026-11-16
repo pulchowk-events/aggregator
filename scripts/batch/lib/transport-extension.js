@@ -76,7 +76,13 @@ class ExtensionTransport {
             provider,
             timeoutMs: timeoutMs || 180000,
         });
-        return result;
+        return {
+            content: result.content,
+            url: result.url,
+            elapsedMs: result.elapsedMs,
+            chat: result.chat,
+            provider: provider || 'deepseek',
+        };
     }
 
     async shutdown() {

@@ -248,7 +248,7 @@ async function runAuto(opts) {
                 await runPaste({
                     runId: opts.runId,
                     only: opts.only,
-                    provider: 'deepseek',
+                    provider: null,
                     skipBrowser: false,
                     timeoutMs: 5 * 60 * 1000,
                     usePoll: true

@@ -11,6 +11,11 @@
 // The one visual difference is the waiting indicator: paste.js shows
 // "waiting for you to copy DeepSeek's reply to your clipboard", this
 // shows a spinner with elapsed time. Everything else is identical.
+//
+// Provider routing: ProviderRouter is the only place a provider is
+// decided. Router refusals (unknown_provider, conflicting_provider,
+// ambiguous_provider_tab) go to the needs-review list with
+// code = err.code; nothing falls back to a default provider.
 
 'use strict';
 
@@ -31,6 +36,7 @@ const { parseVerdict, isSameDomainRedirect } = require('./lib/llm-header');
 const { followOneSite } = require('./follow');
 const { audit } = require('./lib/audit');
 const { ExtensionTransport } = require('./lib/transport-extension');
+const { ProviderRouter, ProviderRouterError } = require('./lib/provider-router');
 const ui = require('./lib/ui');
 
 const MAX_HOPS = 3;
@@ -96,7 +102,17 @@ function makeSpinner(initial) {
     };
 }
 
+// Live tab inventory from the extension (server-cached from the last /hello).
+async function fetchTabs(transport) {
+    const res = await transport.client.tabs();
+    return Array.isArray(res && res.tabs) ? res.tabs : [];
+}
+
 async function runPasteExtension(opts) {
+    // The router is the only place a provider is decided. opts.provider is
+    // null unless --provider was passed (paste.js parseArgs).
+    const router = new ProviderRouter({ cliProvider: opts.provider || null });
+
     const runDir = pickRunDir(opts.runId);
     const p = ensureRunLayout(runDir);
 
@@ -219,11 +235,41 @@ async function runPasteExtension(opts) {
 
     const manualFollow = [];
     const notCareers = [];
+    const needsReview = [];
     let written = 0;
     let redirected = 0;
     let failed = 0;
 
     try {
+        // Provider preflight. One decision per pending source gives the set of
+        // providers this run touches; one checkTabs() per provider against the
+        // live tab inventory. A provider that fails the tab check does not abort
+        // the run: its sources are routed to needs-review in the loop below.
+        const touched = new Set();
+        for (const name of pending) {
+            try {
+                touched.add(router.decide(name, classes[name]).provider);
+            } catch (err) {
+                if (!(err instanceof ProviderRouterError)) throw err;
+                // surfaces per source in the loop
+            }
+        }
+        const tabFailures = new Map();
+        if (touched.size > 0) {
+            const tabInventory = await fetchTabs(transport);
+            for (const provider of Array.from(touched).sort()) {
+                try {
+                    const tab = router.checkTabs(provider, tabInventory);
+                    ui.ok(`${provider} tab ready (id ${tab.id})`);
+                } catch (err) {
+                    if (!(err instanceof ProviderRouterError)) throw err;
+                    tabFailures.set(provider, err);
+                    ui.fail(describeError(err));
+                }
+            }
+            ui.blank();
+        }
+
         for (let idx = 0; idx < pending.length; idx++) {
             const name = pending[idx];
             ui.divider(`[${idx + 1}/${pending.length}] ${name}`);
@@ -254,13 +300,35 @@ async function runPasteExtension(opts) {
                     break;
                 }
 
+                // Provider: ProviderRouter is the only decision point. A refusal
+                // (unknown / conflicting provider, or a failed tab preflight for the
+                // decided provider) marks the source needs-review; no fallback.
+                const cls = classes[name] || {};
+                const targetUrlForVerdict = cls.targetUrl || cls.url || null;
+                let decision;
+                try {
+                    decision = router.decide(name, classes[name]);
+                    const tabErr = tabFailures.get(decision.provider);
+                    if (tabErr) throw tabErr;
+                } catch (err) {
+                    if (!(err instanceof ProviderRouterError)) throw err;
+                    ui.fail(`needs review — ${describeError(err)}`);
+                    needsReview.push({ name, code: err.code, reason: err.reason });
+                    audit.skip(runDir, {
+                        phase: 'paste-extension',
+                        name,
+                        url: targetUrlForVerdict,
+                        reason: `needs-review ${err.code}: ${err.reason}`,
+                    });
+                    siteDone = true;
+                    break;
+                }
+                const provider = decision.provider;
+                if (hop === 0) ui.info(`provider: ${provider} (${decision.source})`);
+
                 // Establish the chat. On first attempt this navigates to
                 // / for a fresh chat; on retry it finds the existing chat
                 // in the sidebar so the LLM sees its prior turn.
-                // Resolve provider per source: classes.json override >
-                // --provider CLI flag > hardcoded 'deepseek'. Same
-                // resolution order as docs/integration-guide.md.
-                const provider = (classes[name] && classes[name].provider) || opts.provider || 'deepseek';
                 const persisted = chatMap.get(name, provider);
                 let openResult;
                 try {
@@ -279,9 +347,7 @@ async function runPasteExtension(opts) {
                 ui.info(`chat ${modeLabel}: ${name}`);
 
                 // The round-trip.
-                const cls = classes[name] || {};
-                const targetUrlForVerdict = cls.targetUrl || cls.url || null;
-                const spinner = makeSpinner('waiting for deepseek reply');
+                const spinner = makeSpinner(`waiting for ${provider} reply`);
                 spinner.start();
                 let result;
                 try {
@@ -451,7 +517,7 @@ async function runPasteExtension(opts) {
     ui.blank();
     ui.divider('Summary');
     ui.blank();
-    const headline = failed === 0 ? ui.tag('pass') : ui.tag('warn');
+    const headline = failed === 0 && needsReview.length === 0 ? ui.tag('pass') : ui.tag('warn');
     ui.line(`  ${headline}  paste complete (extension mode)`);
     ui.blank();
     ui.summary([
@@ -459,6 +525,7 @@ async function runPasteExtension(opts) {
         ['followed inline', String(redirected)],
         ['not-a-careers-page', String(notCareers.length)],
         ['failed', String(failed)],
+        ['needs review', String(needsReview.length)],
         ['manual follow needed', String(manualFollow.length)],
         ['already present', String(already.length)],
     ]);
@@ -467,6 +534,11 @@ async function runPasteExtension(opts) {
     if (notCareers.length > 0) {
         ui.warn('LLM says these URLs are NOT careers pages — fix or remove from urls.txt:');
         for (const nc of notCareers) ui.plain(`  ${nc.name.padEnd(22)} ${nc.reason}`);
+        ui.blank();
+    }
+    if (needsReview.length > 0) {
+        ui.warn('Needs review (provider routing refused; fix classes.json / --provider / open tabs, then re-run):');
+        for (const nr of needsReview) ui.plain(`  ${nr.name.padEnd(22)} ${nr.code}: ${nr.reason}`);
         ui.blank();
     }
     if (manualFollow.length > 0) {
@@ -481,9 +553,9 @@ async function runPasteExtension(opts) {
         ui.plain(`  pulchowk-events batch follow --run ${path.basename(runDir)} --only ${onlyArg}`);
         ui.blank();
     }
-    if (failed === 0 && manualFollow.length === 0) {
+    if (failed === 0 && manualFollow.length === 0 && needsReview.length === 0) {
         ui.action('next: pulchowk-events batch verify');
-    } else if (failed > 0) {
+    } else if (failed > 0 || needsReview.length > 0) {
         ui.action('re-run `batch paste --extension` to retry failed items');
     }
     ui.blank();
@@ -495,11 +567,12 @@ async function runPasteExtension(opts) {
         failed,
         manualFollow,
         notCareers,
+        needsReview,
     };
 }
 
 function emptyResult() {
-    return { written: 0, redirected: 0, skipped: 0, failed: 0, manualFollow: [], notCareers: [] };
+    return { written: 0, redirected: 0, skipped: 0, failed: 0, manualFollow: [], notCareers: [], needsReview: [] };
 }
 
 module.exports = { runPasteExtension };
