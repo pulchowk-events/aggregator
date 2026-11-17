@@ -109,10 +109,6 @@ async function fetchTabs(transport) {
 }
 
 async function runPasteExtension(opts) {
-    // The router is the only place a provider is decided. opts.provider is
-    // null unless --provider was passed (paste.js parseArgs).
-    const router = new ProviderRouter({ cliProvider: opts.provider || null });
-
     const runDir = pickRunDir(opts.runId);
     const p = ensureRunLayout(runDir);
 
@@ -231,6 +227,21 @@ async function runPasteExtension(opts) {
         throw err;
     }
     ui.ok(`extension transport ready on 127.0.0.1:${transport.boundPort}`);
+    ui.blank();
+
+    // The router is the only place a provider is decided. Its registry comes from the
+    // server (GET /providers), so it can only be built here, after transport.start().
+    // opts.provider is null unless --provider was passed (paste.js parseArgs).
+    // Any failure is a hard stop: no fallback to a hardcoded provider list.
+    let router;
+    try {
+        router = await ProviderRouter.fromServer(transport.client, { cliProvider: opts.provider || null });
+    } catch (err) {
+        ui.fail(describeError(err));
+        await transport.shutdown();
+        throw err;
+    }
+    ui.ok(`providers routable: ${router.names().join(', ')}`);
     ui.blank();
 
     const manualFollow = [];
