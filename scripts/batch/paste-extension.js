@@ -340,7 +340,7 @@ async function runPasteExtension(opts) {
                 // Establish the chat. On first attempt this navigates to
                 // / for a fresh chat; on retry it finds the existing chat
                 // in the sidebar so the LLM sees its prior turn.
-                const persisted = chatMap.get(name, provider);
+                const persisted = null;
                 let openResult;
                 try {
                     openResult = await transport.open({
