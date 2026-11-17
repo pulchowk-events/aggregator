@@ -109,10 +109,6 @@ async function fetchTabs(transport) {
 }
 
 async function runPasteExtension(opts) {
-    // The router is the only place a provider is decided. opts.provider is
-    // null unless --provider was passed (paste.js parseArgs).
-    const router = new ProviderRouter({ cliProvider: opts.provider || null });
-
     const runDir = pickRunDir(opts.runId);
     const p = ensureRunLayout(runDir);
 
@@ -233,6 +229,21 @@ async function runPasteExtension(opts) {
     ui.ok(`extension transport ready on 127.0.0.1:${transport.boundPort}`);
     ui.blank();
 
+    // The router is the only place a provider is decided. Its registry comes from the
+    // server (GET /providers), so it can only be built here, after transport.start().
+    // opts.provider is null unless --provider was passed (paste.js parseArgs).
+    // Any failure is a hard stop: no fallback to a hardcoded provider list.
+    let router;
+    try {
+        router = await ProviderRouter.fromServer(transport.client, { cliProvider: opts.provider || null });
+    } catch (err) {
+        ui.fail(describeError(err));
+        await transport.shutdown();
+        throw err;
+    }
+    ui.ok(`providers routable: ${router.names().join(', ')}`);
+    ui.blank();
+
     const manualFollow = [];
     const notCareers = [];
     const needsReview = [];
@@ -329,7 +340,7 @@ async function runPasteExtension(opts) {
                 // Establish the chat. On first attempt this navigates to
                 // / for a fresh chat; on retry it finds the existing chat
                 // in the sidebar so the LLM sees its prior turn.
-                const persisted = chatMap.get(name, provider);
+                const persisted = null;
                 let openResult;
                 try {
                     openResult = await transport.open({
