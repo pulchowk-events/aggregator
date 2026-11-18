@@ -28,9 +28,16 @@ const DATA_DIR = path.resolve(__dirname, '..', '..', 'data');
 // Allow tests / tools to redirect audit writes away from data/audit-log.jsonl
 // by setting AUDIT_FILE to an alternate path. Production never sets this, so
 // behavior is unchanged unless explicitly opted in.
+const DEFAULT_AUDIT_LOG_FILE = path.join(DATA_DIR, 'audit-log.jsonl');
 const AUDIT_LOG_FILE = process.env.AUDIT_FILE
     ? path.resolve(process.env.AUDIT_FILE)
-    : path.join(DATA_DIR, 'audit-log.jsonl');
+    : DEFAULT_AUDIT_LOG_FILE;
+
+// Bug 7: a stray AUDIT_FILE export silently redirects every audit write away
+// from the default file. Warn ONCE at load (informational, not fatal).
+if (process.env.AUDIT_FILE) {
+    console.warn(`[auditLogger] AUDIT_FILE is set: audit entries are written to ${AUDIT_LOG_FILE} instead of the default ${DEFAULT_AUDIT_LOG_FILE}. Unset AUDIT_FILE to restore the default.`);
+}
 
 // Rotation: cap the local file so it can't grow unbounded (mirrors the same
 // pattern already used for cache.expiredEvents, capped at CACHE_CAP). We cap
@@ -107,11 +114,66 @@ function rotateIfNeeded() {
     }
 }
 
+// --- Serialization for the local JSONL line (bug 5) ---
+// Tier 1: plain compact stringify (identical output for every healthy entry).
+// Tier 2: cycle-safe replacer. Errors become plain objects, BigInt becomes a
+//         string, circular refs become '[Circular]'. Preserves errorRaw.
+// Tier 3: degraded envelope (timestamp/level/category/message + failure note)
+//         when even tier 2 throws (e.g. a throwing getter). A line is always
+//         produced; fs errors are NOT handled here and still reach writeLocal.
+function errorToPlain(e) {
+    const out = { name: e.name, message: e.message, stack: e.stack };
+    for (const k of Object.keys(e)) {
+        try { out[k] = e[k]; } catch (err) { out[k] = '[Unreadable: ' + (err && err.message) + ']'; }
+    }
+    try { if (e.cause !== undefined && out.cause === undefined) out.cause = e.cause; } catch (err) { /* ignore */ }
+    return out;
+}
+
+function makeCycleSafeReplacer() {
+    const ancestors = []; // { orig, ret }
+    return function (key, value) {
+        if (typeof value === 'bigint') return value.toString();
+        if (value === null || typeof value !== 'object') return value;
+        while (ancestors.length && ancestors[ancestors.length - 1].ret !== this) ancestors.pop();
+        if (ancestors.some((a) => a.orig === value)) return '[Circular]';
+        const ret = value instanceof Error ? errorToPlain(value) : value;
+        ancestors.push({ orig: value, ret });
+        return ret;
+    };
+}
+
+function serializeEntry(entry) {
+    try {
+        return JSON.stringify(entry);
+    } catch (firstError) {
+        try {
+            const line = JSON.stringify(entry, makeCycleSafeReplacer());
+            console.warn('\u26a0\ufe0f audit entry needed cycle-safe serialization (' + entry.category + '): ' + firstError.message);
+            return line;
+        } catch (secondError) {
+            console.warn('\u26a0\ufe0f audit entry degraded to envelope-only (' + entry.category + '): ' + secondError.message);
+            try {
+                return JSON.stringify({
+                    timestamp: entry.timestamp,
+                    level: entry.level,
+                    category: entry.category,
+                    message: entry.message,
+                    serializationFailed: true,
+                    serializationError: String(secondError && secondError.message)
+                });
+            } catch (thirdError) {
+                return '{"serializationFailed":true,"serializationError":"envelope unserializable"}';
+            }
+        }
+    }
+}
+
 function writeLocal(entry) {
     try {
         ensureDataDir();
         rotateIfNeeded();
-        fs.appendFileSync(AUDIT_LOG_FILE, JSON.stringify(entry) + '\n');
+        fs.appendFileSync(AUDIT_LOG_FILE, serializeEntry(entry) + '\n');
     } catch (error) {
         // The local file is supposed to be the one thing that can never
         // silently fail — if even this throws, surface it loudly.
