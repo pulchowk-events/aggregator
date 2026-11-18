@@ -189,7 +189,7 @@ function cmdStatus(argv) {
     const classes = (() => { try { return JSON.parse(fs.readFileSync(p.classes, 'utf8')); } catch (e) { return null; } })();
     const genCount = (() => { try { return fs.readdirSync(p.generated).filter((f) => f.endsWith('.js')).length; } catch (e) { return 0; } })();
     const promptsCount = (() => { try { return fs.readdirSync(p.prompts).filter((f) => f.endsWith('.md')).length; } catch (e) { return 0; } })();
-    const resCount = (() => { try { return fs.readdirSync(p.results).filter((f) => f.endsWith('.json')).length; } catch (e) { return 0; } })();
+    const resCount = (() => { try { return fs.readdirSync(p.results).filter((f) => f.endsWith('.json') && !f.endsWith('.items.json')).length; } catch (e) { return 0; } })();
     const hasReport = fs.existsSync(p.report);
 
     console.log('');

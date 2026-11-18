@@ -839,7 +839,7 @@ async function runVerify(opts) {
 
         const spawnReplacement = (oldSlot) => {
             if (pendingQueue.length === 0) return;
-            const w = spawn('node', [WORKER_SCRIPT, String(opts.timeoutMs)], { cwd: REPO });
+            const w = spawn('node', [WORKER_SCRIPT, String(opts.timeoutMs)], { cwd: REPO, env: { ...process.env, BATCH_RUN_ID: path.basename(runDir) } });
             const slot = { w, inflight: null };
             setupSlot(slot);
             dispatch(slot);
@@ -930,7 +930,7 @@ async function runVerify(opts) {
         const allSlots = [];
         for (let i = 0; i < workerCount; i++) {
             activeWorkers++;
-            const w = spawn('node', [WORKER_SCRIPT, String(opts.timeoutMs)], { cwd: REPO });
+            const w = spawn('node', [WORKER_SCRIPT, String(opts.timeoutMs)], { cwd: REPO, env: { ...process.env, BATCH_RUN_ID: path.basename(runDir) } });
             const slot = { w, inflight: null, warm: false };
             setupSlot(slot);
             allSlots.push(slot);
