@@ -449,49 +449,133 @@ function buildPrompt({ name, type, url, listing, detail, detected }) {
     parts.push('Do not invent selectors you have not seen in the field evidence. If a field cannot be extracted with confidence, use `<field>_status: "extraction_failed"` with the selector you tried.');
     parts.push('');
 
-    // Hard total budget. If the assembled prompt exceeds 118KB, drop the
-    // least-valuable sections until it fits. Order of sacrifice:
-    //   1. Evidence dump (sample detail page) -- raw HTML now covers it
-    //   2. Evidence dump (listing page) -- same
-    //   3. Raw HTML (detail role-body) -- trimmed to first 30KB
-    //   4. Raw HTML (card) -- trimmed to first 20KB
-    // Never drops: verdict section, field requirements, anti-patterns,
-    // reference example, contract, item shape, output instructions.
-    const MAX_PROMPT_BYTES = 118000;
+    // Hard total budget (MAX_PROMPT_BYTES, 118KB). Under budget this returns the
+    // assembled prompt untouched and the trimmer is never called. Over budget,
+    // trimPartsToBudget walks the sacrifice ladder documented below. REQUIRED
+    // sections (scripts/batch/lib/prompt-structure.js) are truncated, never deleted.
+    const assembled = parts.join('\n');
+    if (assembled.length <= MAX_PROMPT_BYTES) return assembled;
+    return trimPartsToBudget(parts, { max: MAX_PROMPT_BYTES, minEvidence: MIN_EVIDENCE_BYTES });
+}
+
+// ---- Prompt budget trimmer -------------------------------------------------
+// Read-only import: the trimmer consults the validator's REQUIRED_SECTIONS so
+// it can never delete a section the validator demands. (prompt-structure.js
+// only requires fs, so there is no import cycle.)
+const promptStructure = require('../batch/lib/prompt-structure');
+
+const MAX_PROMPT_BYTES = 118000;
+// Floor for the listing evidence dump body when it has to be truncated.
+const MIN_EVIDENCE_BYTES = 4096;
+// Room kept for the trailing "prompt trimmed" marker so output stays in budget.
+const MARKER_RESERVE = 400;
+const SAMPLE_DETAIL_HEADER = '## Evidence dump (sample detail page)';
+const LISTING_DUMP_HEADER = '## Evidence dump (listing page)';
+const TRUNC_PREFIX = '\u2026truncated ';
+const TRUNC_SUFFIX = ' bytes';
+
+function isRequiredHeader(header) {
+    return promptStructure.REQUIRED_SECTIONS.some((spec) =>
+        spec.match === 'exact' ? header === spec.text : header.startsWith(spec.text));
+}
+
+function isSectionHeader(p) {
+    return typeof p === 'string' && p.startsWith('## ');
+}
+
+// Delete a whole section (header through the next ## header). Refuses any
+// REQUIRED section; only OPTIONAL sections may be deleted outright.
+function dropSectionByHeader(parts, header, dropped) {
+    if (isRequiredHeader(header)) return false;
+    const start = parts.findIndex((p) => p === header);
+    if (start < 0) return false;
+    let end = start + 1;
+    while (end < parts.length && !isSectionHeader(parts[end])) end++;
+    parts.splice(start, end - start);
+    dropped.push(header);
+    return true;
+}
+
+// Shrink the largest body block of a section in place. The header element and
+// the code-fence elements are never touched, so the section stays present and
+// its fence stays closed. Removes about `need` chars, but never leaves fewer
+// than `minKeep` chars of content. Returns the number of chars removed (0 if none).
+function truncateSectionBody(parts, header, need, minKeep) {
+    const start = parts.findIndex((p) => p === header);
+    if (start < 0) return 0;
+    let end = start + 1;
+    while (end < parts.length && !isSectionHeader(parts[end])) end++;
+
+    let idx = -1;
+    let longest = 0;
+    for (let i = start + 1; i < end; i++) {
+        const p = parts[i];
+        if (typeof p !== 'string' || p.startsWith('```')) continue;
+        if (p.length > longest) { longest = p.length; idx = i; }
+    }
+    if (idx < 0) return 0;
+
+    const payload = parts[idx];
+    const noteMax = (TRUNC_PREFIX + String(payload.length) + TRUNC_SUFFIX).length;
+    let keep = Math.max(minKeep, payload.length - need - 1 - noteMax);
+    if (keep >= payload.length) return 0;
+    // Do not cut a surrogate pair in half.
+    const prev = keep > 0 ? payload.charCodeAt(keep - 1) : 0;
+    if (prev >= 0xd800 && prev <= 0xdbff) keep--;
+
+    const removed = payload.length - keep;
+    const note = TRUNC_PREFIX + removed + TRUNC_SUFFIX;
+    if (keep + 1 + note.length >= payload.length) return 0; // no net saving
+    parts[idx] = payload.slice(0, keep) + '\n' + note;
+    return removed;
+}
+
+function buildTrimMarker(dropped, truncated, budget, before, overBy) {
+    let m = '\n\n<!-- prompt trimmed: dropped [' + dropped.join(', ') + ']';
+    if (truncated.length > 0) m += ' truncated [' + truncated.join(', ') + ']';
+    m += ' to fit ' + budget + 'B budget (was ' + before + 'B)';
+    if (overBy > 0) m += ' -- STILL OVER BUDGET by ' + overBy + 'B (before this marker)';
+    return m + ' -->';
+}
+
+// Sacrifice ladder, applied only when the assembled prompt is over budget:
+//   1. Drop "Evidence dump (sample detail page)" -- the only OPTIONAL section.
+//   2. Truncate the body of "Evidence dump (listing page)" in place, only as
+//      much as needed and never below minEvidence. This section is REQUIRED by
+//      prompt-structure.js, so its header and fences always stay.
+//   3. Truncate any block over 30000 chars to 30000 (unchanged from before).
+// If it still does not fit, the fixed sections alone exceed the budget: warn
+// and return the prompt over budget (with a marker) rather than throw.
+// Mutates `parts`. "bytes" in the note counts string length, like the budget.
+function trimPartsToBudget(parts, opts) {
+    const o = opts || {};
+    const budget = o.max || MAX_PROMPT_BYTES;
+    const minEvidence = o.minEvidence === undefined ? MIN_EVIDENCE_BYTES : o.minEvidence;
+    const warn = o.warn || console.warn;
+
     let total = parts.join('\n').length;
-    if (total <= MAX_PROMPT_BYTES) return parts.join('\n');
+    if (total <= budget) return parts.join('\n');
 
-    const budget = MAX_PROMPT_BYTES;
+    const before = total;
+    const target = budget - MARKER_RESERVE;
     const dropped = [];
+    const truncated = [];
 
-    // Helper: find first index matching prefix and drop the section body.
-    // Sections are line-based; find header, find next ## header, drop
-    // everything between.
-    const dropSectionByHeader = (headerPrefix) => {
-        const start = parts.findIndex((p) => p === headerPrefix);
-        if (start < 0) return false;
-        let end = start + 1;
-        while (end < parts.length && !parts[end].startsWith('## ')) end++;
-        parts.splice(start, end - start);
-        dropped.push(headerPrefix);
-        return true;
-    };
+    // 1. Drop sample-detail evidence dump
+    if (total > target) {
+        dropSectionByHeader(parts, SAMPLE_DETAIL_HEADER, dropped);
+        total = parts.join('\n').length;
+    }
 
-    if (total > budget) {
-        // 1. Drop sample-detail evidence dump
-        const before = parts.join('\n').length;
-        dropSectionByHeader('## Evidence dump (sample detail page)');
+    // 2. Truncate listing evidence dump in place (REQUIRED: never deleted)
+    if (total > target) {
+        const removed = truncateSectionBody(parts, LISTING_DUMP_HEADER, total - target, minEvidence);
+        if (removed > 0) truncated.push(LISTING_DUMP_HEADER + ' -' + removed + 'B');
         total = parts.join('\n').length;
-        if (total <= budget) return parts.join('\n') + `\n\n<!-- prompt trimmed: dropped [${dropped.join(', ')}] to fit ${budget}B budget (was ${before}B) -->`;
     }
-    if (total > budget) {
-        const before = parts.join('\n').length;
-        dropSectionByHeader('## Evidence dump (listing page)');
-        total = parts.join('\n').length;
-        if (total <= budget) return parts.join('\n') + `\n\n<!-- prompt trimmed: dropped [${dropped.join(', ')}] to fit ${budget}B budget (was ${before}B) -->`;
-    }
-    // If still over, truncate raw HTML blocks in place
-    if (total > budget) {
+
+    // 3. If still over, truncate raw HTML blocks in place
+    if (total > target) {
         const trimmed = parts.map((p) => {
             if (typeof p === 'string' && p.length > 30000) {
                 return p.slice(0, 30000) + '\n<!-- truncated -->';
@@ -504,7 +588,15 @@ function buildPrompt({ name, type, url, listing, detail, detected }) {
         dropped.push('truncated-oversized-blocks');
     }
 
-    return parts.join('\n');
+    // Single exit.
+    const base = parts.join('\n');
+    let out = base + buildTrimMarker(dropped, truncated, budget, before, 0);
+    if (out.length > budget) {
+        out = base + buildTrimMarker(dropped, truncated, budget, before, base.length - budget);
+        warn('[prompt] trimmer could not fit the ' + budget + 'B budget: content is still ' +
+            (base.length - budget) + 'B over after every rung. Required sections were kept.');
+    }
+    return out;
 }
 
 function describeSiteType(detected) {
@@ -556,4 +648,4 @@ function buildAssumptionsSection(detected, listing, detail) {
     return lines.join('\n');
 }
 
-module.exports = { buildPrompt, loadReference };
+module.exports = { buildPrompt, loadReference, trimPartsToBudget, MAX_PROMPT_BYTES, MIN_EVIDENCE_BYTES };
