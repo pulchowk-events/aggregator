@@ -499,8 +499,17 @@ function buildAssumptionsSection(detected, listing, detail) {
     lines.push(`- **Site type:** \`${detected.type}\``);
     if (s.hasJsonLd) lines.push(`- **JSON-LD on listing:** yes`);
     if (s.hasDetailJsonLd) lines.push(`- **JSON-LD on detail:** yes`);
-    if (s.hasCardWrapper && listing.cardGroups && listing.cardGroups[0]) {
-        lines.push(`- **Card wrapper:** \`${listing.cardGroups[0].selector}\` (${listing.cardGroups[0].count} instances)`);
+    // Card wrapper comes from cardCandidates (chrome-filtered heuristic).
+    // cardGroups is deliberately NOT consulted: it includes script/link/style
+    // and contradicted the anti-patterns section (bug 2). No candidates,
+    // no line.
+    const topCandidate = (listing && Array.isArray(listing.cardCandidates)) ? listing.cardCandidates[0] : null;
+    if (topCandidate && topCandidate.selector) {
+        let cardLine = '- **Card wrapper:** `' + topCandidate.selector + '` (' + topCandidate.count + ' instances';
+        if (typeof topCandidate.jobTitleRatio === 'number') cardLine += ', jobTitleRatio ' + topCandidate.jobTitleRatio;
+        cardLine += ')';
+        if (topCandidate.looksLikeSectionWrapper) cardLine += ' -- verify, may be a section wrapper';
+        lines.push(cardLine);
     }
     if (detected.evidence && detected.evidence.detailLinkPattern) {
         lines.push(`- **Detail-link pattern:** \`${detected.evidence.detailLinkPattern}\` (${detected.evidence.detailLinkCount} matches)`);
