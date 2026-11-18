@@ -15,8 +15,38 @@ const REFERENCE_EXAMPLES = {
     'unknown':           'src/scrapers/extractors/events/katajaam.js'
 };
 
-function loadReference(detectedType) {
-    const ref = REFERENCE_EXAMPLES[detectedType] || REFERENCE_EXAMPLES.unknown;
+// Per-type overrides. REFERENCE_EXAMPLES above is the events table and is also
+// the final fallback. A type listed here resolves detected.type within its own
+// domain first (then that domain's 'unknown'), so a jobs/scholarships prompt is
+// never handed an events extractor as its worked example. Types with no entry
+// here (events) use REFERENCE_EXAMPLES unchanged.
+// Known gap: jobs/listing-to-detail -> kumarijob has no _status/_evidence
+// reporting (growbydata/adex do). Swap the entry when a better one is vetted.
+const TYPE_REFERENCE_EXAMPLES = {
+    jobs: {
+        'single-page-cards': 'src/scrapers/extractors/jobs/growbydata.js',
+        'listing-to-detail': 'src/scrapers/extractors/jobs/kumarijob.js',
+        'jsonld-first':      'src/scrapers/extractors/jobs/lftechnology.js',
+        'unknown':           'src/scrapers/extractors/jobs/growbydata.js'
+    },
+    scholarships: {
+        'single-page-cards': 'src/scrapers/extractors/scholarships/scholarshipsads.js',
+        'listing-to-detail': 'src/scrapers/extractors/scholarships/erasmusmundus.js',
+        'unknown':           'src/scrapers/extractors/scholarships/scholarshipsads.js'
+    }
+};
+
+function resolveReferencePath(type, detectedType) {
+    const byType = TYPE_REFERENCE_EXAMPLES[type];
+    if (byType) {
+        const hit = byType[detectedType] || byType.unknown;
+        if (hit) return hit;
+    }
+    return REFERENCE_EXAMPLES[detectedType] || REFERENCE_EXAMPLES.unknown;
+}
+
+function loadReference(type, detectedType) {
+    const ref = resolveReferencePath(type, detectedType);
     try {
         return { path: ref, code: fs.readFileSync(path.join(REPO, ref), 'utf8') };
     } catch (e) {
@@ -220,7 +250,7 @@ const FIELD_EVIDENCE_HEADER = [
 ].join('\n');
 
 function buildPrompt({ name, type, url, listing, detail, detected }) {
-    const ref = loadReference(detected.type);
+    const ref = loadReference(type, detected.type);
 
     const parts = [];
 
@@ -499,8 +529,17 @@ function buildAssumptionsSection(detected, listing, detail) {
     lines.push(`- **Site type:** \`${detected.type}\``);
     if (s.hasJsonLd) lines.push(`- **JSON-LD on listing:** yes`);
     if (s.hasDetailJsonLd) lines.push(`- **JSON-LD on detail:** yes`);
-    if (s.hasCardWrapper && listing.cardGroups && listing.cardGroups[0]) {
-        lines.push(`- **Card wrapper:** \`${listing.cardGroups[0].selector}\` (${listing.cardGroups[0].count} instances)`);
+    // Card wrapper comes from cardCandidates (chrome-filtered heuristic).
+    // cardGroups is deliberately NOT consulted: it includes script/link/style
+    // and contradicted the anti-patterns section (bug 2). No candidates,
+    // no line.
+    const topCandidate = (listing && Array.isArray(listing.cardCandidates)) ? listing.cardCandidates[0] : null;
+    if (topCandidate && topCandidate.selector) {
+        let cardLine = '- **Card wrapper:** `' + topCandidate.selector + '` (' + topCandidate.count + ' instances';
+        if (typeof topCandidate.jobTitleRatio === 'number') cardLine += ', jobTitleRatio ' + topCandidate.jobTitleRatio;
+        cardLine += ')';
+        if (topCandidate.looksLikeSectionWrapper) cardLine += ' -- verify, may be a section wrapper';
+        lines.push(cardLine);
     }
     if (detected.evidence && detected.evidence.detailLinkPattern) {
         lines.push(`- **Detail-link pattern:** \`${detected.evidence.detailLinkPattern}\` (${detected.evidence.detailLinkCount} matches)`);
@@ -517,4 +556,4 @@ function buildAssumptionsSection(detected, listing, detail) {
     return lines.join('\n');
 }
 
-module.exports = { buildPrompt };
+module.exports = { buildPrompt, loadReference };

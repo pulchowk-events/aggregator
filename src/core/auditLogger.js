@@ -28,9 +28,16 @@ const DATA_DIR = path.resolve(__dirname, '..', '..', 'data');
 // Allow tests / tools to redirect audit writes away from data/audit-log.jsonl
 // by setting AUDIT_FILE to an alternate path. Production never sets this, so
 // behavior is unchanged unless explicitly opted in.
+const DEFAULT_AUDIT_LOG_FILE = path.join(DATA_DIR, 'audit-log.jsonl');
 const AUDIT_LOG_FILE = process.env.AUDIT_FILE
     ? path.resolve(process.env.AUDIT_FILE)
-    : path.join(DATA_DIR, 'audit-log.jsonl');
+    : DEFAULT_AUDIT_LOG_FILE;
+
+// Bug 7: a stray AUDIT_FILE export silently redirects every audit write away
+// from the default file. Warn ONCE at load (informational, not fatal).
+if (process.env.AUDIT_FILE) {
+    console.warn(`[auditLogger] AUDIT_FILE is set: audit entries are written to ${AUDIT_LOG_FILE} instead of the default ${DEFAULT_AUDIT_LOG_FILE}. Unset AUDIT_FILE to restore the default.`);
+}
 
 // Rotation: cap the local file so it can't grow unbounded (mirrors the same
 // pattern already used for cache.expiredEvents, capped at CACHE_CAP). We cap
@@ -75,35 +82,118 @@ function ensureDataDir() {
 }
 
 function rotateIfNeeded() {
+    // Rename-aside rotation (bug 6). The old read-trim-writeFileSync sequence
+    // truncated and rewrote the live file, so any line another process
+    // appended between the read and the write was lost. Renaming the live file
+    // aside never rewrites existing bytes: concurrent appenders either land in
+    // the renamed sibling or recreate a fresh live file via appendFileSync.
+    // Only the byte cap triggers rotation; MAX_AUDIT_LINES is no longer used.
+    const KEEP_ROTATED = 5;
     try {
         if (!fs.existsSync(AUDIT_LOG_FILE)) return;
-        const stat = fs.statSync(AUDIT_LOG_FILE);
-        if (stat.size <= MAX_AUDIT_BYTES) return;
+        if (fs.statSync(AUDIT_LOG_FILE).size <= MAX_AUDIT_BYTES) return;
 
-        const content = fs.readFileSync(AUDIT_LOG_FILE, 'utf8');
-        const lines = content.split('\n').filter(Boolean);
-        // Drop oldest lines until BOTH constraints are satisfied.
-        // Line-count-only trim is insufficient when recent entries are
-        // large (sanitize_scraped_event embeds the full event object --
-        // ~1KB per line). 5000 lines of fat entries can exceed the 5MB
-        // byte cap on their own, so the file oscillated at 5001 lines /
-        // ~5.6MB forever, never under 5MB.
-        let start = 0;
-        let bytes = stat.size;
-        while (start < lines.length && (lines.length - start) > MAX_AUDIT_LINES) {
-            bytes -= Buffer.byteLength(lines[start], 'utf8') + 1;
-            start++;
+        // Re-check right before the rename: another process may have rotated
+        // between the first stat and now, leaving a fresh small live file.
+        let size;
+        try {
+            size = fs.statSync(AUDIT_LOG_FILE).size;
+        } catch (e) {
+            if (e && e.code === 'ENOENT') return;
+            throw e;
         }
-        while (start < lines.length && bytes > MAX_AUDIT_BYTES) {
-            bytes -= Buffer.byteLength(lines[start], 'utf8') + 1;
-            start++;
+        if (size <= MAX_AUDIT_BYTES) return;
+
+        const dir = path.dirname(AUDIT_LOG_FILE);
+        const liveName = path.basename(AUDIT_LOG_FILE);
+        const base = path.basename(AUDIT_LOG_FILE, '.jsonl');
+        // No colons or dots in the stamp (9p / Windows safe).
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const sibling = path.join(dir, base + '.' + stamp + '.' + process.pid + '.jsonl');
+
+        try {
+            fs.renameSync(AUDIT_LOG_FILE, sibling);
+        } catch (e) {
+            // ENOENT: another process won the race. Anything else: leave the
+            // live file alone so it keeps growing; the next write retries.
+            if (e && e.code === 'ENOENT') return;
+            console.error('[auditLogger] Failed to rotate audit log (rename):', e);
+            return;
         }
 
-        if (start === 0) return;
-        const trimmed = lines.slice(start);
-        fs.writeFileSync(AUDIT_LOG_FILE, trimmed.join('\n') + '\n');
+        // Prune oldest siblings beyond KEEP_ROTATED. Scoped to this file's
+        // own basename prefix so an AUDIT_FILE redirect into a shared dir
+        // can only ever delete its own rotated siblings.
+        const siblings = fs.readdirSync(dir)
+            .filter((f) => f !== liveName && f.startsWith(base + '.') && f.endsWith('.jsonl'))
+            .sort();
+        const excess = siblings.length - KEEP_ROTATED;
+        for (let i = 0; i < excess; i++) {
+            try {
+                fs.unlinkSync(path.join(dir, siblings[i]));
+            } catch (e) {
+                if (!e || e.code !== 'ENOENT') {
+                    console.error('[auditLogger] Failed to prune rotated audit log ' + siblings[i] + ':', e);
+                }
+            }
+        }
     } catch (error) {
-        console.error('❌ Failed to rotate local audit log:', error);
+        console.error('[auditLogger] Failed to rotate local audit log:', error);
+    }
+}
+
+// --- Serialization for the local JSONL line (bug 5) ---
+// Tier 1: plain compact stringify (identical output for every healthy entry).
+// Tier 2: cycle-safe replacer. Errors become plain objects, BigInt becomes a
+//         string, circular refs become '[Circular]'. Preserves errorRaw.
+// Tier 3: degraded envelope (timestamp/level/category/message + failure note)
+//         when even tier 2 throws (e.g. a throwing getter). A line is always
+//         produced; fs errors are NOT handled here and still reach writeLocal.
+function errorToPlain(e) {
+    const out = { name: e.name, message: e.message, stack: e.stack };
+    for (const k of Object.keys(e)) {
+        try { out[k] = e[k]; } catch (err) { out[k] = '[Unreadable: ' + (err && err.message) + ']'; }
+    }
+    try { if (e.cause !== undefined && out.cause === undefined) out.cause = e.cause; } catch (err) { /* ignore */ }
+    return out;
+}
+
+function makeCycleSafeReplacer() {
+    const ancestors = []; // { orig, ret }
+    return function (key, value) {
+        if (typeof value === 'bigint') return value.toString();
+        if (value === null || typeof value !== 'object') return value;
+        while (ancestors.length && ancestors[ancestors.length - 1].ret !== this) ancestors.pop();
+        if (ancestors.some((a) => a.orig === value)) return '[Circular]';
+        const ret = value instanceof Error ? errorToPlain(value) : value;
+        ancestors.push({ orig: value, ret });
+        return ret;
+    };
+}
+
+function serializeEntry(entry) {
+    try {
+        return JSON.stringify(entry);
+    } catch (firstError) {
+        try {
+            const line = JSON.stringify(entry, makeCycleSafeReplacer());
+            console.warn('\u26a0\ufe0f audit entry needed cycle-safe serialization (' + entry.category + '): ' + firstError.message);
+            return line;
+        } catch (secondError) {
+            console.warn('\u26a0\ufe0f audit entry degraded to envelope-only (' + entry.category + '): ' + secondError.message);
+            try {
+                return JSON.stringify({
+                    timestamp: entry.timestamp,
+                    level: entry.level,
+                    category: entry.category,
+                    message: entry.message,
+                    serializationFailed: true,
+                    serializationError: String(secondError && secondError.message)
+                });
+            } catch (thirdError) {
+                return '{"serializationFailed":true,"serializationError":"envelope unserializable"}';
+            }
+        }
     }
 }
 
@@ -111,7 +201,7 @@ function writeLocal(entry) {
     try {
         ensureDataDir();
         rotateIfNeeded();
-        fs.appendFileSync(AUDIT_LOG_FILE, JSON.stringify(entry) + '\n');
+        fs.appendFileSync(AUDIT_LOG_FILE, serializeEntry(entry) + '\n');
     } catch (error) {
         // The local file is supposed to be the one thing that can never
         // silently fail — if even this throws, surface it loudly.
