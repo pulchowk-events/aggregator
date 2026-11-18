@@ -82,35 +82,63 @@ function ensureDataDir() {
 }
 
 function rotateIfNeeded() {
+    // Rename-aside rotation (bug 6). The old read-trim-writeFileSync sequence
+    // truncated and rewrote the live file, so any line another process
+    // appended between the read and the write was lost. Renaming the live file
+    // aside never rewrites existing bytes: concurrent appenders either land in
+    // the renamed sibling or recreate a fresh live file via appendFileSync.
+    // Only the byte cap triggers rotation; MAX_AUDIT_LINES is no longer used.
+    const KEEP_ROTATED = 5;
     try {
         if (!fs.existsSync(AUDIT_LOG_FILE)) return;
-        const stat = fs.statSync(AUDIT_LOG_FILE);
-        if (stat.size <= MAX_AUDIT_BYTES) return;
+        if (fs.statSync(AUDIT_LOG_FILE).size <= MAX_AUDIT_BYTES) return;
 
-        const content = fs.readFileSync(AUDIT_LOG_FILE, 'utf8');
-        const lines = content.split('\n').filter(Boolean);
-        // Drop oldest lines until BOTH constraints are satisfied.
-        // Line-count-only trim is insufficient when recent entries are
-        // large (sanitize_scraped_event embeds the full event object --
-        // ~1KB per line). 5000 lines of fat entries can exceed the 5MB
-        // byte cap on their own, so the file oscillated at 5001 lines /
-        // ~5.6MB forever, never under 5MB.
-        let start = 0;
-        let bytes = stat.size;
-        while (start < lines.length && (lines.length - start) > MAX_AUDIT_LINES) {
-            bytes -= Buffer.byteLength(lines[start], 'utf8') + 1;
-            start++;
+        // Re-check right before the rename: another process may have rotated
+        // between the first stat and now, leaving a fresh small live file.
+        let size;
+        try {
+            size = fs.statSync(AUDIT_LOG_FILE).size;
+        } catch (e) {
+            if (e && e.code === 'ENOENT') return;
+            throw e;
         }
-        while (start < lines.length && bytes > MAX_AUDIT_BYTES) {
-            bytes -= Buffer.byteLength(lines[start], 'utf8') + 1;
-            start++;
+        if (size <= MAX_AUDIT_BYTES) return;
+
+        const dir = path.dirname(AUDIT_LOG_FILE);
+        const liveName = path.basename(AUDIT_LOG_FILE);
+        const base = path.basename(AUDIT_LOG_FILE, '.jsonl');
+        // No colons or dots in the stamp (9p / Windows safe).
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const sibling = path.join(dir, base + '.' + stamp + '.' + process.pid + '.jsonl');
+
+        try {
+            fs.renameSync(AUDIT_LOG_FILE, sibling);
+        } catch (e) {
+            // ENOENT: another process won the race. Anything else: leave the
+            // live file alone so it keeps growing; the next write retries.
+            if (e && e.code === 'ENOENT') return;
+            console.error('[auditLogger] Failed to rotate audit log (rename):', e);
+            return;
         }
 
-        if (start === 0) return;
-        const trimmed = lines.slice(start);
-        fs.writeFileSync(AUDIT_LOG_FILE, trimmed.join('\n') + '\n');
+        // Prune oldest siblings beyond KEEP_ROTATED. Scoped to this file's
+        // own basename prefix so an AUDIT_FILE redirect into a shared dir
+        // can only ever delete its own rotated siblings.
+        const siblings = fs.readdirSync(dir)
+            .filter((f) => f !== liveName && f.startsWith(base + '.') && f.endsWith('.jsonl'))
+            .sort();
+        const excess = siblings.length - KEEP_ROTATED;
+        for (let i = 0; i < excess; i++) {
+            try {
+                fs.unlinkSync(path.join(dir, siblings[i]));
+            } catch (e) {
+                if (!e || e.code !== 'ENOENT') {
+                    console.error('[auditLogger] Failed to prune rotated audit log ' + siblings[i] + ':', e);
+                }
+            }
+        }
     } catch (error) {
-        console.error('❌ Failed to rotate local audit log:', error);
+        console.error('[auditLogger] Failed to rotate local audit log:', error);
     }
 }
 
