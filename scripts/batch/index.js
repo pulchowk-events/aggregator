@@ -7,6 +7,7 @@
 //   verify     -- stage + run verify-source.js + unstage
 //   report     -- aggregate, print table, write report.json
 //   status     -- show current run state (a quick report without verify)
+//   dry-run    -- pipe items.json through posting gates (policy only, no Discord)
 //
 // Usage:
 //   pulchowk-events batch init <file> [--run <id>]
@@ -73,6 +74,7 @@ function printHelp() {
     console.log(`  ${CYAN}verify${R}            Stage + run verify-source.js + unstage.`);
     console.log(`  ${CYAN}report${R}            Print a table of pass/fail/blocked.`);
     console.log(`  ${CYAN}check${R}             Validate prompt structure (guards against wizard-template drift).`);
+    console.log(`  ${CYAN}dry-run${R}           Pipe items.json through posting gates (--run <id> [--mode main|test] [--source <name>] [--items <dir>] [--json]).`);
     console.log(`  ${CYAN}paste${R}             Interactive loop: copy prompt, paste LLM reply, write extractor.`);
     console.log(`  ${CYAN}follow${R}            Follow CAREERS_PAGE_REDIRECT verdicts (re-dump, re-prompt).`);
     console.log(`  ${CYAN}refine${R}            Re-prompt LLM-origin failed sites with verify failure evidence.`);
@@ -337,6 +339,16 @@ function main() {
                 console.error(`${RED}✗ paste failed:${R} ${e.message}`);
                 return 1;
             });
+        }
+        case 'dry-run': {
+            try {
+                const { parseDryRunArgs, runDryRun } = require('./dry-run');
+                const r = runDryRun(parseDryRunArgs(rest));
+                return r.exitCode;
+            } catch (e) {
+                console.error(`${RED}x dry-run failed:${R} ${e.message}`);
+                return 1;
+            }
         }
         case 'check': {
             const opts = parseCheckArgs(rest);

@@ -128,9 +128,21 @@ async function dumpCardHtml(page, cardSelector) {
     if (!cardSelector || isChromeSelector(cardSelector)) return null;
     try {
         const html = await page.evaluate((sel) => {
-            let el;
-            try { el = document.querySelector(sel); } catch (e) { return null; }
-            return el ? el.outerHTML : null;
+            let els;
+            try { els = Array.from(document.querySelectorAll(sel)); } catch (e) { return null; }
+            const SKIP = 'form, header, nav, footer, aside, [role="navigation"], [role="banner"], [role="contentinfo"]';
+            let best = null;
+            for (const cand of els) {
+                if (cand.closest(SKIP)) continue;
+                const parent = cand.parentElement;
+                if (!parent) continue;
+                let sibs = 0;
+                for (const c of parent.children) { if (c.matches(sel)) sibs++; }
+                if (sibs < 3) continue;
+                if ((cand.textContent || '').trim().length < 40) continue;
+                if (!best || sibs > best.sibs) best = { el: cand, sibs };
+            }
+            return best ? best.el.outerHTML : null;
         }, cardSelector);
         if (!html) return null;
         // Budget: 40KB. A real job card should be under 20KB; if it's
@@ -480,6 +492,26 @@ async function dumpListingPage(page) {
                         avgChildTextLength: Math.round(avgChildTextLength),
                         looksLikeSectionWrapper,
                         childSamples,
+                        hrefs: (() => {
+                            const out = [];
+                            const seen = new Set();
+                            const add = (a) => {
+                                if (out.length >= 60) return;
+                                const raw = a.getAttribute('href');
+                                if (!raw || raw.startsWith('#') || raw.startsWith('javascript:') || raw.startsWith('mailto:')) return;
+                                let u;
+                                try { u = new URL(raw, window.location.href); } catch (e) { return; }
+                                const key = u.pathname + u.search;
+                                if (seen.has(key)) return;
+                                seen.add(key);
+                                out.push(key);
+                            };
+                            for (const child of group) {
+                                if (child.tagName === 'A' && child.hasAttribute('href')) add(child);
+                                for (const a of child.querySelectorAll('a[href]')) add(a);
+                            }
+                            return out;
+                        })(),
                         sampleHtml: group[0].outerHTML.slice(0, 300)
                     });
                 }
@@ -530,21 +562,9 @@ async function dumpListingPage(page) {
         }
         const detailLinkCandidates = Array.from(detailLinkBuckets.entries())
             .filter(([, items]) => items.length >= 2)
-            .map(([pattern, items]) => {
-                // "appearsInCards" = is this href referenced inside a card's
-                // own HTML? Genuine detail links appear on their card. Nav
-                // links don't.
-                const lastSegs = items.slice(0, 3).map((it) => {
-                    const parts = it.href.split('/');
-                    return parts[parts.length - 1] || parts[parts.length - 2] || '';
-                });
-                const appearsInCards = sortedCards.some((card) =>
-                    lastSegs.some((seg) => seg && card.sampleHtml.includes(seg))
-                );
-                return { pattern, count: items.length, samples: items.slice(0, 3), appearsInCards };
-            })
-            .sort((a, b) => (b.appearsInCards ? 1 : 0) - (a.appearsInCards ? 1 : 0) || b.count - a.count)
-            .slice(0, 5);
+            .map(([pattern, items]) => ({ pattern, count: items.length, samples: items.slice(0, 3) }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 20);
 
         return {
             url: window.location.href,
@@ -570,6 +590,21 @@ async function dumpListingPage(page) {
         fieldEvidence = await extractFieldEvidence(page);
     } catch (e) { /* best-effort; prompt renders placeholder if null */ }
 
+    // Bug 5: appearsInCards is computed Node-side from each card's own hrefs.
+    if (Array.isArray(structural.detailLinkCandidates)) {
+        structural.detailLinkCandidates = structural.detailLinkCandidates
+            .map((c) => {
+                const sampleHrefs = (c.samples || []).map((s) => s.href);
+                return {
+                    pattern: c.pattern,
+                    count: c.count,
+                    samples: c.samples,
+                    appearsInCards: appearsInCards(structural.cardCandidates, sampleHrefs)
+                };
+            })
+            .sort((a, b) => (b.appearsInCards ? 1 : 0) - (a.appearsInCards ? 1 : 0) || b.count - a.count)
+            .slice(0, 5);
+    }
     // Trim verbose fields BEFORE the dump reaches the prompt. The
     // structural dump carries anchorGroups (hundreds of entries),
     // cardCandidates with full sample arrays, jsonLdSamples with HTML
@@ -610,7 +645,7 @@ async function dumpListingPage(page) {
         // Fallback fires when the card selector matched something tiny
         // (a wrapper div, an icon, a broken class). 3000B is the floor
         // below which the "card" HTML is definitely not a real job card.
-        if (!rawCardHtml || !rawCardHtml.html || rawCardHtml.html.length < 3000) {
+        if (!rawCardHtml || !rawCardHtml.html) {
             const fallback = await dumpFallbackContentHtml(page);
             if (fallback && fallback.html && fallback.html.length > (rawCardHtml ? (rawCardHtml.html || '').length : 0)) {
                 rawCardHtml = fallback;
@@ -817,4 +852,36 @@ async function dumpDetailPage(page) {
     return { ...trimmed, fieldEvidence, rawDetailHtml };
 }
 
-module.exports = { dumpListingPage, dumpDetailPage };
+// Bug 5 helpers (pure Node). Function declarations hoist, so listing order is irrelevant.
+function hrefMatches(cardHref, candidateHref) {
+    const norm = (h) => {
+        const u = new URL(String(h), 'http://dump.invalid');
+        let p = u.pathname;
+        while (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+        return p + u.search;
+    };
+    try {
+        if (typeof cardHref !== 'string' || typeof candidateHref !== 'string') return false;
+        return norm(cardHref) === norm(candidateHref);
+    } catch (e) {
+        return false;
+    }
+}
+
+function appearsInCards(cards, candidateHrefs) {
+    if (!Array.isArray(cards) || !Array.isArray(candidateHrefs) || candidateHrefs.length === 0) return false;
+    return cards.some((card) => {
+        if (!card) return false;
+        if (Array.isArray(card.hrefs)) {
+            return card.hrefs.some((ch) => candidateHrefs.some((cand) => hrefMatches(ch, cand)));
+        }
+        if (typeof card.sampleHtml !== 'string') return false;
+        const lastSegs = candidateHrefs.map((h) => {
+            const parts = String(h).split('/');
+            return parts[parts.length - 1] || parts[parts.length - 2] || '';
+        });
+        return lastSegs.some((seg) => seg && card.sampleHtml.includes(seg));
+    });
+}
+
+module.exports = { dumpListingPage, dumpDetailPage, dumpCardHtml, hrefMatches, appearsInCards };
