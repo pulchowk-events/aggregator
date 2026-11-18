@@ -51,6 +51,12 @@ function resolveRunDir(runId) {
     return path.join(BATCH_ROOT, runId);
 }
 
+// Per-source side file holding the full kept items array verify saw.
+// Written by verify-worker.js; one file per source, overwritten on re-verify.
+function itemsPath(runId, name) {
+    return path.join(paths(resolveRunDir(runId)).results, `${name}.items.json`);
+}
+
 function writeLatest(runId) {
     fs.mkdirSync(BATCH_ROOT, { recursive: true });
     fs.writeFileSync(LATEST_POINTER, runId + '\n');
@@ -119,6 +125,7 @@ module.exports = {
     BATCH_ROOT,
     newRunId,
     resolveRunDir,
+    itemsPath,
     writeLatest,
     readLatest,
     paths,

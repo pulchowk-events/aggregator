@@ -32,6 +32,7 @@ const { loadExtractor } = require(path.join(REPO, 'src', 'scrapers', 'extractors
 const { classifyOutcome } = require(path.join(REPO, 'src', 'scrapers', 'diagnostics'));
 const { normalizeByType } = require(path.join(REPO, 'src', 'scrapers', 'scrapeAll'));
 const { runSource } = require(path.join(REPO, 'src', 'scrapers', 'sources', '_orchestrate'));
+const { itemsPath } = require(path.join(__dirname, 'lib', 'paths'));
 
 const TYPES = ['events', 'jobs', 'scholarships'];
 
@@ -293,6 +294,16 @@ async function runSite(name) {
             lines.push('--- first 3 items ---');
             for (let j = 0; j < Math.min(3, result.items.length); j++) {
                 lines.push(`[${j}] ${result.items[j].title}`);
+            }
+        }
+        // Full kept items go to a side file; stdout protocol unchanged.
+        if (!process.env.BATCH_RUN_ID) {
+            console.error('items write skipped: BATCH_RUN_ID unset');
+        } else {
+            try {
+                fs.writeFileSync(itemsPath(process.env.BATCH_RUN_ID, name), JSON.stringify(result.items, null, 2));
+            } catch (e) {
+                console.error('items write failed: ' + e.message);
             }
         }
         emit(name, lines);
