@@ -26,6 +26,7 @@ const TYPE_REFERENCE_EXAMPLES = {
     jobs: {
         'single-page-cards': 'src/scrapers/extractors/jobs/growbydata.js',
         'listing-to-detail': 'src/scrapers/extractors/jobs/kumarijob.js',
+        'jsonld-first':      'src/scrapers/extractors/jobs/lftechnology.js',
         'unknown':           'src/scrapers/extractors/jobs/growbydata.js'
     },
     scholarships: {

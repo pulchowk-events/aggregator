@@ -21,9 +21,10 @@ test('jobs + single-page-cards loads growbydata', () => {
     assert.equal(norm(loadReference('jobs', 'single-page-cards').path), DIR + 'jobs/growbydata.js');
 });
 
-test('jobs + jsonld-first has no jobs entry: stays in jobs domain, never events/nepvents', () => {
+test('jobs + jsonld-first loads lftechnology, not growbydata or events', () => {
     const p = norm(loadReference('jobs', 'jsonld-first').path);
-    assert.equal(p, DIR + 'jobs/growbydata.js');
+    assert.equal(p, DIR + 'jobs/lftechnology.js');
+    assert.notEqual(p, DIR + 'jobs/growbydata.js');
     assert.ok(!p.includes('/events/'));
 });
 
