@@ -15,6 +15,7 @@
 
 const { SlashCommandBuilder, ModalBuilder, ActionRowBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const { auditLog } = require('../../core/auditLogger');
+const { requireProdMode } = require('../../core/devMode');
 
 async function findLiveMessageForEvent(bot, event) {
     const normalizedTarget = bot.normalizeEventName(event.title || '');
@@ -39,6 +40,7 @@ async function findLiveMessageForEvent(bot, event) {
 }
 
 async function handleUndo(bot, interaction) {
+    if (!(await requireProdMode('undo', interaction))) return;
     const query = interaction.options.getString('query');
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -124,6 +126,7 @@ async function handleUndo(bot, interaction) {
 }
 
 async function handleEditLive(bot, interaction) {
+    if (!(await requireProdMode('edit-live', interaction))) return;
     const query = interaction.options.getString('query', true).toLowerCase();
     const matches = (bot.cache.postedEvents || []).filter((e) => (e.title || '').toLowerCase().includes(query));
     if (matches.length === 0) return interaction.reply({ content: `❌ No posted item matching "${query}".`, flags: MessageFlags.Ephemeral });
@@ -156,6 +159,7 @@ async function handleEditLive(bot, interaction) {
 }
 
 async function handleEditLiveModalSubmit(bot, interaction) {
+    if (!(await requireProdMode('edit-live-submit', interaction))) return;
     const [, channelId, messageId, eventId] = interaction.customId.split(':');
     const event = (bot.cache.postedEvents || []).find((e) => e.id === eventId);
     if (!event) return interaction.reply({ content: '❌ That item is no longer in posted-events.', flags: MessageFlags.Ephemeral });

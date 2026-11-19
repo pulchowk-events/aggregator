@@ -312,3 +312,186 @@ test('24. resumeOrWarnAutopostAfterRestart returns early in DEV_MODE (no log, no
     assert.equal(prod.saves, 1, 'control: state is persisted without DEV_MODE');
     assert.equal(prod.bot.cache.settings.autopostConfigSnapshot.events.live.active, false, 'control: shows the overwrite the guard prevents');
 });
+
+// D7:undo-edit -- live-destructive extension commands refuse in DEV_MODE (tests 25-27)
+{
+    const d7test = require('node:test').test;
+    const d7assert = require('node:assert/strict');
+    const { MessageFlags: D7MessageFlags } = require('discord.js');
+
+    const d7WithDevMode = async (flag, fn) => {
+        const env = require('../../src/config/env');
+        const had = Object.prototype.hasOwnProperty.call(env, 'DEV_MODE');
+        const prev = env.DEV_MODE;
+        env.DEV_MODE = flag;
+        try {
+            d7assert.equal(require('../../src/core/devMode').isDevMode(), flag, 'env.DEV_MODE toggle did not take effect');
+            await fn();
+        } finally {
+            if (had) env.DEV_MODE = prev; else delete env.DEV_MODE;
+        }
+    };
+
+    const d7ModPath = require.resolve('../../src/discord/extensions/undo-edit');
+    const d7Load = () => {
+        const audit = require('../../src/core/auditLogger');
+        const orig = audit.auditLog;
+        audit.auditLog = () => {};
+        delete require.cache[d7ModPath];
+        try { return require(d7ModPath); } finally { audit.auditLog = orig; }
+    };
+    const d7Drop = () => { delete require.cache[d7ModPath]; };
+
+    const d7MkBot = () => {
+        const calls = { del: 0, edit: 0, lastEdit: null, fetchCh: 0, save: 0, log: 0, release: 0 };
+        const event = { id: 'ev1', title: 'Test Event' };
+        const message = {
+            id: 'm1',
+            author: { id: 'bot1' },
+            content: '## Test Event\nbody',
+            delete: async () => { calls.del++; },
+            edit: async (a) => { calls.edit++; calls.lastEdit = a; },
+        };
+        const channel = {
+            id: 'c1',
+            messages: { fetch: async (arg) => (typeof arg === 'string' ? message : new Map([['m1', message]])) },
+        };
+        const bot = {
+            cache: { postedEvents: [event], pendingEvents: [], postedEventKeys: ['k1'] },
+            _ext: { recentPosts: [{ eventId: 'ev1', title: 'Test Event', channelId: 'c1', messageId: 'm1', mode: 'main', postedAt: 1 }] },
+            CATEGORIES: { sports: { main: 'c1', test: 't1' } },
+            client: { user: { id: 'bot1' }, channels: { fetch: async () => { calls.fetchCh++; return channel; } } },
+            getEventDedupKey: () => 'k1',
+            releasePostedMarker: () => { calls.release++; },
+            saveCache: () => { calls.save++; },
+            sendLogMessage: async () => { calls.log++; },
+            normalizeEventName: (s) => String(s).toLowerCase(),
+            sanitizeEventFields: () => {},
+            formatEventMessage: () => 'FORMATTED',
+        };
+        return { bot, calls, event };
+    };
+
+    const d7MkInteraction = (opts = {}) => {
+        const rec = { reply: [], followUp: [], defer: [], editReply: [], showModal: 0, optionReads: 0, fieldReads: 0 };
+        const interaction = {
+            deferred: false,
+            replied: false,
+            customId: opts.customId,
+            user: { tag: 'tester#0001' },
+            options: { getString: () => { rec.optionReads++; return opts.query === undefined ? null : opts.query; } },
+            fields: { getTextInputValue: (id) => { rec.fieldReads++; return opts.fields ? opts.fields[id] : ''; } },
+            reply: async (p) => { interaction.replied = true; rec.reply.push(p); },
+            followUp: async (p) => { rec.followUp.push(p); },
+            deferReply: async (p) => { interaction.deferred = true; rec.defer.push(p); },
+            editReply: async (p) => { rec.editReply.push(p); },
+            showModal: async () => { rec.showModal++; },
+        };
+        return { interaction, rec };
+    };
+
+    const d7Snap = (bot) => JSON.stringify({ cache: bot.cache, ext: bot._ext });
+
+    const d7AssertRefusal = (rec, name) => {
+        d7assert.equal(rec.reply.length, 1);
+        d7assert.equal(rec.reply[0].flags, D7MessageFlags.Ephemeral);
+        d7assert.ok(rec.reply[0].content.includes('DEV_MODE=true'));
+        d7assert.ok(rec.reply[0].content.includes('/' + name + ' disabled'));
+        d7assert.equal(rec.followUp.length, 0);
+        d7assert.equal(rec.defer.length, 0);
+        d7assert.equal(rec.editReply.length, 0);
+    };
+
+    d7test('25. /undo refuses in DEV_MODE (ephemeral reply, no defer, no option read, no message.delete, cache untouched); control: deletes and reverts to pending without it', async () => {
+        const mod = d7Load();
+        try {
+            await d7WithDevMode(true, async () => {
+                const { bot, calls } = d7MkBot();
+                const { interaction, rec } = d7MkInteraction({});
+                const before = d7Snap(bot);
+                await mod.handlers.undo(bot, interaction);
+                d7AssertRefusal(rec, 'undo');
+                d7assert.equal(rec.optionReads, 0);
+                d7assert.equal(calls.del, 0);
+                d7assert.equal(calls.fetchCh, 0);
+                d7assert.equal(calls.release, 0);
+                d7assert.equal(calls.save, 0);
+                d7assert.equal(calls.log, 0);
+                d7assert.equal(d7Snap(bot), before);
+            });
+            await d7WithDevMode(false, async () => {
+                const { bot, calls } = d7MkBot();
+                const { interaction, rec } = d7MkInteraction({});
+                await mod.handlers.undo(bot, interaction);
+                d7assert.equal(rec.reply.length, 0);
+                d7assert.equal(rec.defer.length, 1);
+                d7assert.equal(calls.del, 1);
+                d7assert.equal(calls.release, 1);
+                d7assert.equal(calls.save, 1);
+                d7assert.equal(bot.cache.postedEvents.length, 0);
+                d7assert.equal(bot.cache.pendingEvents.length, 1);
+                d7assert.equal(bot.cache.pendingEvents[0].id, 'ev1');
+                d7assert.ok(rec.editReply[0].content.includes('Undid'));
+            });
+        } finally { d7Drop(); }
+    });
+
+    d7test('26. /edit-live refuses in DEV_MODE (ephemeral reply, no option read, no message lookup, no showModal); control: opens the modal without it', async () => {
+        const mod = d7Load();
+        try {
+            await d7WithDevMode(true, async () => {
+                const { bot, calls } = d7MkBot();
+                const { interaction, rec } = d7MkInteraction({ query: 'test event' });
+                const before = d7Snap(bot);
+                await mod.handlers['edit-live'](bot, interaction);
+                d7AssertRefusal(rec, 'edit-live');
+                d7assert.equal(rec.optionReads, 0);
+                d7assert.equal(rec.showModal, 0);
+                d7assert.equal(calls.fetchCh, 0);
+                d7assert.equal(d7Snap(bot), before);
+            });
+            await d7WithDevMode(false, async () => {
+                const { bot, calls } = d7MkBot();
+                const { interaction, rec } = d7MkInteraction({ query: 'test event' });
+                await mod.handlers['edit-live'](bot, interaction);
+                d7assert.equal(rec.reply.length, 0);
+                d7assert.equal(rec.defer.length, 1);
+                d7assert.equal(rec.showModal, 1);
+                d7assert.ok(calls.fetchCh >= 1);
+            });
+        } finally { d7Drop(); }
+    });
+
+    d7test('27. /edit-live modal submit refuses in DEV_MODE (ephemeral reply, no field read, no message.edit, event + cache unchanged); control: edits without it', async () => {
+        const mod = d7Load();
+        const fields = { title: 'New Title', description: 'New desc', date: '', location: '' };
+        try {
+            await d7WithDevMode(true, async () => {
+                const { bot, calls, event } = d7MkBot();
+                const { interaction, rec } = d7MkInteraction({ customId: 'ext_edit_live:c1:m1:ev1', fields });
+                const before = d7Snap(bot);
+                await mod.modalHandlers.ext_edit_live(bot, interaction);
+                d7AssertRefusal(rec, 'edit-live-submit');
+                d7assert.equal(rec.fieldReads, 0);
+                d7assert.equal(calls.edit, 0);
+                d7assert.equal(calls.fetchCh, 0);
+                d7assert.equal(calls.save, 0);
+                d7assert.equal(event.title, 'Test Event');
+                d7assert.equal(event.description, undefined);
+                d7assert.equal(d7Snap(bot), before);
+            });
+            await d7WithDevMode(false, async () => {
+                const { bot, calls, event } = d7MkBot();
+                const { interaction, rec } = d7MkInteraction({ customId: 'ext_edit_live:c1:m1:ev1', fields });
+                await mod.modalHandlers.ext_edit_live(bot, interaction);
+                d7assert.equal(event.title, 'New Title');
+                d7assert.equal(calls.save, 1);
+                d7assert.equal(calls.edit, 1);
+                d7assert.deepEqual(calls.lastEdit, { content: 'FORMATTED' });
+                d7assert.equal(rec.reply.length, 1);
+                d7assert.ok(rec.reply[0].content.includes('updated'));
+                d7assert.ok(!rec.reply[0].content.includes('DEV_MODE'));
+            });
+        } finally { d7Drop(); }
+    });
+}
