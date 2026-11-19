@@ -33,6 +33,12 @@ const {
 // aborts the whole item. The return contract is: always return `item`,
 // always add any warnings to `item.dataQualityWarnings` (deduped), always
 // audit the pass.
+// Jobs with rolling/open-ended dates are legitimate, not a data-quality problem.
+function isOpenEndedJobDate(event) {
+    return !!event && event.itemType === 'job' &&
+        /^\s*(open\s+until\s+filled|until\s+filled|rolling|ongoing|always\s+open|open[\s-]?ended|asap|immediate(ly)?)\s*\.?\s*$/i.test(String(event.date || ''));
+}
+
 function sanitizeEventFields(event) {
     if (!event) return event;
     const warnings = [];
@@ -53,7 +59,7 @@ function sanitizeEventFields(event) {
     // instead of a second gate.
     if (event.date && !parseEventDate(event)) {
         if (!event.rawSuspectDate) event.rawSuspectDate = event.date;
-        warnings.push(`Date field could not be parsed into a usable date: "${event.date}" — flagged for manual review, not cleared.`);
+        if (!isOpenEndedJobDate(event)) warnings.push(`Date field could not be parsed into a usable date: "${event.date}" — flagged for manual review, not cleared.`);
     }
 
     // ---------- Scholarship deadline text ----------
