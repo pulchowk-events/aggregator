@@ -194,12 +194,13 @@ async function runWizardPrompt(url, name, type, withPageFn, utils, log) {
     // Guard: the top anchor group may have an empty samples array (older
     // dumps, or groups built without sample lists). Skip detail dump rather
     // than crash the whole generate phase.
-    const detailUrl = (detailPattern
-        && Array.isArray(detailPattern.samples)
-        && detailPattern.samples[0]
-        && detailPattern.samples[0].href) || null;
-    if (detailPattern && detailUrl) {
-        log(`detail pattern: ${detailPattern.pattern} (${detailPattern.count} matches)`);
+    // dump.js trims anchorGroups to {pattern,count} (samples dropped), so the
+    // legacy path above is always empty. pickDetailUrl prefers
+    // detailLinkCandidates and card hrefs, which keep their hrefs.
+    const detailPick = detect.pickDetailUrl(listing, url, detailPattern);
+    const detailUrl = (detailPick && detailPick.href) || null;
+    if (detailUrl) {
+        log(`detail source: ${detailPick.label}`);
         log(`  sample: ${detailUrl}`);
         log(`  goto (domcontentloaded, 30s timeout)`);
         try {
@@ -215,10 +216,8 @@ async function runWizardPrompt(url, name, type, withPageFn, utils, log) {
         } catch (e) {
             log(`  detail dump failed: ${e.message} -- continuing with listing-only evidence`);
         }
-    } else if (detailPattern) {
-        log(`detail pattern ${detailPattern.pattern} matched but samples empty -- treating as single-page source`);
     } else {
-        log(`no detail candidates -- treating as single-page source`);
+        log(`no detail link candidates (detailLinkCandidates, card hrefs, anchorGroup samples all empty) -- classifying from listing only`);
     }
 
     // Step 3 -- classify.
