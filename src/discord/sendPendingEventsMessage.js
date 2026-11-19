@@ -7,6 +7,14 @@ const { auditLog } = require('../core/auditLogger');
 const { isEventPast, compareByEventDate } = require('../core/dateUtils');
 const { deduplicateEventsByKey } = require('../posting/dedup');
 
+const EMBED_LIMITS = { title: 256, description: 4096, fieldName: 256, fieldValueTarget: 1000 };
+
+function clampText(value, max) {
+    const s = String(value ?? '');
+    if (s.length <= max) return s;
+    return s.slice(0, max - 1).replace(/[\uD800-\uDBFF]$/, '') + '\u2026';
+}
+
 async function sendPendingEventsMessage(bot, channel, eventsToShow = null) {
     const events = eventsToShow || bot.cache.pendingEvents;
     const futureEvents = events.filter((e) => !isEventPast(e));
@@ -34,7 +42,7 @@ async function sendPendingEventsMessage(bot, channel, eventsToShow = null) {
 
 async function sendOnePendingEmbed(bot, channel, event) {
     const source = event.source || 'unknown';
-    let description = event.description || 'No description';
+    let description = clampText(event.description || 'No description', 3000);
 
     if (event.testPosted) {
         description += '\n\n✅ **Test-posted** - use **Post to Live** below when you are ready.';
@@ -81,10 +89,17 @@ async function sendOnePendingEmbed(bot, channel, event) {
         fields.push({ name: 'Price', value: event.price || 'TBD', inline: true });
     }
 
+    const safeFields = fields.map((f) => ({
+        name: clampText(f.name, EMBED_LIMITS.fieldName),
+        value: clampText(f.value, EMBED_LIMITS.fieldValueTarget) || 'TBD',
+        inline: f.inline
+    }));
+    const safeDescription = clampText(description, isEventPast(event) ? 4000 : EMBED_LIMITS.description);
+
     const embed = new EmbedBuilder()
-        .setTitle(event.title || 'Untitled')
-        .setDescription(description)
-        .addFields(...fields)
+        .setTitle(clampText(event.title || 'Untitled', EMBED_LIMITS.title))
+        .setDescription(safeDescription)
+        .addFields(...safeFields)
         .setColor((bot.hasDataQualityWarnings(event) || bot.isEventTooSoon(event) || !eventHasImage) ? 0xE67E22 : 0x00AE86)
         .setFooter({ text: `Source: ${source}  •  ID: ${event.id}` });
 

@@ -140,7 +140,7 @@ module.exports = {
                     if (!registrationUrl) registrationUrl = link;
 
                     const extracted = await page.evaluate((categoryName) => {
-                        const getText = (el) => (el ? el.textContent.trim().replace(/\\s+/g, ' ') : null);
+                        const getText = (el) => (el ? el.textContent.trim().replace(/\s+/g, ' ') : null);
 
                         let jsonLd = null;
                         const scripts = document.querySelectorAll('script[type="application/ld+json"]');
@@ -172,7 +172,7 @@ module.exports = {
                             };
                         }
 
-                        const title = getText(document.querySelector('h1.text-2xl.md\\\\:text-3xl.font-bold')) || getText(document.querySelector('h1'));
+                        const title = getText(document.querySelector('h1.text-2xl.md\\:text-3xl.font-bold')) || getText(document.querySelector('h1'));
                         const description = getText(document.querySelector('div.prose p')) || getText(document.querySelector('div.prose'));
                         const img = document.querySelector('img[alt^="Image for"]');
                         const image = img ? window.__resolveImageSrc(img) : null;
