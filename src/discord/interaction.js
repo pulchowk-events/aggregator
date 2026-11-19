@@ -21,7 +21,9 @@ const { auditLog } = require('../core/auditLogger');
 
 async function handleInteraction(bot, interaction) {
     try {
-        if (interaction.isChatInputCommand()) {
+        if (interaction.isAutocomplete()) {
+            await dispatchAutocomplete(bot, interaction);
+        } else if (interaction.isChatInputCommand()) {
             await dispatchCommand(bot, interaction);
         } else if (interaction.isStringSelectMenu()) {
             await require('./handleCategorySelect').handleCategorySelect(bot, interaction);
@@ -54,6 +56,14 @@ async function handleInteraction(bot, interaction) {
             }
         } catch (e) { /* interaction likely expired */ }
     }
+}
+
+// Autocomplete interactions can only answer with choices (no text replies).
+async function dispatchAutocomplete(bot, interaction) {
+    if (interaction.commandName === 'scrape') {
+        return require('./commands/scrape').autocomplete(bot, interaction);
+    }
+    try { await interaction.respond([]); } catch (e) { /* expired */ }
 }
 
 async function dispatchCommand(bot, interaction) {

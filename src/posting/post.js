@@ -35,6 +35,7 @@ const axios = require('axios');
 const { AttachmentBuilder } = require('discord.js');
 const { auditLog } = require('../core/auditLogger');
 const markers = require('../core/markers');
+const { resolveAttachmentImage } = require('./imageBytes');
 const { sanitizeEventFields } = require('../core/sanitize');
 const { buildPostContent } = require('../core/formatting');
 const { hasValidImage, shouldPingForEvent, hasDataQualityWarnings, getJunkTitleReason } = require('./gates');
@@ -255,7 +256,12 @@ async function _postEventToCategoryInner(bot, event, mode, categoryKeyOverride =
                     if (urlExt) ext = urlExt[1].toLowerCase().replace('jpeg', 'jpg');
                 }
 
-                const attachment = new AttachmentBuilder(buffer, { name: `event.${ext}` });
+                const resolved = resolveAttachmentImage(buffer, event.source);
+                if (resolved.swapped) {
+                    auditLog('image_placeholder_swap', 'Image bytes not previewable by Discord; swapped to source placeholder for "' + event.title + '"',
+                        { id: event.id || null, source: event.source || null, imageUrl: event.image || null, contentType });
+                }
+                const attachment = new AttachmentBuilder(resolved.buffer, { name: `event.${resolved.ext}` });
                 await channel.send({ content: message, files: [attachment] });
             } catch (error) {
                 console.error('Failed to fetch/send image, sending text only:', error.message);
