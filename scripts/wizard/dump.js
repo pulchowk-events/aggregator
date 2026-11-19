@@ -44,6 +44,12 @@ function trimHtmlForPrompt(html, maxBytes) {
 // Chrome-tag detector. If a "card wrapper" selector is actually HTML
 // chrome, don't dump its outerHTML — it's noise.
 const CHROME_TAG_RE = /^(script|link|meta|style|noscript|svg|path|head|html)$/i;
+// Bare tag with no class/id/attribute/pseudo (e.g. "div", "li"). Such a selector matches far
+// more than the card group it came from, so callers must not trust it on its own.
+function isGenericSelector(sel) {
+    return Boolean(sel) && !/[.#\[:]/.test(String(sel));
+}
+
 function isChromeSelector(sel) {
     if (!sel) return true;
     const tag = String(sel).split(/[.#\[]/)[0].trim().toLowerCase();
@@ -124,10 +130,10 @@ function fitHtmlToBudget(html, budgetBytes, label) {
     };
 }
 
-async function dumpCardHtml(page, cardSelector) {
+async function dumpCardHtml(page, cardSelector, anchorHrefs) {
     if (!cardSelector || isChromeSelector(cardSelector)) return null;
     try {
-        const html = await page.evaluate((sel) => {
+        const html = await page.evaluate((sel, hrefs, isGeneric) => {
             let els;
             try { els = Array.from(document.querySelectorAll(sel)); } catch (e) { return null; }
             const SKIP = 'form, header, nav, footer, aside, [role="navigation"], [role="banner"], [role="contentinfo"]';
@@ -140,10 +146,24 @@ async function dumpCardHtml(page, cardSelector) {
                 for (const c of parent.children) { if (c.matches(sel)) sibs++; }
                 if (sibs < 3) continue;
                 if ((cand.textContent || '').trim().length < 40) continue;
+                // Generic selector ("div"): only accept an element that holds one of the card
+                // group's own hrefs, so a layout div with more siblings cannot win.
+                if (isGeneric && hrefs && hrefs.length) {
+                    let own = false;
+                    const links = cand.matches('a[href]') ? [cand] : [];
+                    for (const a of cand.querySelectorAll('a[href]')) links.push(a);
+                    for (const a of links) {
+                        try {
+                            const u = new URL(a.getAttribute('href'), window.location.href);
+                            if (hrefs.indexOf(u.pathname + u.search) !== -1) { own = true; break; }
+                        } catch (e) { /* unresolvable href */ }
+                    }
+                    if (!own) continue;
+                }
                 if (!best || sibs > best.sibs) best = { el: cand, sibs };
             }
             return best ? best.el.outerHTML : null;
-        }, cardSelector);
+        }, cardSelector, Array.isArray(anchorHrefs) ? anchorHrefs : [], isGenericSelector(cardSelector));
         if (!html) return null;
         // Budget: 40KB. A real job card should be under 20KB; if it's
         // bigger, the selector matched something too broad (whole page).
@@ -417,7 +437,12 @@ async function dumpListingPage(page) {
                     const score = (hasHeading ? 2 : 0) + (hasLink ? 2 : 0) + (hasImage ? 1 : 0);
                     if (score < 2) continue;
                     const tag = key.split('|')[0];
-                    const keyCls = key.split('|')[1];
+                    // The bucket key above truncates classes at 80 chars, so key.split('|')[1] can end
+                    // mid-token (".rou") and match nothing. Grouping stays as is; the selector is built
+                    // from whole class tokens present on EVERY child of the group.
+                    const keyCls = clsStr(group[0]).split(/\s+/).filter(Boolean)
+                        .filter((tok) => group.every((g) => clsStr(g).split(/\s+/).indexOf(tok) !== -1))
+                        .join(' ');
                     // Class names with CSS-special chars (Tailwind's sm:, md:,
                     // hover:, opacity's /, arbitrary values' []) must be escaped
                     // in selectors or querySelectorAll throws "not a valid
@@ -483,7 +508,7 @@ async function dumpListingPage(page) {
 
                     cardCandidates.push({
                         selector, count: group.length,
-                        childTag: tag, childClass: keyCls,
+                        childTag: tag, childClass: keyCls.slice(0, 80),
                         hasHeading, hasLink, hasImage, score,
                         hasJobishContent,
                         jobTitleRatio: Math.round(jobTitleRatio * 100) / 100,
@@ -640,7 +665,7 @@ async function dumpListingPage(page) {
         const topCard = (structural.cardCandidates && structural.cardCandidates[0])
             || (structural.cardGroups && structural.cardGroups[0]);
         if (topCard && topCard.selector && !isChromeSelector(topCard.selector)) {
-            rawCardHtml = await dumpCardHtml(page, topCard.selector);
+            rawCardHtml = await dumpCardHtml(page, topCard.selector, topCard.hrefs);
         }
         // Fallback fires when the card selector matched something tiny
         // (a wrapper div, an icon, a broken class). 3000B is the floor
@@ -661,7 +686,12 @@ async function dumpListingPage(page) {
         rawCardHtml.jobSignalHits = cardScore.hits;
     }
 
-    return { ...trimmed, fieldEvidence, rawCardHtml };
+    // Weak-signal flag: no candidates, or the top one is a bare tag with weak job-title
+    // evidence. 0.3 matches the jobTitleRatio threshold used elsewhere in the pipeline.
+    const top0 = (structural.cardCandidates || [])[0];
+    const cardCandidatesWeak = !top0 || (isGenericSelector(top0.selector) && !(top0.jobTitleRatio >= 0.3));
+
+    return { ...trimmed, fieldEvidence, rawCardHtml, cardCandidatesWeak };
 }
 
 async function dumpDetailPage(page) {
