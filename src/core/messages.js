@@ -60,6 +60,12 @@ const MESSAGES = {
     },
 
     // ============ PAGE STRUCTURE / EXTRACTION ISSUES ============
+    'implausible_values': {
+        label: 'Implausible item values',
+        explanation: 'The extractor returned items with every field present, but the values are not sane: footer text as description, nav text as price or location, junk or duplicated titles, or the same role listed twice. Coverage checks cannot see this.',
+        fix: 'Run `pulchowk-events batch refine --only <site>`. See `problems` in results/<site>.json for the exact rule and evidence per item.',
+        severity: 'fail'
+    },
     'low_precision': {
         label: 'Mostly non-job content',
         explanation: 'The extractor found several cards on the page and pulled text from them, but the batch title-filter decided most were marketing copy, culture blurbs, or product names rather than job titles. It returned a few "jobs" but they look wrong.',

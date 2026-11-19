@@ -26,7 +26,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
-const { paths, readClasses, readLatest, resolveRunDir, ensureRunLayout } = require('./lib/paths');
+const { paths, readClasses, readLatest, resolveRunDir, ensureRunLayout, itemsPath } = require('./lib/paths');
 const { audit } = require('./lib/audit');
 const messages = require('./lib/messages');
 const ui = require('./lib/ui');
@@ -441,7 +441,150 @@ function crossCheckSiteAbsent(name, runDir, parsed) {
     return null;
 }
 
-function decidePass(parsed, { isTemplate, isHtmlTemplate, resolution, dumpEvidence, name, runDir }) {
+// ---------------------------------------------------------------------
+// Item plausibility: verify-time VALUE checks. Coverage proves a field is
+// PRESENT; this proves it is SANE. Title rules reuse the shipped junk-title
+// gate (src/posting/gates.js). Overlaps NOT duplicated: all-urls-identical
+// (sem.noUniqueUrl) and all-descriptions-identical (sem.descriptionDuplicated).
+// Salary: reads item.salary (fallback item.price); a salary_status of
+// site_absent/unknown means the field is knowingly missing -> not checked.
+// ---------------------------------------------------------------------
+const PLAUS = Object.freeze({
+    LOC_MAX: 80, LOC_IN_DESC_MIN: 40, PRICE_PROSE_WORDS: 8,
+    MAJORITY: 0.5, MIN_GROUP: 3, SYSTEMIC: 0.25, PER_CODE_CAP: 5, EVIDENCE_MAX: 120
+});
+const PLAUS_SOFT = new Set(['image_favicon', 'same_location_all', 'price_no_amount', 'company_logo_word']);
+const PLAUS_FOOTER_RES = [/all rights reserved/i, /(?:\u00a9|\(c\)|copyright)\s*(?:\u00a9\s*)?(?:19|20)\d{2}/i, /\bno jobs\s*$/i];
+const PLAUS_PRICE_TRUNC_RE = /^(?:rs|npr|usd|inr|\$)[.,;:\s]*[a-z]?$/i;
+const PLAUS_PRICE_OK_RE = /negotiab|competitive|unpaid|stipend|volunteer|attractive|as per|undisclosed|not (?:disclosed|specified)/i;
+const PLAUS_LOGO_SUFFIX_RE = /\s[-\u2013\u2014]\s*logo\s*$/i;
+const PLAUS_LOGO_WORD_RE = /\blogo\b/i;
+const PLAUS_LOC_PUNCT_RE = /^[.,;:!?)\]]/;
+
+let plausJunkFn;
+function plausJunkGate() {
+    if (plausJunkFn === undefined) {
+        try { plausJunkFn = require('../../src/posting/gates').getJunkTitleReason || null; }
+        catch (e) { plausJunkFn = null; }
+    }
+    return plausJunkFn;
+}
+const plausNorm = (s) => (s === null || s === undefined ? '' : String(s)).replace(/\s+/g, ' ').trim();
+const plausClip = (s) => { const t = plausNorm(s); return t.length > PLAUS.EVIDENCE_MAX ? t.slice(0, PLAUS.EVIDENCE_MAX - 3) + '...' : t; };
+
+function scanItems(items, ctx) {
+    const out = { problems: [], warnings: [], counts: {} };
+    const n = Array.isArray(items) ? items.length : 0;
+    if (n === 0) return out;
+    const itemType = (ctx && ctx.itemType) || 'job';
+    const hits = new Map();
+    const hit = (code, i, ev) => { if (!hits.has(code)) hits.set(code, []); hits.get(code).push({ i, ev: plausClip(ev) }); };
+
+    const rows = items.map((it) => {
+        const o = it || {};
+        const salaryStatus = plausNorm(o.salary_status || o.price_status);
+        const salaryKnown = salaryStatus !== 'site_absent' && salaryStatus !== 'unknown';
+        return {
+            title: plausNorm(o.title), desc: plausNorm(o.description), loc: plausNorm(o.location),
+            company: plausNorm(o.company || o.organizer), image: plausNorm(o.image || o.imageUrl),
+            url: plausNorm(o.url || o.registrationUrl),
+            salaries: salaryKnown
+                ? [['salary', o.salary], ['price', o.price]].map((p) => [p[0], plausNorm(p[1])]).filter((p) => p[1])
+                : []
+        };
+    });
+
+    const junk = plausJunkGate();
+    let junkBroken = !junk;
+
+    rows.forEach((r, i) => {
+        const descLow = r.desc.toLowerCase();
+        if (junk) {
+            try { const reason = junk({ title: items[i] && items[i].title, itemType }); if (reason) hit('junk_title', i, reason + ': "' + r.title + '"'); }
+            catch (e) { junkBroken = true; }
+        }
+        if (r.desc) {
+            const head = r.desc.length <= 300 ? r.desc : r.desc.slice(0, 300);
+            const f = PLAUS_FOOTER_RES.find((re) => re.test(head));
+            if (f) hit('desc_is_footer', i, 'description "' + r.desc + '" matches ' + f);
+            if (r.title && descLow === r.title.toLowerCase()) hit('desc_equals_title', i, 'description equals title "' + r.title + '"');
+        }
+        if (r.loc) {
+            if (r.loc.length > PLAUS.LOC_MAX) hit('location_too_long', i, r.loc.length + ' chars: ' + r.loc);
+            if (PLAUS_LOC_PUNCT_RE.test(r.loc)) hit('location_starts_punct', i, 'mid-sentence slice: ' + r.loc);
+            if (r.loc.length >= PLAUS.LOC_IN_DESC_MIN && descLow.includes(r.loc.toLowerCase())) hit('location_in_desc', i, 'location is a substring of description: ' + r.loc);
+        }
+        for (const p of r.salaries) {
+            const field = p[0], v = p[1];
+            if (PLAUS_PRICE_TRUNC_RE.test(v)) { hit('price_truncated', i, field + ' "' + v + '"'); continue; }
+            const prose = v.split(' ').length >= PLAUS.PRICE_PROSE_WORDS || v.length > 80;
+            if (prose) hit('price_prose', i, field + ' is prose: ' + v);
+            if (v.length >= 15 && descLow.includes(v.toLowerCase())) hit('price_in_desc', i, field + ' is a substring of description: ' + v);
+            if (!prose && !/\d/.test(v) && !PLAUS_PRICE_OK_RE.test(v)) hit('price_no_amount', i, field + ' has no amount: ' + v);
+        }
+        if (r.company) {
+            if (PLAUS_LOGO_SUFFIX_RE.test(r.company)) hit('company_logo_alt', i, 'image alt leaked into company: ' + r.company);
+            else if (PLAUS_LOGO_WORD_RE.test(r.company)) hit('company_logo_word', i, r.company);
+        }
+        if (r.image && /favicon/i.test(r.image)) hit('image_favicon', i, r.image);
+    });
+
+    const groupBy = (keyFn) => { const g = new Map(); rows.forEach((r, i) => { const k = keyFn(r); if (!k) return; if (!g.has(k)) g.set(k, []); g.get(k).push(i); }); return g; };
+    const majority = (idxs) => idxs.length >= PLAUS.MIN_GROUP && idxs.length / n > PLAUS.MAJORITY;
+    for (const e of groupBy((r) => (r.desc.length > 20 ? r.desc.slice(0, 100).toLowerCase() : null))) {
+        if (majority(e[1])) e[1].forEach((i) => hit('desc_identical_majority', i, e[1].length + '/' + n + ' items share description "' + e[0].slice(0, 60) + '"'));
+    }
+    for (const e of groupBy((r) => (r.title ? r.title.toLowerCase() : null))) {
+        if (majority(e[1])) e[1].forEach((i) => hit('titles_duplicate_majority', i, e[1].length + '/' + n + ' items titled "' + e[0] + '"'));
+    }
+    for (let j = 1; j < n; j++) {
+        for (let k = 0; k < j; k++) {
+            const a = rows[k], b = rows[j];
+            if (!a.title || a.title.toLowerCase() !== b.title.toLowerCase()) continue;
+            const sa = a.desc.toLowerCase(), sb = b.desc.toLowerCase();
+            const m = Math.min(sa.length, sb.length, 60);
+            const nearDesc = m >= 30 && sa.slice(0, m) === sb.slice(0, m);
+            if ((a.url && a.url === b.url) || nearDesc) { hit('duplicate_item', j, 'item ' + j + ' duplicates item ' + k + ': "' + b.title + '"'); break; }
+        }
+    }
+    if (n >= PLAUS.MIN_GROUP && rows[0].loc && rows.every((r) => r.loc === rows[0].loc)) {
+        rows.forEach((r, i) => hit('same_location_all', i, 'all items share location "' + r.loc + '"'));
+    }
+    for (const e of hits) {
+        const code = e[0], list = e[1];
+        if (!PLAUS_SOFT.has(code) && list.length / n >= PLAUS.SYSTEMIC) {
+            out.counts[code] = list.length;
+            for (const h of list.slice(0, PLAUS.PER_CODE_CAP)) out.problems.push({ code, source_item_index: h.i, evidence: h.ev });
+        } else {
+            out.warnings.push({ code, count: list.length, of: n });
+        }
+    }
+    if (junkBroken) out.warnings.push({ code: 'junk_gate_unavailable', count: 0, of: n });
+    return out;
+}
+
+function checkImplausibility(items, ctx) {
+    const r = scanItems(items, ctx);
+    return r.problems.length > 0 ? r : null;
+}
+
+function loadItemsForPlausibility(parsed, name, runDir) {
+    if (!parsed || parsed.itemsFile !== 'written') {
+        return { items: null, skip: 'items file ' + (parsed && parsed.itemsFile ? parsed.itemsFile : 'not reported') };
+    }
+    if (!name || !runDir) return { items: null, skip: 'no name/runDir' };
+    try {
+        const raw = JSON.parse(fs.readFileSync(itemsPath(path.basename(runDir), name), 'utf8'));
+        const arr = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.items) ? raw.items : null);
+        if (!arr) return { items: null, skip: 'items file is not an array' };
+        if (typeof parsed.items === 'number' && arr.length !== parsed.items) return { items: null, skip: 'items file count ' + arr.length + ' != verify items ' + parsed.items };
+        return { items: arr, skip: null };
+    } catch (e) {
+        return { items: null, skip: 'items file unreadable: ' + e.message };
+    }
+}
+
+function decidePass(parsed, { isTemplate, isHtmlTemplate, resolution, dumpEvidence, name, runDir, items }) {
     // Precision gate: if the extractor saw N cards (listingHits) but kept
     // fewer than 1/3 as items (after its own title-vocab filter), the
     // template was matching the wrong group. This is the case where a
@@ -570,7 +713,29 @@ function decidePass(parsed, { isTemplate, isHtmlTemplate, resolution, dumpEviden
                 warn: `${sem.locationInsane} item(s) have location > 100 chars -- prose leaked into location. Extract a place-name element or accept site_absent.`
             };
         }
-        return { pass: true, reason: 'ok' };
+        // Item-plausibility gate: values are present (coverage) and not
+        // wholesale duplicated (semantic) -- are they sane?
+        let itemsForCheck = items;
+        let skipNote = null;
+        if (itemsForCheck === undefined) {
+            const loaded = loadItemsForPlausibility(parsed, name, runDir);
+            itemsForCheck = loaded.items;
+            skipNote = loaded.skip;
+        }
+        if (Array.isArray(itemsForCheck)) {
+            const scan = scanItems(itemsForCheck);
+            if (scan.problems.length > 0) {
+                const summary = Object.keys(scan.counts).map((c) => c + 'x' + scan.counts[c]).join(', ');
+                return { pass: false, reason: 'implausible_values', warn: 'implausible values (' + summary + '). First: ' + scan.problems[0].evidence, problems: scan.problems };
+            }
+            if (scan.warnings.length > 0) {
+                return { pass: true, reason: 'ok', warn: 'soft: ' + scan.warnings.map((w) => w.code + '(' + w.count + '/' + w.of + ')').join(', ') };
+            }
+            return { pass: true, reason: 'ok' };
+        }
+        const okResult = { pass: true, reason: 'ok' };
+        if (skipNote) okResult.warn = 'plausibility skipped: ' + skipNote;
+        return okResult;
     }
 
     if (parsed.verdict === 'empty') {
@@ -773,6 +938,7 @@ async function runVerify(opts) {
             // in results/<name>.json for debugging.
             reason: decision.reason,
             warn: decision.warn || null,
+            problems: decision.problems || null,
             verdict: parsed.verdict,
             // Coverage + quality + layer breakdown. Populated by
             // parseVerifyOutput from worker stdout. Downstream:
@@ -1068,7 +1234,7 @@ async function runVerify(opts) {
     return { results, failedCount, passCount: Object.keys(results).length - failedCount };
 }
 
-module.exports = { runVerify, parseArgs, parseVerifyOutput, decidePass, buildResultMeta };
+module.exports = { runVerify, parseArgs, parseVerifyOutput, decidePass, buildResultMeta, checkImplausibility, scanItems };
 
 if (require.main === module) {
     const opts = parseArgs(process.argv.slice(2));
