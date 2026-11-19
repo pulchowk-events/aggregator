@@ -23,9 +23,10 @@
 // Category pause is handled at this layer (not by callers) because it's
 // mode === 'main' specific — a paused category still allows test posts.
 //
-// All four gates run BEFORE reserve — the marker is expensive to lose if
+// All five gates run BEFORE reserve — the marker is expensive to lose if
 // the gates would have rejected anyway:
 //   - category paused
+//   - junk title (live only; no force bypass)
 //   - has-valid-image (live only; scholarships exempt)
 //   - has-data-quality-warnings (live only; force bypasses)
 //   - dedup (marker existence / stale reconciliation)
@@ -36,7 +37,32 @@ const { auditLog } = require('../core/auditLogger');
 const markers = require('../core/markers');
 const { sanitizeEventFields } = require('../core/sanitize');
 const { buildPostContent } = require('../core/formatting');
-const { hasValidImage, shouldPingForEvent, hasDataQualityWarnings } = require('./gates');
+const { hasValidImage, shouldPingForEvent, hasDataQualityWarnings, getJunkTitleReason } = require('./gates');
+
+// Junk-title refusals are audited once per (item, rule) per process. A
+// pending queue that stays junk would otherwise write one audit line per
+// autopost tick per item (the audit log already shows ~250x repeats).
+const JUNK_AUDITED = new Set();
+const JUNK_AUDITED_MAX = 5000;
+
+function noteJunkTitleOnce(event, rule) {
+    const key = String((event && (event.id || event.title)) || '') + ':' + rule;
+    if (JUNK_AUDITED.has(key)) return;
+    if (JUNK_AUDITED.size >= JUNK_AUDITED_MAX) JUNK_AUDITED.clear();
+    JUNK_AUDITED.add(key);
+    auditLog(
+        'junk_title',
+        'Refused LIVE post: junk title (' + rule + '): "' + String((event && event.title) || '') + '"',
+        {
+            id: (event && event.id) || null,
+            rule,
+            title: (event && event.title) || null,
+            source: (event && event.source) || null,
+            itemType: (event && event.itemType) || null,
+            mode: 'main'
+        }
+    );
+}
 const { hasBeenPostedToChannel, lastPostedToChannelAt } = require('./reconcile');
 const ui = require('../core/ui');
 const messages = require('../core/messages');
@@ -108,6 +134,19 @@ async function _postEventToCategoryInner(bot, event, mode, categoryKeyOverride =
     }
 
     // ---------- Live gates: image + data quality ----------
+    // ---------- Junk title (LIVE only) ----------
+    // Placeholder / empty-state / nav-heading / listing-page titles never go
+    // live. No force bypass (same as the image gate). Runs before the image
+    // gate because the favicon fallback lets junk pass that gate. NOTE: the
+    // postEventToCategory wrapper short-circuits mode=main under DEV_MODE
+    // BEFORE this point, so this gate is unreachable while DEV_MODE=true.
+    const junkRule = mode === 'main'
+        ? getJunkTitleReason(event, bot && bot.cache ? bot.cache.settings : null)
+        : null;
+    if (junkRule) {
+        noteJunkTitleOnce(event, junkRule);
+        return { ok: false, reason: 'junk_title', skipped: 'junk_title', junkRule };
+    }
     if (mode === 'main' && !hasValidImage(bot, event)) {
         auditLog('post_event_outcome', `Post outcome for "${event.title}": failed (no_image)`,
             { ...postOutcomeBase, channelId, ok: false, reason: 'no_image' }, 'warn');
