@@ -76,6 +76,31 @@ function stripPriorAttempts(promptBody) {
     return promptBody.trimEnd();
 }
 
+const MAX_PROBLEMS_SHOWN = 20;
+const MAX_PROBLEM_EVIDENCE_CHARS = 200;
+
+// Format the plausibility-gate problems[] persisted in results/<name>.json
+// into prompt lines. Returns [] when absent/empty (older results).
+function formatProblems(problems) {
+    if (!Array.isArray(problems) || problems.length === 0) return [];
+    const shown = problems.filter(Boolean).slice(0, MAX_PROBLEMS_SHOWN);
+    const out = [];
+    out.push('');
+    out.push('Plausibility gate problems (rule code, item index, evidence):');
+    for (const p of shown) {
+        const idx = p.source_item_index == null ? '?' : p.source_item_index;
+        const ev = String(p.evidence == null ? '' : p.evidence).replace(/\s+/g, ' ').slice(0, MAX_PROBLEM_EVIDENCE_CHARS);
+        out.push('  - [' + (p.code || 'unknown') + '] item #' + idx + ': ' + ev);
+    }
+    if (problems.length > shown.length) {
+        out.push('  ... and ' + (problems.length - shown.length) + ' more');
+    }
+    out.push('Each rule above rejected the item at that index. Fix the extraction so');
+    out.push('every item is a real, distinct record, not page chrome, a footer, or');
+    out.push('empty-state text.');
+    return out;
+}
+
 // Build the retry section. Runs on every refine for this site, replacing
 // any prior attempt section with the accumulated attempt list.
 function buildPriorAttemptsSection(attempts) {
@@ -137,6 +162,7 @@ function buildPriorAttemptsSection(attempts) {
                 lines.push('populated for every item — or you must report a per-field');
                 lines.push('<field>_status="site_absent" with evidence of what you searched.');
             }
+            for (const pl of formatProblems(a.problems)) lines.push(pl);
             if (a.stderrTail) {
                 lines.push('');
                 lines.push('Extractor stderr (verbatim, last ~' + STDERR_TAIL_LINES + ' lines):');
@@ -292,6 +318,7 @@ function runRefine(opts) {
             coverage: c.result.coverage || null,
             quality: c.result.quality || null,
             score: c.result.score || null,
+            problems: Array.isArray(c.result.problems) ? c.result.problems : null,
             decisionField: (() => {
                 // Pull the specific field from the warn string,
                 // e.g. "company missing on 100% of items (0/8)"
@@ -340,7 +367,7 @@ function runRefine(opts) {
     return { refined, skipped };
 }
 
-module.exports = { runRefine, parseArgs, MAX_ATTEMPTS };
+module.exports = { runRefine, parseArgs, MAX_ATTEMPTS, buildPriorAttemptsSection, formatProblems, MAX_PROBLEMS_SHOWN };
 
 if (require.main === module) {
     const opts = parseArgs(process.argv.slice(2));
