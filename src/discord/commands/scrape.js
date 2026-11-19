@@ -1,6 +1,6 @@
 // /scrape — manual scrape of one source or all.
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
-const { EVENT_SOURCES, JOB_SOURCES, SCHOLARSHIP_SOURCES } = require('../../config/constants');
+// Source names are validated against the plugin registry at call time (no 25-choice cap).
 
 const definition = new SlashCommandBuilder()
     .setName('scrape')
@@ -17,20 +17,23 @@ const definition = new SlashCommandBuilder()
         ))
     .addStringOption((option) => option
         .setName('site')
-        .setDescription('Which site to scrape (leave empty for all)')
-        .setRequired(false)
-        .addChoices(
-            { name: 'All Sites', value: 'all' },
-            ...EVENT_SOURCES.map((s) => ({ name: s, value: s })),
-            ...JOB_SOURCES.map((s) => ({ name: `${s} (jobs)`, value: s })),
-            ...SCHOLARSHIP_SOURCES.map((s) => ({ name: `${s} (scholarships)`, value: s }))
-        ));
+        .setDescription('Source name, e.g. blacktech (leave empty for all)')
+        .setRequired(false));
 
 async function handle(bot, interaction) {
     if (bot.isScraping) {
         return interaction.reply({ content: '⏳ A scrape is already in progress. Please wait for it to finish.', flags: MessageFlags.Ephemeral });
     }
-    const site = interaction.options.getString('site') || 'all';
+    const rawSite = (interaction.options.getString('site') || 'all').trim();
+    let site = 'all';
+    if (rawSite && rawSite.toLowerCase() !== 'all') {
+        const match = require('../../scrapers/registry').getAllSources()
+            .find((p) => p.name.toLowerCase() === rawSite.toLowerCase());
+        if (!match) {
+            return interaction.reply({ content: 'Unknown source: ' + rawSite.slice(0, 50) + '. Use a source file name, e.g. blacktech.', flags: MessageFlags.Ephemeral });
+        }
+        site = match.name;
+    }
     const type = interaction.options.getString('type') || 'all';
     const scopeLabel = (type && type !== 'all') ? `${site} (${type} only)` : site;
     await interaction.reply({ content: `🔄 Starting manual scrape for **${scopeLabel}**...`, flags: MessageFlags.Ephemeral });
