@@ -109,6 +109,8 @@ function startWebServer(bot) {
             if (!event) return res.status(404).json({ error: 'Event not found' });
 
             const mode = testMode ? 'test' : 'main';
+            // DEV_MODE: no live posts from the dashboard (test-channel sends stay open).
+            if (mode === 'main' && require('../core/devMode').noteBlocked('api/send-event:live')) return res.status(403).json({ error: 'DEV_MODE=true \u2014 live posting disabled', devMode: true });
             const categoryOverride = category && bot.CATEGORIES[category] ? category : null;
             const result = await bot.postEventToCategory(event, mode, categoryOverride, Boolean(force));
 

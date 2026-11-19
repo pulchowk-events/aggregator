@@ -41,6 +41,8 @@ function scheduleAutomaticScraping(bot) {
     }
     bot.activeScrapeCron = cronExpr;
     bot.cronTask = cron.schedule(cronExpr, () => {
+        // DEV_MODE: no automatic scrapes (manual /scrape stays open).
+        if (noteBlocked('scheduledScrape')) return;
         console.log('  ·  cron  running scheduled scrape');
         bot.scrapeAndNotify('all').catch((err) => console.error('❌ Scheduled scrape failed:', err));
     });
@@ -54,6 +56,8 @@ function rescheduleWithCustomCron(bot, expr) {
     if (bot.cronTask) bot.cronTask.stop();
     bot.activeScrapeCron = expr;
     bot.cronTask = cron.schedule(expr, () => {
+        // DEV_MODE: no automatic scrapes (manual /scrape stays open).
+        if (noteBlocked('scheduledScrape')) return;
         console.log('  ·  cron  running scheduled scrape');
         bot.scrapeAndNotify('all').catch((err) => console.error('❌ Scheduled scrape failed:', err));
     });

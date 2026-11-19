@@ -186,6 +186,7 @@ async function handleDedupe(bot, interaction) {
 }
 
 async function handlePublishPrevious(bot, interaction) {
+    if (!(await requireProdMode('publish-previous', interaction))) return;
     const channelOption = interaction.options.getChannel('channel');
     const amountOption = interaction.options.getInteger('amount');
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });

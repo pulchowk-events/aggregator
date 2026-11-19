@@ -238,6 +238,8 @@ function setAutopostInterval(bot, itemType, mode, intervalMinutes) {
 // On boot, restore any tracks that were active before the crash, but skip
 // tracks that were deliberately stopped.
 async function resumeOrWarnAutopostAfterRestart(bot) {
+    // DEV_MODE: no resume, no logs-channel note, no persistAutopostState (it rebuilds the snapshot from in-memory config).
+    if (require('../core/devMode').noteBlocked('resumeOrWarnAutopostAfterRestart')) return;
     const snapshot = bot.cache.settings.autopostConfigSnapshot;
     if (!snapshot) return;
 
