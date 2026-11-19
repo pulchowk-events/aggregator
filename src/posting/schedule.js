@@ -21,6 +21,7 @@
 const cron = require('node-cron');
 const { auditLog } = require('../core/auditLogger');
 const { getNextCronRun, getPreviousCronRun } = require('../core/cronParser');
+const { noteBlocked } = require('../core/devMode');
 const {
     SCRAPE_CRON,
     DEFAULT_SCRAPE_CRON,
@@ -90,6 +91,8 @@ function isMissedScrapeCatchupEnabled(bot) {
 // failing catch-up (network down, etc.) doesn't re-announce itself every
 // 15 minutes. Console logs and audit entries fire on every attempt.
 async function checkForMissedScrapeAndCatchUp(bot) {
+    // DEV_MODE: no auto catch-up scrape (boot call and 15-min cron both land here).
+    if (noteBlocked('checkForMissedScrapeAndCatchUp')) return;
     if (bot.isScraping) return;
     if (!isMissedScrapeCatchupEnabled(bot)) return;
 

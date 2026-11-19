@@ -23,6 +23,7 @@
 
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { auditLog } = require('../../core/auditLogger');
+const { requireProdMode, noteBlocked } = require('../../core/devMode');
 
 const DEDUPE_SCAN_MESSAGE_LIMIT = 7;
 const DEDUPE_SCAN_STAGGER_MS = 750;
@@ -75,6 +76,8 @@ function filterToBotFormattedMessages(bot, messages) {
 }
 
 async function deleteDuplicateMessages(bot, channelId, botMessages) {
+    // DEV_MODE: leaf guard; reachable from /dedupe, post hook, autopublish and background sweeps.
+    if (noteBlocked('deleteDuplicateMessages')) return [];
     const sorted = [...botMessages].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
     const groups = new Map();
     for (const msg of sorted) {
@@ -167,6 +170,7 @@ async function scanAllLiveChannelsForDuplicates(bot, options = {}) {
 // ---------- Commands ----------
 
 async function handleDedupe(bot, interaction) {
+    if (!(await requireProdMode('dedupe', interaction))) return;
     const channelOption = interaction.options.getChannel('channel');
     const limitOption = interaction.options.getInteger('limit');
     const limit = (limitOption && limitOption > 0) ? limitOption : DEDUPE_SCAN_MESSAGE_LIMIT;

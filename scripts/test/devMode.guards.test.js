@@ -87,3 +87,91 @@ test('12. websiteSync engine folds DEV_MODE into DRY_RUN', async () => {
         assert.equal(require(path.join(ROOT, 'src/integrations/websiteSync/engine')).DRY_RUN, true);
     });
 });
+
+test('13. checkForMissedScrapeAndCatchUp returns early when DEV_MODE=true (control: runs without it)', async () => {
+    const touched = [];
+    const spyBot = () => new Proxy({}, {
+        get(_t, prop) { touched.push(String(prop)); throw new Error('bot touched: ' + String(prop)); },
+    });
+    await withEnv({ ...SCRUB, DEV_MODE: 'true' }, async () => {
+        const { checkForMissedScrapeAndCatchUp } = require(SRC + 'posting/schedule.js');
+        const r = await checkForMissedScrapeAndCatchUp(spyBot());
+        assert.equal(r, undefined);
+        assert.deepEqual(touched, [], 'guard must return before touching bot');
+    });
+    touched.length = 0;
+    await withEnv({ ...SCRUB, DEV_MODE: 'false' }, async () => {
+        const { checkForMissedScrapeAndCatchUp } = require(SRC + 'posting/schedule.js');
+        await checkForMissedScrapeAndCatchUp(spyBot()).catch(() => {});
+        assert.ok(touched.length > 0, 'control: without DEV_MODE the function proceeds into bot state');
+    });
+});
+
+function makeDedupeHarness() {
+    const calls = { replies: [], defers: 0, edits: [], fetches: 0 };
+    const interaction = {
+        deferred: false, replied: false,
+        options: { getChannel: () => null, getInteger: () => null },
+        reply: async (p) => { calls.replies.push(p); },
+        followUp: async (p) => { calls.replies.push(p); },
+        deferReply: async () => { calls.defers++; },
+        editReply: async (p) => { calls.edits.push(p); },
+    };
+    const bot = {
+        CATEGORIES: { events: { main: '111' } },
+        client: {
+            user: { id: 'bot' },
+            channels: { fetch: async () => {
+                calls.fetches++;
+                return { isTextBased: () => true, messages: { fetch: async () => ({ size: 0, values: () => [] }) } };
+            } },
+        },
+        normalizeEventName: (s) => String(s).toLowerCase(),
+        sendLogMessage: async () => {},
+    };
+    return { calls, interaction, bot };
+}
+
+test('14. /dedupe refuses in DEV_MODE (ephemeral reply, no scan, no delete); control: proceeds without it', async () => {
+    const { MessageFlags } = require('discord.js');
+    await withEnv({ ...SCRUB, DEV_MODE: 'true' }, async () => {
+        const { handlers } = require(SRC + 'discord/extensions/dedupe.js');
+        const h = makeDedupeHarness();
+        await handlers.dedupe(h.bot, h.interaction);
+        assert.equal(h.calls.replies.length, 1);
+        assert.equal(h.calls.replies[0].flags, MessageFlags.Ephemeral);
+        assert.match(h.calls.replies[0].content, /DEV_MODE=true/);
+        assert.equal(h.calls.defers, 0, 'must not defer');
+        assert.equal(h.calls.fetches, 0, 'must not touch any channel');
+    });
+    await withEnv({ ...SCRUB, DEV_MODE: 'false' }, async () => {
+        const { handlers } = require(SRC + 'discord/extensions/dedupe.js');
+        const h = makeDedupeHarness();
+        await handlers.dedupe(h.bot, h.interaction);
+        assert.equal(h.calls.defers, 1, 'control: handler proceeds');
+        assert.equal(h.calls.fetches, 1);
+        assert.match(h.calls.edits[0].content, /no duplicates/);
+    });
+});
+
+test('15. deleteDuplicateMessages (leaf) refuses in DEV_MODE even when called directly; control: deletes without it', async () => {
+    const mk = (deleted) => [
+        { id: 'm1', content: '## Dup Event', createdTimestamp: 1, author: { id: 'bot' }, delete: async () => { deleted.push('m1'); } },
+        { id: 'm2', content: '## Dup Event', createdTimestamp: 2, author: { id: 'bot' }, delete: async () => { deleted.push('m2'); } },
+    ];
+    const bot = { normalizeEventName: (s) => String(s).toLowerCase() };
+    await withEnv({ ...SCRUB, DEV_MODE: 'true' }, async () => {
+        const { deleteDuplicateMessages } = require(SRC + 'discord/extensions/dedupe.js');
+        const deleted = [];
+        const r = await deleteDuplicateMessages(bot, '111', mk(deleted));
+        assert.deepEqual(r, []);
+        assert.deepEqual(deleted, [], 'no delete may be attempted');
+    });
+    await withEnv({ ...SCRUB, DEV_MODE: 'false' }, async () => {
+        const { deleteDuplicateMessages } = require(SRC + 'discord/extensions/dedupe.js');
+        const deleted = [];
+        const r = await deleteDuplicateMessages(bot, '111', mk(deleted));
+        assert.deepEqual(deleted, ['m2'], 'control: newer duplicate is deleted');
+        assert.equal(r.length, 1);
+    });
+});
