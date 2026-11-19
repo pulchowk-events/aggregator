@@ -272,10 +272,15 @@ function parseVerifyOutput(rawStdout) {
     const saDesc = stdout.match(/^siteAbsentDesc:\s*(\d+)/m);
     const saLoc = stdout.match(/^siteAbsentLoc:\s*(\d+)/m);
     const layer = (key) => {
-        const m = stdout.match(new RegExp('^' + key + ':\s*(\\d+)', 'm'));
+        const m = stdout.match(new RegExp('^' + key + ':\\s*(\\d+)', 'm'));
         return m ? parseInt(m[1], 10) : 0;
     };
     const timedOutMatch = stdout.match(/^timedOut:\s*true/m);
+    // Appended (persist-meta): scalars the worker already emitted but this
+    // parser never read, plus the itemsFile status line. First match wins.
+    const detailPagesMatch = stdout.match(/^detailPages:\s*(\d+)/m);
+    const parseFailuresMatch = stdout.match(/^parseFailures:\s*(\d+)/m);
+    const itemsFileMatch = stdout.match(/^itemsFile:\s*(written|skipped|failed)\b/m);
     return {
         items: itemsMatch ? parseInt(itemsMatch[1], 10) : null,
         rawItems: rawItemsMatch ? parseInt(rawItemsMatch[1], 10) : null,
@@ -323,7 +328,10 @@ function parseVerifyOutput(rawStdout) {
             qualCleared: layer('layerQualCleared'),
             imagesAdded: layer('layerImagesAdded')
         },
-        timedOut: Boolean(timedOutMatch)
+        timedOut: Boolean(timedOutMatch),
+        detailPages: detailPagesMatch ? parseInt(detailPagesMatch[1], 10) : null,
+        parseFailures: parseFailuresMatch ? parseInt(parseFailuresMatch[1], 10) : null,
+        itemsFile: itemsFileMatch ? itemsFileMatch[1] : null
     };
 }
 
@@ -626,6 +634,25 @@ function decidePass(parsed, { isTemplate, isHtmlTemplate, resolution, dumpEviden
     return { pass: false, reason: parsed.verdict || 'unknown_verdict' };
 }
 
+// Persisted per-site scrape meta (results/<name>.json -> meta). Every field
+// comes from a worker stdout marker; null means the marker was absent
+// (e.g. a worker predating itemsFile). load_failed/timeout blocks carry
+// zero-filled scalars, so those are 0, not null.
+//   timedOut:  extractor-reported timedOut OR a per-site timeout verdict.
+//   itemsFile: written  -> results/<name>.items.json is fresh for this run
+//              skipped  -> no file at that path (stale one was removed)
+//              failed   -> do not trust a file at that path
+function buildResultMeta(parsed) {
+    return {
+        listingHits: parsed.listingHits,
+        detailPages: parsed.detailPages,
+        parseFailures: parsed.parseFailures,
+        looksBlocked: parsed.looksBlocked,
+        timedOut: Boolean(parsed.timedOut) || parsed.verdict === 'timeout',
+        itemsFile: parsed.itemsFile
+    };
+}
+
 async function runVerify(opts) {
     installSignalHandlers();
 
@@ -761,6 +788,7 @@ async function runVerify(opts) {
             rawItems: parsed.rawItems || null,
             layers: parsed.layers || null,
             items: parsed.items,
+            meta: buildResultMeta(parsed),
             durationSec: parsed.durationSec,
             exitCode: null,
             timedOut: parsed.verdict === 'timeout',
@@ -1040,7 +1068,7 @@ async function runVerify(opts) {
     return { results, failedCount, passCount: Object.keys(results).length - failedCount };
 }
 
-module.exports = { runVerify, parseArgs, parseVerifyOutput, decidePass };
+module.exports = { runVerify, parseArgs, parseVerifyOutput, decidePass, buildResultMeta };
 
 if (require.main === module) {
     const opts = parseArgs(process.argv.slice(2));

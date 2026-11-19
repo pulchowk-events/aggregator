@@ -65,8 +65,50 @@ function emit(name, lines) {
     process.stdout.write(`::: SITE_END ${name}\n`);
 }
 
+// ---- items side file (results/<name>.items.json) -------------------
+// Full kept items of the most recent run of <name>. Removed at the start
+// of every runSite, so after any run it is fresh or absent, never stale.
+// Outcome travels to the parent as `itemsFile: <status>`:
+//   written  fresh file written for this run
+//   skipped  no write attempted (failed before items existed, or
+//            BATCH_RUN_ID unset); no file at that path
+//   failed   write threw, or the previous file could not be removed;
+//            do not trust whatever is at that path
+function clearItemsFile(name) {
+    const runId = process.env.BATCH_RUN_ID;
+    if (!runId) return 'skipped';
+    try {
+        fs.unlinkSync(itemsPath(runId, name));
+        return 'skipped';
+    } catch (e) {
+        if (e && e.code === 'ENOENT') return 'skipped';
+        console.error('items unlink failed: ' + (e && e.message));
+        return 'failed';
+    }
+}
+
+function writeItemsFile(name, items) {
+    const runId = process.env.BATCH_RUN_ID;
+    if (!runId) {
+        console.error('items write skipped: BATCH_RUN_ID unset');
+        return 'skipped';
+    }
+    let p = null;
+    try {
+        p = itemsPath(runId, name);
+        fs.writeFileSync(p, JSON.stringify(items, null, 2));
+        return 'written';
+    } catch (e) {
+        console.error('items write failed: ' + (e && e.message));
+        if (p) { try { fs.unlinkSync(p); } catch (_) { /* best effort */ } }
+        return 'failed';
+    }
+}
+
 async function runSite(name) {
     const t0 = Date.now();
+    // Staleness guard: drop last run's items file before anything can fail.
+    let itemsFileStatus = clearItemsFile(name);
 
     let loadErr = null;
     let extractor = null;
@@ -85,6 +127,7 @@ async function runSite(name) {
             'verdict: load_failed',
             'listingHits: 0', 'detailPages: 0', 'parseFailures: 0', 'looksBlocked: false',
             `duration: ${sec}s`,
+            `itemsFile: ${itemsFileStatus}`,
             `error: ${String(loadErr.message).replace(/\n/g, ' ')}`
         ]);
         return;
@@ -138,6 +181,7 @@ async function runSite(name) {
                 'items: 0', 'rawItems: 0', 'verdict: timeout',
                 'listingHits: 0', 'detailPages: 0', 'parseFailures: 0', 'looksBlocked: false',
                 `duration: ${sec}s`,
+                `itemsFile: ${itemsFileStatus}`,
                 `error: per-site timeout ${PER_SITE_TIMEOUT_MS}ms`
             ]);
             // Exit cleanly (same reasoning as prior extract timeout path).
@@ -147,6 +191,7 @@ async function runSite(name) {
             'items: 0', 'rawItems: 0', 'verdict: parse_failed',
             'listingHits: 0', 'detailPages: 0', 'parseFailures: 0', 'looksBlocked: false',
             `duration: ${sec}s`,
+            `itemsFile: ${itemsFileStatus}`,
             `error: ${String(e && e.message || 'unknown').replace(/\n/g, ' ')}`
         ]);
         return;
@@ -296,16 +341,13 @@ async function runSite(name) {
                 lines.push(`[${j}] ${result.items[j].title}`);
             }
         }
-        // Full kept items go to a side file; stdout protocol unchanged.
-        if (!process.env.BATCH_RUN_ID) {
-            console.error('items write skipped: BATCH_RUN_ID unset');
-        } else {
-            try {
-                fs.writeFileSync(itemsPath(process.env.BATCH_RUN_ID, name), JSON.stringify(result.items, null, 2));
-            } catch (e) {
-                console.error('items write failed: ' + e.message);
-            }
-        }
+        // Full kept items go to a side file (bare array, shape unchanged).
+        // Status is reported on the protocol as `itemsFile:`. Inserted at
+        // index 8, right after the 8 fixed scalar lines (items .. duration)
+        // and before anything derived from item text, so the parent's
+        // first-match regex cannot be shadowed by a title.
+        itemsFileStatus = writeItemsFile(name, result.items);
+        lines.splice(8, 0, `itemsFile: ${itemsFileStatus}`);
         emit(name, lines);
     } catch (e) {
         // Inner try/catch tail for unexpected errors during emit processing.
@@ -315,6 +357,7 @@ async function runSite(name) {
             'items: 0', 'rawItems: 0', 'verdict: parse_failed',
             'listingHits: 0', 'detailPages: 0', 'parseFailures: 0', 'looksBlocked: false',
             `duration: ${sec}s`,
+            `itemsFile: ${itemsFileStatus}`,
             `error: ${String(e && e.message || 'unknown').replace(/\n/g, ' ')}`
         ]);
     }
