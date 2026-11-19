@@ -40,7 +40,7 @@ const WEBSITE_JOBS_TABLE = env.WEBSITE_JOBS_TABLE || 'jobs';
 const JOBS_SYNC_ENABLED = env.WEBSITE_JOBS_SYNC_ENABLED !== false;
 const WEBSITE_SCHOLARSHIPS_TABLE = env.WEBSITE_SCHOLARSHIPS_TABLE || 'scholarships';
 const SCHOLARSHIPS_SYNC_ENABLED = env.WEBSITE_SCHOLARSHIPS_SYNC_ENABLED !== false;
-const DRY_RUN = env.WEBSITE_SYNC_DRY_RUN === true;
+const DRY_RUN = env.WEBSITE_SYNC_DRY_RUN === true || env.DEV_MODE === true;
 
 // Per-batch progress is opt-in. Default output is one line per table;
 // set WEBSITE_SYNC_VERBOSE=1 to also see the per-batch upsert/prune stream.
@@ -529,6 +529,9 @@ function scholarshipsResultLine(r) {
 
 // ---------- Main entry ----------
 async function syncWebsite(bot, options = {}) {
+    if (require('../../core/devMode').noteBlocked('syncWebsite')) {
+        return { skipped: 'dev_mode', devMode: true, dryRun: true };
+    }
     const { onProgress } = options;
     const emit = (p) => { if (onProgress) { try { onProgress(p); } catch (_) {} } };
     const log = (msg) => console.log(`🌐 [websiteSync] ${msg}`);

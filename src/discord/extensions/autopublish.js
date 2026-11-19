@@ -28,6 +28,7 @@ function isAutopublishEnabled(bot) {
 }
 
 async function tryCrosspost(bot, channelId, message, auditContext = {}) {
+    if (require('../../core/devMode').noteBlocked('tryCrosspost')) return false;
     // Log non-crosspostable skips so operators can distinguish "not
     // an announcement channel" from "crosspost failed" from "already
     // published." Without this, /publish-previous counts them as
@@ -55,6 +56,7 @@ async function tryCrosspost(bot, channelId, message, auditContext = {}) {
 async function sequencedPostPublish(bot, event, mode, categoryKey, channelId) {
     if (mode !== 'main') return { published: false, reason: 'not_live_mode' };
     if (!isAutopublishEnabled(bot)) return { published: false, reason: 'disabled' };
+    if (require('../../core/devMode').noteBlocked('sequencedPostPublish')) return { published: false, reason: 'dev_mode' };
     if (!channelId) return { published: false, reason: 'no_channel' };
 
     // Step 1: fetch the newest message on the channel — that should be the
@@ -103,6 +105,7 @@ async function sequencedPostPublish(bot, event, mode, categoryKey, channelId) {
 // /publish-previous helper — dedupe a set of channels (small window OR
 // entire history), then crosspost every survivor that's eligible.
 async function publishPreviousInChannels(bot, channelIds, amount) {
+    if (require('../../core/devMode').noteBlocked('publishPreviousInChannels')) return { deleted: 0, published: 0, skipped: 0, devMode: true };
     let totalDeleted = 0;
     let totalPublished = 0;
     let totalSkipped = 0;

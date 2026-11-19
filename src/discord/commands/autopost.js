@@ -1,5 +1,6 @@
 // /autopost — start/stop/interval/status for the 6 track × mode combinations.
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
+const { requireProdMode } = require('../../core/devMode');
 const { AUTOPOST_LIVE_WINDOW_START_HOUR, AUTOPOST_LIVE_WINDOW_END_HOUR } = require('../../config/constants');
 
 const AUTOPOST_TYPE_CHOICES = [
@@ -49,6 +50,7 @@ async function handle(bot, interaction) {
 
     if (sub === 'start-test' || sub === 'start-live') {
         const mode = sub === 'start-test' ? 'test' : 'live';
+        if (mode === 'live' && !(await requireProdMode('autopost start-live', interaction))) return;
         const type = interaction.options.getString('type');
         const rawInterval = interaction.options.getInteger('interval_minutes');
         const interval = (rawInterval === null || rawInterval === undefined) ? 60 : rawInterval;

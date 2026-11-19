@@ -13,6 +13,7 @@
 // next /supabase sync-now or auto-sync tick to retry.
 
 const { createClient } = require('@supabase/supabase-js');
+const { requireProdMode } = require('../core/devMode');
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { auditLog } = require('../core/auditLogger');
 const discordLog = require('../core/discordLog');
@@ -237,6 +238,9 @@ async function _syncPostedEventsInner(bot, { force = false } = {}) {
 // gates, batch uploads, marker state, audit -- unchanged. This only
 // prints the outcome for the human.
 async function syncPostedEvents(bot, opts = {}) {
+    if (require('../core/devMode').noteBlocked('syncPostedEvents')) {
+        return { ok: true, uploaded: 0, events: 0, jobs: 0, scholarships: 0, errors: [], skipped: 'dev_mode' };
+    }
     const started = Date.now();
     let result;
     try {
@@ -338,6 +342,7 @@ const commands = [
 
 async function handleCommand(interaction, bot) {
     const sub = interaction.options.getSubcommand();
+    if (['sync-now', 'republish-all', 'autosync-start'].includes(sub) && !(await requireProdMode('supabase ' + sub, interaction))) return;
 
     if (!isConfigured()) {
         return interaction.reply({

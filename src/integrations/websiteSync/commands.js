@@ -7,6 +7,7 @@
 //   prune     — force-delete orphans (bypasses the >50% guard)
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
+const { requireProdMode } = require('../../core/devMode');
 const { auditLog } = require('../../core/auditLogger');
 const engine = require('./engine');
 
@@ -66,6 +67,7 @@ function formatFinalResult(r) {
 }
 
 async function handleNow(bot, interaction) {
+    if (!(await requireProdMode('website-sync now/backfill', interaction))) return;
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     let lastEdit = 0;
     const progressCb = (p) => {
@@ -121,6 +123,7 @@ async function handleHealth(bot, interaction) {
 }
 
 async function handlePrune(bot, interaction) {
+    if (!(await requireProdMode('website-sync prune', interaction))) return;
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const { createClient } = require('@supabase/supabase-js');
     const env = require('../../config/env');

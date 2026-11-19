@@ -5,6 +5,7 @@
 //   /autopublish on|off|status     — crosspost new posts after dedupe clears
 
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
+const { requireProdMode } = require('../../core/devMode');
 const { auditLog } = require('../../core/auditLogger');
 const env = require('../../config/env');
 
@@ -80,6 +81,7 @@ async function handleBlacklist(bot, interaction) {
 async function handleAutopublish(bot, interaction) {
     const sub = interaction.options.getSubcommand();
     if (sub === 'on') {
+        if (!(await requireProdMode('autopublish on', interaction))) return;
         setAutopublishEnabled(bot, true);
         await interaction.reply({ content: '✅ Auto-publish enabled.', flags: MessageFlags.Ephemeral });
         await bot.sendLogMessage(`📢 Auto-publish turned ON by ${interaction.user.tag}.`);

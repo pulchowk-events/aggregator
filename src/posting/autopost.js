@@ -149,6 +149,7 @@ function persistAutopostState(bot) {
 // respect how much of the interval has already elapsed." Manual
 // /autopost start does NOT set this — it posts right away.
 function startAutopost(bot, itemType, mode, intervalMinutes = 60, options = {}) {
+    if (mode === 'live' && require('../core/devMode').noteBlocked('startAutopost:live', { itemType })) return;
     const { respectLastPostAt = false } = options;
 
     stopAutopost(bot, itemType, mode);   // housekeeping only — not a deliberate stop

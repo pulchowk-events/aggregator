@@ -92,6 +92,18 @@ const WEBSITE_SCHOLARSHIPS_TABLE = optional('WEBSITE_SCHOLARSHIPS_TABLE', 'schol
 const WEBSITE_SCHOLARSHIPS_SYNC_ENABLED = optionalBool('WEBSITE_SCHOLARSHIPS_SYNC_ENABLED', true);
 const WEBSITE_SYNC_BATCH_SIZE = optionalInt('WEBSITE_SYNC_BATCH_SIZE', 50);
 const WEBSITE_SYNC_BATCH_DELAY_MS = optionalInt('WEBSITE_SYNC_BATCH_DELAY_MS', 200);
+// DEV_MODE: when true, command handlers and sync/autopost entry points refuse
+// live writes. Unset/empty == false. Unrecognized values fail CLOSED (== true).
+const DEV_MODE = (() => {
+    const raw = process.env.DEV_MODE;
+    if (raw === undefined || raw.trim() === '') return false;
+    const v = raw.trim().toLowerCase();
+    if (v === 'true' || v === '1') return true;
+    if (v === 'false' || v === '0') return false;
+    console.warn(`[env] DEV_MODE has unrecognized value "${raw}" - treating as TRUE (fail closed). Use true/false/1/0.`);
+    return true;
+})();
+
 const WEBSITE_SYNC_CRON = optional('WEBSITE_SYNC_CRON', '0 * * * *');
 const WEBSITE_REVALIDATE_URL = optional('WEBSITE_REVALIDATE_URL');
 const WEBSITE_REVALIDATE_SECRET = optional('WEBSITE_REVALIDATE_SECRET');
@@ -168,6 +180,7 @@ module.exports = {
     WEBSITE_SCHOLARSHIPS_SYNC_ENABLED,
     WEBSITE_SYNC_BATCH_SIZE,
     WEBSITE_SYNC_BATCH_DELAY_MS,
+    DEV_MODE,
     WEBSITE_SYNC_CRON,
     WEBSITE_REVALIDATE_URL,
     WEBSITE_REVALIDATE_SECRET,
