@@ -91,9 +91,10 @@ async function runDumpForRedirect(targetUrl, name, session, wizard, log) {
         .filter((g) => !/^#/.test(g.pattern))
         .filter((g) => !/^\/$/.test(g.pattern))
         .sort((a, b) => b.count - a.count)[0];
-    if (detailPattern) {
-        const detailUrl = detailPattern.samples[0].href;
-        log(`  detail candidate: ${detailUrl}`);
+    const detailPick = detect.pickDetailUrl(listing, targetUrl, detailPattern);
+    if (detailPick) {
+        const detailUrl = detailPick.href;
+        log(`  detail candidate: ${detailUrl} (${detailPick.label})`);
         try {
             detail = await withPageFn(async (page) => {
                 await page.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });

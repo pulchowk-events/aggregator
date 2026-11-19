@@ -75,7 +75,7 @@ if (fs.existsSync(wrapperPath) || fs.existsSync(extractorPath)) {
 
 const { withPage, closeBrowser } = require('./browser');
 const { dumpListingPage, dumpDetailPage } = require('./dump');
-const { detectSiteType } = require('./detect');
+const { detectSiteType, pickDetailUrl } = require('./detect');
 const { buildPrompt } = require('./prompt');
 const { sourceWrapper, extractorStub } = require('./templates');
 
@@ -104,13 +104,16 @@ const { sourceWrapper, extractorStub } = require('./templates');
         const detailPattern = (listing.anchorGroups || [])
             .filter(g => g.count >= 3)
             .filter(g => !/^\/(category|tag|search|filter|about|contact)/i.test(g.pattern))
+            .filter(g => !/^#/.test(g.pattern))
+            .filter(g => !/^\/$/.test(g.pattern))
             .sort((a, b) => b.count - a.count)[0];
 
-        if (detailPattern) {
-            console.log(`\n[2/4] Loading sample detail page: ${detailPattern.samples[0].href}`);
+        const detailPick = pickDetailUrl(listing, url, detailPattern);
+        if (detailPick) {
+            console.log(`\n[2/4] Loading sample detail page: ${detailPick.href} (${detailPick.label})`);
             try {
                 detail = await withPage(async (page) => {
-                    await page.goto(detailPattern.samples[0].href, { waitUntil: 'networkidle2', timeout: 60000 });
+                    await page.goto(detailPick.href, { waitUntil: 'networkidle2', timeout: 60000 });
                     await new Promise(r => setTimeout(r, 2000));
                     return dumpDetailPage(page);
                 }, { useProfile });

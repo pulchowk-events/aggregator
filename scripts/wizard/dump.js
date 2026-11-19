@@ -638,7 +638,8 @@ async function dumpListingPage(page) {
     const trimmed = { ...structural };
     if (Array.isArray(trimmed.anchorGroups)) {
         trimmed.anchorGroups = trimmed.anchorGroups.slice(0, 10).map((g) => ({
-            pattern: g.pattern, count: g.count
+            pattern: g.pattern, count: g.count,
+            samples: Array.isArray(g.samples) ? g.samples.slice(0, 3) : []
         }));
     }
     // Only slice array length. Preserve full item shape because generate.js

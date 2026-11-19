@@ -27,6 +27,9 @@ const TYPE_REFERENCE_EXAMPLES = {
         'single-page-cards': 'src/scrapers/extractors/jobs/growbydata.js',
         'listing-to-detail': 'src/scrapers/extractors/jobs/kumarijob.js',
         'jsonld-first':      'src/scrapers/extractors/jobs/lftechnology.js',
+        'single-posting':    'src/scrapers/extractors/jobs/lftechnology.js',
+        'hub':               'src/scrapers/extractors/jobs/growbydata.js',
+        'unknown-shape':     'src/scrapers/extractors/jobs/growbydata.js',
         'unknown':           'src/scrapers/extractors/jobs/growbydata.js'
     },
     scholarships: {
@@ -602,13 +605,19 @@ function trimPartsToBudget(parts, opts) {
 function describeSiteType(detected) {
     switch (detected.type) {
         case 'jsonld-first':
-            return `The detail pages ship well-formed JSON-LD (\`${detected.evidence.eventJsonLdType}\`). Extract every field from JSON-LD first, fall back to HTML selectors only for fields JSON-LD omits. This is the fastest, most reliable path -- a single \`page.evaluate\` per detail page suffices.`;
+            return `The detail pages ship well-formed JSON-LD (\`${detected.evidence.jsonLdType || detected.evidence.eventJsonLdType}\`). Extract every field from JSON-LD first, fall back to HTML selectors only for fields JSON-LD omits. This is the fastest, most reliable path -- a single \`page.evaluate\` per detail page suffices.`;
         case 'listing-to-detail':
             return `The listing page exposes distinct detail links matching \`${detected.evidence.detailLinkPattern}\` (${detected.evidence.detailLinkCount} matches). Detail pages have no usable JSON-LD -- HTML extraction per page. Standard two-stage scrape: harvest listing links, then per-link navigate + extract.`;
         case 'single-page-cards':
             return `All data lives on the listing cards themselves (\`${detected.evidence.cardSelector}\`, ${detected.evidence.cardCount} matches). No detail navigation required. One \`page.evaluate\` harvests everything. Fastest pattern.`;
         case 'info_starved_cards':
             return `The cards exist (\`${detected.evidence.cardSelector}\`, ${detected.evidence.cardCount} matches) but are POINTERS, not data -- they carry title + link, but no description / company / location on the card itself. You MUST navigate to each card\u2019s detail page and extract there. Treat this like listing-to-detail even though the card structure looks single-page.`;
+        case 'hub':
+            return `This page is a hub: its card group (\`${detected.evidence.cardSelector}\`, ${detected.evidence.cardCount} matches, labels: ${(detected.evidence.labels || []).join(' / ')}) lists categories or departments, not individual items. If those are job departments, traverse ONE level deeper and extract from the category pages; if every category says "No Jobs", return { items: [], meta } with meta.atsEmpty = true. If they are product, service or marketing categories, answer VERDICT: NOT_CAREERS_PAGE (or CAREERS_PAGE_REDIRECT if a real listing exists elsewhere on the site). Never treat category labels as job titles. The reference example below is a structural reference only, not a hub extractor.`;
+        case 'single-posting':
+            return `The entry page has no repeating card list, and its JSON-LD (${((detected.evidence && detected.evidence.jsonLdTypes) || []).join(', ')}) describes a single posting. Extract exactly ONE item from this page, JSON-LD first, with url set to the entry URL. Do not invent a list. If the page is a company or product page rather than one posting, answer VERDICT: NOT_CAREERS_PAGE. The reference example below is JSON-LD driven; adapt it to return one item.`;
+        case 'unknown-shape':
+            return `No card list, no distinct detail links and no usable JSON-LD were found. The page shape is unknown; do not assume a listing-to-detail or single-page-cards layout. Run the empty-state check first, then extract only what the raw HTML actually shows. If nothing role-shaped exists, return { items: [], meta } with meta.atsEmpty = true, or answer VERDICT: NOT_CAREERS_PAGE. The reference example below is a structural reference only.${detected.evidence && detected.evidence.emptyState ? ' The page text contains an empty-state phrase (for example "no positions available").' : ''}`;
         default:
             return `No clear pattern detected. Consider whether the entry URL needs a stage transition first (home -> category -> listing), or whether the site needs scrolling to reveal cards. Read the evidence dump carefully and confirm what you\u2019re looking at before writing code.`;
     }
