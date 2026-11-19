@@ -262,6 +262,8 @@ async function _postEventToCategoryInner(bot, event, mode, categoryKeyOverride =
 // Row format matches scrapeAll's per-source rows so the bot has one
 // visual voice: tag, title, mode, category, duration, human reason label.
 async function postEventToCategory(bot, event, mode, categoryKeyOverride = null, force = false) {
+    // DEV_MODE: live-post leaf. Same { ok, reason } shape every caller already handles.
+    if (mode === 'main' && require('../core/devMode').noteBlocked('postEventToCategory:main')) return { ok: false, reason: 'dev_mode', skipped: 'dev_mode', devMode: true };
     const started = Date.now();
     const titleRaw = (event && event.title) || '(untitled)';
     const title = titleRaw.length > 40 ? titleRaw.slice(0, 39) + '\u2026' : titleRaw;

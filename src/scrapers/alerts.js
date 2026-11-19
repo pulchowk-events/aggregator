@@ -121,6 +121,9 @@ async function recordOutcome(bot, source, type, verdict, meta = {}) {
 }
 
 async function deliverAlert(bot, source, type, streak, threshold, reason, metaStr, verdict) {
+    // DEV_MODE: skip ONLY the Discord post. recordOutcome has already updated the streak,
+    // lastAlertAt and cache and written the source_alert audit entry before calling this.
+    if (require('../core/devMode').noteBlocked('deliverAlert')) return;
     const env = require('../config/env');
     const { normalizeRoleId } = require('../config/roles');
     const channelId = env.ALERTS_CHANNEL_ID;
