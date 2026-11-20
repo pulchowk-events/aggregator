@@ -78,7 +78,7 @@ function printHelp() {
     console.log(`  ${CYAN}check${R}             Validate prompt structure (guards against wizard-template drift).`);
     console.log(`  ${CYAN}dry-run${R}           Pipe items.json through posting gates (--run <id> [--mode main|test] [--source <name>] [--items <dir>] [--json]).`);
     console.log(`  ${CYAN}scrape-now${R}        Scrape committed sources into a run directory for dry-run.`);
-    console.log(`  ${CYAN}paste${R}             Send prompts to an LLM; supports --provider and --manual/--extension.`);
+    console.log(`  ${CYAN}paste${R}             Send prompts to an LLM; supports --provider, --manual/--extension, and guarded timeout recovery.`);
     console.log(`  ${CYAN}follow${R}            Follow CAREERS_PAGE_REDIRECT verdicts (re-dump, re-prompt).`);
     console.log(`  ${CYAN}refine${R}            Re-prompt LLM-origin failed sites with verify failure evidence.`);
     console.log(`  ${CYAN}auto${R}              One-shot pipeline loop; supports --provider and --manual/--extension.`);
@@ -96,6 +96,7 @@ function printHelp() {
     console.log(`  ${D}--provider <name>${R}  Select the LLM provider for paste steps (run, auto, paste).`);
     console.log(`  ${D}--manual${R} / ${D}--extension${R}  Select clipboard or extension transport; default follows EXTENSION_TOKEN.`);
     console.log(`  ${D}--include-small${R}  Force-include prompts with no captured structural or field evidence (paste).`);
+    console.log(`  ${D}--resume-after-timeout${R}  Acknowledge a drained extension queue before sending more requests.`);
     console.log(`  ${D}--json${R}            Machine-readable report output (report subcommand).`);
     console.log(`  ${D}-v, --verbose${R}     Extra detail per source (report subcommand).`);
     console.log('');

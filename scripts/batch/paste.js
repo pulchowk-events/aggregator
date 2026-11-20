@@ -319,7 +319,8 @@ function parseArgs(argv) {
         skipBrowser: false,
         timeoutMs: DEFAULT_TIMEOUT_MS,
         usePoll: true,
-        mode: null  // 'manual' | 'extension' | null (=auto)
+        mode: null,  // 'manual' | 'extension' | null (=auto)
+        resumeAfterTimeout: false
     };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -329,6 +330,7 @@ function parseArgs(argv) {
         else if (a === '--no-browser') { args.skipBrowser = true; }
         else if (a === '--no-poll') { args.usePoll = false; }
         else if (a === '--include-small') { args.includeSmall = true; }
+        else if (a === '--resume-after-timeout') { args.resumeAfterTimeout = true; }
         else if (a === '--manual') { args.mode = 'manual'; }
         else if (a === '--extension') { args.mode = 'extension'; }
         else if (a === '--timeout' && argv[i + 1]) {
@@ -362,6 +364,11 @@ async function runPaste(opts) {
     }
     if (mode === 'extension' && !process.env.EXTENSION_TOKEN) {
         throw new Error('--extension requires EXTENSION_TOKEN in .env');
+    }
+    if (opts.resumeAfterTimeout && mode !== 'extension') {
+        const err = new Error('--resume-after-timeout is only valid in extension mode');
+        err.stopBatchRun = true;
+        throw err;
     }
     opts = Object.assign({}, opts, { mode });
 

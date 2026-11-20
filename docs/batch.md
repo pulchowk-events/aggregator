@@ -497,6 +497,7 @@ Run directories are never auto-pruned. Raw HTML per URL dominates the size. See 
 | `--only a,b,c` | all sites | Restrict supported source-scoped phases (generate, paste, auto, deploy); init/discover/retry/check/report remain run-wide |
 | `--provider <name>` | no CLI override | Select provider for all paste steps; valid provider names depend on the selected transport. Extension mode uses the deepseek-connect provider registry. |
 | `--manual` / `--extension` | auto from `EXTENSION_TOKEN` | Force clipboard mode or require extension transport |
+| `--resume-after-timeout` | false | After confirming the extension queue is idle, acknowledge and clear a previously pending request guard |
 | `--parallel N` | 10 | Verify worker count |
 | `--timeout MS` | 60000 | Per-site verify timeout |
 | `--max-rounds N` | 5 | Hard cap on auto loop iterations |
@@ -522,6 +523,7 @@ Run directories are never auto-pruned. Raw HTML per URL dominates the size. See 
 | `--include-small` | false | Force-include prompts with no captured structural or field evidence |
 | `--manual` | auto | Force clipboard mode, even when `EXTENSION_TOKEN` is set |
 | `--extension` | auto | Require extension transport; errors if `EXTENSION_TOKEN` is missing |
+| `--resume-after-timeout` | false | Acknowledge a drained extension queue after an uncertain request; extension mode only |
 
 ### Environment
 
@@ -537,6 +539,8 @@ Run directories are never auto-pruned. Raw HTML per URL dominates the size. See 
 The external `deepseek-connect` bridge does support provider selection: it exposes the provider registry and accepts a provider when opening a chat and sending a prompt. In extension mode, `--provider chatgpt` selects ChatGPT; the token only authenticates the bridge. If no provider is specified, the router defaults to DeepSeek unless a per-source `classes.json` override is configured. A conflicting explicit CLI provider and per-source override is refused for that source.
 
 Manual mode only opens the selected web app and uses the clipboard; it does not send an API request. It supports the listed manual providers (DeepSeek, ChatGPT, and Claude). Without `EXTENSION_TOKEN`, paste defaults to manual mode. Use `--extension` to require extension mode or `--manual` to force clipboard mode.
+
+If an extension `open` or `chat` request times out or fails after dispatch, paste stops immediately instead of sending the next source. It leaves a global guard at `data/batch/.extension-request-pending.json`, which blocks further extension requests across batch runs because the original may still be queued. Wait for the extension queue to drain or otherwise confirm the bridge has no in-flight request, then explicitly acknowledge that state when resuming, for example `pulchowk-events batch paste --run mybatch --extension --resume-after-timeout`. This flag clears only the local guard; it does not cancel a request in the external bridge. Guard updates are serialized across CLI processes. If a process crashes while holding the adjacent `.lock` file, inspect it and confirm its PID is no longer active before removing the lock and resuming.
 
 ### Prompt evidence budget
 

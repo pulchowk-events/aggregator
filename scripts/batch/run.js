@@ -24,6 +24,7 @@
 // Paste is the only interactive step. All other phases are unattended.
 // `--provider` and `--manual` / `--extension` are passed through to every
 // paste step, including paste retries in the auto loop.
+// `--resume-after-timeout` acknowledges a drained extension request guard.
 
 const fs = require('fs');
 const path = require('path');
@@ -52,6 +53,7 @@ function parseArgs(argv) {
         maxAttempts: 5,
         provider: null,
         pasteMode: null,
+        resumeAfterTimeout: false,
         skipDeploy: false,
         retryRejected: true,
         profile: 'medium',
@@ -67,6 +69,7 @@ function parseArgs(argv) {
             args.provider = argv[++i];
         } else if (a === '--manual') args.pasteMode = 'manual';
         else if (a === '--extension') args.pasteMode = 'extension';
+        else if (a === '--resume-after-timeout') args.resumeAfterTimeout = true;
         else if (a === '--parallel' && argv[i + 1]) args.parallel = Math.max(1, parseInt(argv[++i], 10) || 10);
         else if (a === '--timeout' && argv[i + 1]) args.timeoutMs = Math.max(15000, parseInt(argv[++i], 10) || 60000);
         else if (a === '--max-rounds' && argv[i + 1]) args.maxRounds = Math.max(1, parseInt(argv[++i], 10) || 5);
@@ -304,7 +307,8 @@ async function runBatch(opts) {
                     mode: opts.pasteMode,
                     skipBrowser: false,
                     timeoutMs: 5 * 60 * 1000,
-                    usePoll: true
+                    usePoll: true,
+                    resumeAfterTimeout: opts.resumeAfterTimeout
                 });
                 return { ok: r.failed === 0, detail: `${r.written} written, ${r.redirected} followed, ${r.notCareers.length} not-careers, ${r.failed} failed` };
             }
@@ -321,7 +325,8 @@ async function runBatch(opts) {
                     maxRounds: opts.maxRounds,
                     maxAttempts: opts.maxAttempts,
                     provider: opts.provider,
-                    pasteMode: opts.pasteMode
+                    pasteMode: opts.pasteMode,
+                    resumeAfterTimeout: opts.resumeAfterTimeout
                 });
                 return { ok: true, detail: 'verify loop complete' };
             }

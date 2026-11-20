@@ -32,6 +32,20 @@ test('provider flags require a value', () => {
     assert.throws(() => parseAutoArgs(['--provider', '--manual']), /--provider needs a value/);
 });
 
+test('resume-after-timeout is accepted by paste, auto, and run', () => {
+    assert.equal(parseRunArgs(['--resume-after-timeout']).resumeAfterTimeout, true);
+    assert.equal(parseAutoArgs(['--resume-after-timeout']).resumeAfterTimeout, true);
+
+    const previous = process.env.EXTENSION_TOKEN;
+    try {
+        process.env.EXTENSION_TOKEN = 'test-token';
+        assert.equal(parsePasteArgs(['--resume-after-timeout']).resumeAfterTimeout, true);
+    } finally {
+        if (previous === undefined) delete process.env.EXTENSION_TOKEN;
+        else process.env.EXTENSION_TOKEN = previous;
+    }
+});
+
 test('EXTENSION_TOKEN selects transport mode, not the LLM provider', () => {
     const previous = process.env.EXTENSION_TOKEN;
     try {

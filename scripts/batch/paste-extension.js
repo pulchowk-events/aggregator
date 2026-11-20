@@ -31,6 +31,7 @@ const {
 } = require('./paste');
 const { ensureRunLayout, writeClasses } = require('./lib/paths');
 const { ChatMap } = require('./lib/chat-map');
+const { createExtensionSync, sendGuardedRequest } = require('./lib/extension-sync');
 const { validatePrompt } = require('./lib/prompt-structure');
 const { hasCapturedPromptEvidence } = require('./lib/prompt-evidence');
 const { parseVerdict, isSameDomainRedirect } = require('./lib/llm-header');
@@ -43,6 +44,13 @@ const ui = require('./lib/ui');
 const MAX_HOPS = 3;
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+function isTimeoutError(err) {
+    const code = String(err && err.code || '').toLowerCase();
+    const message = String(err && err.message || '');
+    return code === 'extension_timeout' || code === 'timeout' || code === 'etimedout' ||
+        code === 'request_timeout' || /\b(?:timed?\s*out|timeout)\b/i.test(message);
+}
 
 // Retry policy per deepseek-connect/docs/error-codes.md:
 //   rate_limited         -> 1 delayed retry
@@ -60,6 +68,9 @@ async function sendWithRetry(transport, chatName, provider, prompt, timeoutMs) {
             const retryable = err.retryable === true;
             const retryAfter = err.retryAfter || 0;
 
+            // The extension may have accepted the request before the client
+            // timed out. Retrying could enqueue duplicate work behind it.
+            if (isTimeoutError(err)) throw err;
             if (code === 'rate_limited') {
                 if (attempt >= 2) throw err;
                 ui.warn(`rate limited — retrying in ${Math.round(retryAfter / 1000)}s`);
@@ -179,13 +190,20 @@ async function runPasteExtension(opts) {
         return emptyResult();
     }
 
+    const extensionSync = createExtensionSync();
+    const acknowledged = extensionSync.assertReady(!!opts.resumeAfterTimeout);
+    if (acknowledged) {
+        ui.warn(`acknowledged prior ${acknowledged.operation} request for "${acknowledged.name}"; continuing only after queue-idle confirmation`);
+    }
+
     ui.info('How this works:');
     ui.plain('  For each site:');
     ui.plain('    1. Extension opens (or creates) a chat with the routed provider.');
     ui.plain('    2. Prompt sent, reply awaited (5–15s typical).');
     ui.plain('    3. Reply validated, extractor written to generated/.');
     ui.plain('  Requires the deepseek-connect extension loaded in brave://extensions');
-    ui.plain('  with a tab open for each selected provider. Ctrl+C aborts.');
+    ui.plain('  with a tab open for each selected provider.');
+    ui.plain('  Timeouts or interrupts stop the run; confirm the queue is idle before --resume-after-timeout.');
     ui.blank();
     ui.info(`Mode: extension round-trip (per-prompt timeout ${Math.round((opts.timeoutMs || 180000) / 1000)}s)`);
     ui.blank();
@@ -340,13 +358,18 @@ async function runPasteExtension(opts) {
                 const persisted = null;
                 let openResult;
                 try {
-                    openResult = await transport.open({
+                    openResult = await sendGuardedRequest(extensionSync, {
+                        name,
+                        provider,
+                        operation: 'open'
+                    }, () => transport.open({
                         chatName: name,
                         provider,
                         url: persisted && persisted.url,
-                    });
+                    }));
                 } catch (err) {
                     ui.fail(`open("${name}" via ${provider}) failed: ${describeError(err)}`);
+                    if (err.stopBatchRun) throw err;
                     failed++;
                     siteDone = true;
                     break;
@@ -359,7 +382,11 @@ async function runPasteExtension(opts) {
                 spinner.start();
                 let result;
                 try {
-                    result = await sendWithRetry(transport, name, provider, promptBody, opts.timeoutMs || 180000);
+                    result = await sendGuardedRequest(extensionSync, {
+                        name,
+                        provider,
+                        operation: 'chat'
+                    }, () => sendWithRetry(transport, name, provider, promptBody, opts.timeoutMs || 180000));
                 } catch (err) {
                     spinner.stop(`failed: ${describeError(err)}`, false);
                     audit.skip(runDir, {
@@ -368,6 +395,7 @@ async function runPasteExtension(opts) {
                         url: targetUrlForVerdict,
                         reason: `extension round-trip failed: ${describeError(err)}`,
                     });
+                    if (err.stopBatchRun) throw err;
                     failed++;
                     siteDone = true;
                     break;

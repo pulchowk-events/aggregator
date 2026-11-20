@@ -32,6 +32,7 @@
 //   --max-attempts <n>  refine/promote attempt cap per site (default 3)
 //   --provider <name>   LLM provider for paste steps
 //   --manual | --extension  choose paste transport (default: EXTENSION_TOKEN controls it)
+//   --resume-after-timeout  acknowledge a drained extension request guard
 //
 // Uses existing phase functions directly (not subprocess-spawned) so
 // state passes in-memory between phases and errors propagate cleanly.
@@ -66,7 +67,8 @@ function parseArgs(argv) {
         maxRounds: DEFAULTS.maxRounds,
         maxAttempts: DEFAULTS.maxAttempts,
         provider: null,
-        pasteMode: null
+        pasteMode: null,
+        resumeAfterTimeout: false
     };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -77,6 +79,7 @@ function parseArgs(argv) {
             args.provider = argv[++i];
         } else if (a === '--manual') args.pasteMode = 'manual';
         else if (a === '--extension') args.pasteMode = 'extension';
+        else if (a === '--resume-after-timeout') args.resumeAfterTimeout = true;
         else if (a === '--parallel' && argv[i + 1]) args.parallel = Math.max(1, parseInt(argv[++i], 10) || DEFAULTS.parallel);
         else if (a === '--timeout' && argv[i + 1]) args.timeoutMs = Math.max(15000, parseInt(argv[++i], 10) || DEFAULTS.timeoutMs);
         else if (a === '--max-rounds' && argv[i + 1]) args.maxRounds = Math.max(1, parseInt(argv[++i], 10) || DEFAULTS.maxRounds);
@@ -261,9 +264,11 @@ async function runAuto(opts) {
                     mode: opts.pasteMode,
                     skipBrowser: false,
                     timeoutMs: 5 * 60 * 1000,
-                    usePoll: true
+                    usePoll: true,
+                    resumeAfterTimeout: opts.resumeAfterTimeout
                 });
             } catch (e) {
+                if (e && e.stopBatchRun) throw e;
                 // Paste threw -- likely SIGINT during the clipboard wait.
                 // Fall through to next step so the loop can decide whether
                 // to retry or terminate.
