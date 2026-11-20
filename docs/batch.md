@@ -1,6 +1,6 @@
 # Batch pipeline
 
-How to onboard dozens of sources at once — dump, classify, generate, verify, refine, deploy — with one interactive paste step. Read [`scrapers.md`](scrapers.md) first for the extractor contract, and [`architecture.md`](architecture.md#batch-pipeline-entry-path) for why the batch pipeline is a source-code generator rather than a runtime participant.
+How to onboard many sources at once — discover, classify, generate, verify, refine, and deploy. The LLM step can use a manual clipboard flow or the configured extension transport. Read [`scrapers.md`](scrapers.md) first for the extractor contract, and [`architecture.md`](architecture.md#batch-pipeline-entry-path) for why the batch pipeline is a source-code generator rather than a runtime participant.
 
 **Contents**
 - [Overview](#overview)
@@ -27,18 +27,18 @@ How to onboard dozens of sources at once — dump, classify, generate, verify, r
 
 The manual scraper pattern in [`scrapers.md`](scrapers.md) covers one source at a time: write the wrapper, write the extractor, verify, commit. That works for a three-source addition. It does not scale to a batch where each source needs a dump, a classify, a prompt, a paste, and a verify — that's four minutes per source before anything has been tested against the live DOM, and the site shapes are only *roughly* similar across companies.
 
-The batch pipeline exists to compress that. It lives entirely under `scripts/batch/`, reads and writes only `data/batch/<run-id>/`, and stages extractors into `src/scrapers/` only at the deploy step. Between those two boundaries it:
+The batch pipeline exists to compress that. It lives under `scripts/batch/`, keeps per-run state in `data/batch/<run-id>/`, and stages extractors into `src/scrapers/` only for verification and deploy. Verification uses the normal scraper path and may warm `data/og-image-cache.json`. Between those boundaries it:
 
 1. **Discovers.** Fetches every URL in parallel, runs a preflight classification to reject homepages / dead links / captchas, follows career-page hints when the entry URL isn't a listing, detects ATS vendors (Workable, Personio, SmartRecruiters) from the raw HTML.
 2. **Generates.** Renders a deterministic template for sites whose DOM shape matches a known extractor pattern. Writes a self-contained LLM prompt for everything else.
-3. **Pastes.** Interactive clipboard loop: prompt → DeepSeek → copy reply → validate → advance. When the LLM's verdict is `CAREERS_PAGE_REDIRECT`, follows it inline and re-prompts without leaving the loop.
+3. **Pastes.** Sends prompts through the manual clipboard flow or extension transport, validates replies, and advances. When the LLM's verdict is `CAREERS_PAGE_REDIRECT`, follows it inline and re-prompts without leaving the loop.
 4. **Verifies.** Stages every generated extractor into `src/scrapers/`, runs it against the live site in parallel, unstage on exit — pass or fail, atomic. Empty-vs-drift discrimination runs before classification so "no jobs today" isn't counted as breakage.
-5. **Refines.** For every LLM-origin failure, appends the failure log to the prompt and re-prompts the LLM. Bounded at 3 attempts per site.
+5. **Refines.** For every LLM-origin failure, appends the failure log to the prompt and re-prompts the LLM. The `batch run` auto loop defaults to five attempts per site; standalone `batch refine` defaults to two.
 6. **Deploys.** Copies verified-passing extractors into `src/scrapers/` with the standard wrapper. Syntax-checks every file before writing. Refuses to overwrite.
 
-Every phase is idempotent. Every phase writes per-site files into the run directory, so an interrupt at any point can be resumed by re-running the same command.
+Every phase is designed to be resumable from the run directory. After an interrupt, re-run the command for the same run ID to continue pending work.
 
-**The batch pipeline never touches the running bot.** It doesn't log in to Discord, doesn't read or write `data/cache.json`, doesn't reserve markers, doesn't write to `data/audit-log.jsonl`. All batch state is under `data/batch/<run-id>/` with its own audit surface. The only runtime-visible side effect is that new extractor files appear on disk at deploy, which the running bot won't see until restart. See [`architecture.md#batch-pipeline-entry-path`](architecture.md#batch-pipeline-entry-path) for the full reasoning.
+**The batch pipeline never participates in the running bot's item lifecycle.** It doesn't log in to Discord, doesn't read or write `data/cache.json`, doesn't reserve markers, and doesn't write to `data/audit-log.jsonl`. Per-run state and audit records live under `data/batch/<run-id>/`. Verification can warm the shared `data/og-image-cache.json`; deploy writes new extractor files, which the running bot won't load until restart. See [`architecture.md#batch-pipeline-entry-path`](architecture.md#batch-pipeline-entry-path) for the full reasoning.
 
 ### What to expect at each scale
 
@@ -87,7 +87,7 @@ These are historical measurements from one specific run, not current state. Ever
 
 ## Features
 
-- **One-command path.** `pulchowk-events batch run urls.txt --run mybatch` runs every phase in sequence with per-phase checkpointing. Phases whose work is already done skip with a one-line reason. Fresh run = full pipeline. Interrupted run = resumes from the last completed step. The only step that stops for human input is paste.
+- **One-command path.** `pulchowk-events batch run urls.txt --run mybatch` runs every phase in sequence with per-phase checkpointing. Phases whose work is already done skip with a one-line reason. Fresh run = full pipeline. Interrupted run = resumes from the saved run state. The paste phase uses the manual clipboard flow unless extension mode is configured.
 
 - **Deterministic templates where they apply.** Four templates in `scripts/batch/templates/` cover Workable, Personio, SmartRecruiters, and single-page HTML listings. When the wizard dump matches one of those shapes (card candidates with `hasJobishContent` and `jobTitleRatio >= 0.3` for HTML listings; ATS fingerprints in the raw HTML for the rest), the extractor is rendered from a template. Same input shape always produces the same extractor. No LLM in the loop. No human in the loop.
 
@@ -95,7 +95,7 @@ These are historical measurements from one specific run, not current state. Ever
 
 - **Empty-vs-drift discrimination.** A `dom_drift_listing` failure normally means the extractor couldn't find the page it expected. But "the site has no jobs this week" produces the same zero-item outcome. The batch compares the extractor's output against the discovery-time dump: if the dump showed no plausible job group (max `jobTitleRatio < 0.3`), the extractor returning zero is correct behavior and the site passes as `empty-wizard`. Only if the dump *did* show job content does the extractor's zero become `dom_drift_listing` and fail.
 
-- **Refine retries with evidence.** When a verify fails on an LLM-origin extractor, `batch refine` appends the failure log to the prompt (item count, verdict, stderr tail) and gives the LLM its own failure to work from. Same prompt shape, same quality bar, but now with a concrete error to fix. Bounded at 3 attempts per site so a genuinely broken URL doesn't burn infinite cycles.
+- **Refine retries with evidence.** When a verify fails on an LLM-origin extractor, `batch refine` appends the failure log to the prompt (item count, verdict, stderr tail) and gives the LLM its own failure to work from. The standalone command defaults to two attempts; `batch run` defaults to five attempts in its auto loop. Both limits are configurable.
 
 - **Identity check on every paste.** Before writing any extractor to disk, the poller verifies the code references the current site — by name, by hostname, or by word in the header comment. A wrong-clipboard copy (user pasted a previous site's reply) is rejected with a clear warning and the poller keeps waiting. This has caught real mistakes in every multi-site batch.
 
@@ -133,10 +133,11 @@ Typical fresh-run output:
 
   ▸ RUN  init       run dir does not exist
   ▸ RUN  discover   classes.json missing
+  ▸ RUN  retry-rejected  rejected source(s)
   ▸ RUN  generate   76 accepted site(s) need templates or prompts
   ▸ RUN  check      always runs (fast)
   ▸ RUN  paste      53 prompt(s) need paste
-      [interactive loop — Ctrl+C to abort]
+      [manual clipboard loop or extension transport]
   ▸ RUN  auto       always runs (verify loop)
   ▸ RUN  deploy     58 site(s) to deploy into src/scrapers/
   ▸ RUN  report     always runs (summary)
@@ -147,6 +148,7 @@ Interrupted mid-paste? Re-run `batch run --run mybatch` — it resumes at paste 
 ```
   ▸ SKIP init       urls.txt present, no new urls file supplied
   ▸ SKIP discover   classes.json exists
+  ▸ SKIP retry-rejected  no rejected sources to retry
   ▸ SKIP generate   every accepted site has a prompt or extractor
   ▸ RUN  check      always runs (fast)
   ▸ SKIP paste      no prompts waiting paste
@@ -169,17 +171,20 @@ When something goes wrong or you want finer control, run individual phases:
 | `batch discover [--run <id>]` | Fetch every URL, classify, follow career links, write `classes.json` |
 | `batch generate [--run <id>] [--only ...]` | Render templates for ATS sites, write LLM prompts for the rest |
 | `batch check [--run <id>]` | Validate prompt structure; catches template drift before paste |
-| `batch paste [--run <id>] [--only ...]` | Interactive: clipboard-loop through pending prompts |
+| `batch paste [--run <id>] [--only ...]` | Process pending prompts using manual clipboard or extension transport |
 | `batch follow [--run <id>]` | Consume LLM redirect verdicts (only when inline follow failed) |
-| `batch refine [--run <id>] [--only ...]` | Append verify-failure evidence to prompts for LLM retry |
+| `batch refine [--run <id>] [--only ...] [--max-attempts N] [--force]` | Append verify-failure evidence to prompts for LLM retry |
 | `batch promote [--run <id>] [--only ...]` | Regenerate broken template extractors as fresh LLM prompts |
 | `batch verify [--run <id>] [--parallel N] [--timeout MS]` | Stage + run + unstage extractors against live sites |
 | `batch auto [--run <id>]` | Drive the verify → refine → paste → verify loop until stable |
 | `batch deploy [--run <id>]` | Copy verified-passing extractors into `src/scrapers/` |
 | `batch report [--run <id>]` | Human-readable bucket summary; exit code 0/1/2 |
 | `batch status [--run <id>]` | Read-only view of current run state |
+| `batch retry-rejected [--run <id>] [--only ...]` | Retry rejected URLs using alternate career links and URL probes |
+| `batch dry-run --run <id> [--mode main|test] [--source <name>] [--items <dir>] [--json]` | Evaluate saved items against posting gates without posting |
+| `batch refine-filters --type jobs|events|scholarships [options]` | Refine item-filter rules; separate from source onboarding |
 
-`batch run` internally calls each of these. If you're debugging, `batch run` with `--skip-deploy` after `paste` (to inspect `report` before committing) is often what you want.
+`batch run` runs `init → discover → retry-rejected → generate → check → paste → auto → deploy → report`; rejected-URL recovery is enabled by default and can be disabled with `--no-retry-rejected`. If you're debugging, use `--skip-deploy` to run the pipeline without copying passing extractors into `src/scrapers/`.
 
 ---
 
@@ -283,7 +288,7 @@ VERDICT: NOT_CAREERS_PAGE -- <reason>
 VERDICT: CAREERS_PAGE_REDIRECT -- <absolute URL>
 ```
 
-`paste.js` parses the verdict from the **raw clipboard** (works whether you copied only the code block or the whole reply). Behavior per verdict:
+The manual transport parses the verdict from the **raw clipboard** (works whether you copied only the code block or the whole reply); extension transport applies the same verdict handling to the returned reply. Behavior per verdict:
 
 **`CAREERS_PAGE`** — proceed. The extractor is written to `generated/<name>.js` and later verified.
 
@@ -297,15 +302,15 @@ VERDICT: CAREERS_PAGE_REDIRECT -- <absolute URL>
 sequenceDiagram
     participant U as User
     participant P as paste.js
-    participant L as DeepSeek
+    participant L as LLM provider
     participant D as dump
 
-    P->>P: copy prompt to clipboard
+    P->>P: copy prompt to clipboard (manual transport)
     P->>U: poll clipboard
     U->>L: paste prompt
     L-->>U: reply (verdict + code)
     U->>P: copy reply back
-    P->>P: parseVerdict(raw clipboard)
+    P->>P: parseVerdict(reply)
     alt CAREERS_PAGE
         P->>P: write generated/<name>.js
     else NOT_CAREERS_PAGE
@@ -352,7 +357,7 @@ Three failure-origin categories:
 
 If both are true, the site is treated as `empty-wizard` — a pass with reason "No jobs right now". Only if the dump showed real job content does the extractor's zero become `dom_drift_listing` and fail. This check is why a report's PASS count reflects real working extractors, not an inflated count.
 
-**Refine** takes `verify-summary.json`, and for every LLM-origin failure appends a `## Prior attempts` section to the prompt containing the failure evidence (item count, verdict, stderr tail). The next paste round gives the LLM its own failure to work from. Bounded at 3 attempts per site; attempts count is stored in `classes.json` under `llmAttempts`.
+**Refine** takes `verify-summary.json`, and for every LLM-origin failure appends a `## Prior attempts` section to the prompt containing the failure evidence (item count, verdict, stderr tail). The next paste round gives the LLM its own failure to work from. Standalone `batch refine` defaults to two attempts per site and stores the counter in `classes.json` under `llmAttempts`; the `batch run` auto loop defaults to five attempts.
 
 The refined prompt includes the full `stderrTail` from `results/<name>.json` — extractor-specific exceptions, timeout messages, or per-item failures — up to 4000 characters. Enough context for the LLM to see what broke without exceeding the model's input budget.
 
@@ -393,6 +398,9 @@ data/batch/<run-id>/
   generated/<name>.js         extractor source, staged by verify
   redirects/<name>.json       LLM verdict markers (terminal or pending follow)
   results/<name>.json         per-site verify result (full stderr + stdout)
+  results/<name>.items.json   items captured during verify, for dry-run/review
+  needs-review/<name>.json    rejected-URL, quality-gate, or extension-routing details
+  chat-map.json               extension transport chat mapping (when used)
   verify-summary.json         aggregated verify results (merged, not overwritten)
   report.json                 final aggregate report
 data/batch/latest.txt         most recent run-id
@@ -466,37 +474,46 @@ Run directories are never auto-pruned. Raw HTML per URL dominates the size. See 
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--run <id>` | derived from filename | Run directory id |
-| `--only a,b,c` | all sites | Restrict every phase to these sites |
+| `--run <id>` | URL file stem, otherwise latest run | Run directory id |
+| `--only a,b,c` | all sites | Restrict supported source-scoped phases (generate, paste, auto, deploy); init/discover/retry/check/report remain run-wide |
 | `--parallel N` | 10 | Verify worker count |
 | `--timeout MS` | 60000 | Per-site verify timeout |
 | `--max-rounds N` | 5 | Hard cap on auto loop iterations |
-| `--max-attempts N` | 3 | Refine/promote attempts per site |
+| `--max-attempts N` | 5 | Refine/promote attempts per site in the auto loop |
+| `--profile low\|medium\|high` | `medium` | Discovery/generation resource profile; verification uses `--parallel` |
+| `--min-quality low\|medium\|high` | `medium` | Minimum passing quality allowed through the run's deploy gate |
+| `--no-retry-rejected` | retries enabled | Skip rejected-URL recovery |
+| `--retry-rejected` | retries enabled | Explicitly enable rejected-URL recovery |
 | `--skip-deploy` | false | Run everything except deploy |
-| `--dry-run` | false | Reserved; not yet implemented |
 
 ### `batch verify` flags
 
-Same `--parallel` and `--timeout`. Additional `--only` and `--keep` (leave passing extractors staged for manual inspection).
+`--parallel N` (default `3`), `--timeout MS` (default `60000`), `--only a,b,c`, and `--keep` (leave new staged files for inspection instead of unstaging them).
 
 ### `batch paste` flags
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--provider <name>` | `deepseek` | Which LLM to open in browser |
-| `--timeout SEC` | 300 | Per-prompt clipboard wait |
+| `--provider <name>` | router default (`deepseek`) | Select the provider for the prompt transport |
+| `--timeout SEC` | 300 | Per-prompt wait |
 | `--no-browser` | false | Skip auto-opening the LLM |
-| `--no-poll` | false | Enter-driven instead of clipboard polling |
+| `--no-poll` | false | Enter-driven manual mode instead of clipboard polling |
+| `--include-small` | false | Include prompts normally skipped as too small |
+| `--manual` | auto | Force clipboard mode |
+| `--extension` | auto | Require extension transport; errors if `EXTENSION_TOKEN` is missing |
 
 ### Environment
 
-The batch pipeline reads existing `.env` variables — no new variables required.
+`batch run` currently parses `--dry-run` but does not implement dry-run behavior; do not use it as a safety switch. Use `--skip-deploy` to prevent deployment. Verification still accesses live websites and may warm the shared Open Graph image cache.
 
 | Var | Used for |
 |---|---|
 | `WEB_PORT` | Placeholder-image URL derivation (`http://127.0.0.1:<port>/placeholders/<name>.png`) |
+| `BROWSER_EXECUTABLE_PATH`, `BROWSER_USER_DATA_DIR` | Optional browser/profile for sites that need a warm session |
+| `JOB_BROWSER_EXECUTABLE_PATH`, `JOB_BROWSER_USER_DATA_DIR` | Optional job-specific browser/profile overrides |
+| `EXTENSION_TOKEN` | Enables extension transport; `batch paste --manual` forces clipboard mode |
 
-No LLM API key needed. Paste is fully manual via clipboard; there is no programmatic LLM call anywhere in the batch pipeline. This is a constraint, not a bug — the free DeepSeek tier doesn't expose an API, and building a user-provided API-key path would be a different product.
+No provider API key is required by this repository. Manual clipboard mode remains available; extension mode sends prompts through the configured extension bridge and requires its token plus a matching provider tab. Without `EXTENSION_TOKEN`, paste defaults to manual mode. Use `--extension` to require extension mode or `--manual` to explicitly select clipboard mode.
 
 ---
 
@@ -504,23 +521,22 @@ No LLM API key needed. Paste is fully manual via clipboard; there is no programm
 
 **Scale**
 
-- The paste step is linear and human-paced. Multi-prompt-in-one-chat was considered and rejected: DeepSeek output caps at ~4K–8K tokens, a single extractor is 250–400 lines (~3–4K tokens), and truncating an extractor produces a syntax error that loses the whole reply. Per-tab tracking of multiple DeepSeek chats risks account termination.
-- The batch runs serial pastes, not parallel. Same constraint.
+- Paste is serial. Extension mode automates the prompt/reply transport but does not process multiple sources in parallel. Long replies can still be truncated by a provider, so every response is checked for valid extractor code before it is saved.
 - A full run's wall clock is dominated by paste (~50%) plus refine cycles (~25%) plus everything else (~25%). Optimizing the 30-minute machine time before the 90-minute human time is backwards.
 
 **Method**
 
 - Template coverage varies by batch. In the companies-76 run, 13 of 76 sites templated (17%). That's a historical measurement from one batch, not a stable rate. Templates excel when the DOM structure is common — Workable / Personio / SmartRecruiters ATS, or single-page card listings. They fall down on multi-stage navigation, culture-card false positives, and generic `div` selectors. The `jobTitleRatio` gate catches the worst of that, at the cost of rejecting some legitimate card groups.
 - The empty-vs-drift discrimination uses `jobTitleRatio < 0.3` as its threshold. It is empirical. A site that renames "Software Engineer" to "Solutions Ninja" would push the ratio down and get classified as empty. In that case the human sees "No jobs right now" for a site that does have jobs. `batch refine --only <site>` gives the LLM a chance to fix it; a hand-override via `force: true` is available if needed.
-- `refine` stops at 3 attempts. A site that genuinely needs a fourth round (LLM produced wrong code three times, fourth would be right) is not retried automatically. The user gets a terminal state and must `--force` the refine.
+- Retry limits depend on the command. The `batch run` auto loop defaults to five attempts (`--max-attempts`); standalone `batch refine` defaults to two (`--max-attempts` can change this, and `--force` bypasses its cap).
 
 **Not done**
 
 - No batch mode for events or scholarships. The pipeline is hardcoded to `type: 'jobs'` because events and scholarships don't have the same URL-discovery problem — events come from event listing sites, not company career pages. Extending to events/scholarships would require rethinking the URL resolution layer, not just the template engine.
 - No bulk URL validation before `init`. Pasting 40 homepages wastes 15 seconds of discover rejecting them one-by-one. Not enough to justify a pre-flight HTTP check.
 - No cross-batch state. Each `batch run` creates a new run directory. Re-adding a site from a previous batch re-runs discover, generate, and paste for it — no reuse of the prior run's `generated/<name>.js`.
-- No automated deploy. The pipeline prints the git commands; you run them. This is by design — the reviewer should see what's being committed.
-- No parallel pastes. The clipboard-polling model requires serial interaction. A future improvement would be a browser extension that tracks multiple DeepSeek tabs at once, but that's a different product.
+- No automatic git commit. `batch deploy` copies passing extractors; it prints the staging and commit commands for a human to review and run.
+- No parallel pastes. Both clipboard polling and extension transport process prompts serially.
 
 ---
 

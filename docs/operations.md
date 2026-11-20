@@ -119,7 +119,7 @@ Do not run the bot under `nohup ... &` or `screen`/`tmux` alone. Those survive a
 
 Three config layers, all loaded at boot:
 
-1. **`.env`** — secrets and deployment identifiers. Read via [`src/config/env.js`](../src/config/env.js), validated at startup.
+1. **`.env`** — secrets and deployment identifiers. Bot runtime settings are read via [`src/config/env.js`](../src/config/env.js) and validated at startup. `EXTENSION_TOKEN` is a batch-CLI-only setting read directly by the batch tools.
 2. **`src/config/constants.js`** — behavioral tunables. Read-only at process start (except where the code explicitly reads from `cache.settings` at runtime, which overrides).
 3. **`src/config/emojis.js`** and **`src/config/roles.js`** — server-specific IDs (emoji assets, hardcoded ping roles). Edit these files when forking to a different Discord server.
 
@@ -161,7 +161,13 @@ Optional:
 | `DASHBOARD_ALLOWED_ORIGINS` | — | Comma-separated list of origins for CORS. Unset = open CORS (any origin allowed). **Set this in production.** |
 | `BROWSER_EXECUTABLE_PATH` | — | Windows only. Path to Brave/Chrome binary. Used by scrapers so they launch from a real browser profile rather than bundled Chromium. |
 | `BROWSER_USER_DATA_DIR` | — | Windows only. Path to the browser profile (e.g. `C:/Users/you/AppData/Local/BraveSoftware/Brave-Browser/User Data/Profile 9`). |
+| `JOB_BROWSER_EXECUTABLE_PATH` | falls back to `BROWSER_EXECUTABLE_PATH` | Optional browser override for job scrapers. |
+| `JOB_BROWSER_USER_DATA_DIR` | falls back to `BROWSER_USER_DATA_DIR` | Optional profile override for job scrapers. |
 | `SCRAPE_CRON` | `0 */6 * * *` | Default scrape schedule (5-field cron). Overridable at runtime via `/settings set-schedule`. |
+| `DEV_MODE` | `false` | Blocks live posting, autopost, sync writes, and other production-only actions when `true`; invalid non-empty values fail closed as `true`. |
+| `EXTENSION_TOKEN` | — | Optional token used only by the batch CLI extension transport. It is not a bot-runtime setting. |
+| `TEST_TO_LIVE_PROMOTION_DELAY_MINUTES` | `30` | Delay before eligible test posts are promoted to live. |
+| `TEST_TO_LIVE_PROMOTION_SWEEP_CRON` | `*/5 * * * *` | Schedule for the test-to-live promotion sweep. |
 
 **Role-ID values** — the three role vars (`ALERTS_PING_ROLE_ID`, `SCHOLARSHIPS_PING_ROLE_ID`, `JOBS_PING_ROLE_ID`) accept both forms:
 
@@ -433,7 +439,7 @@ What you might see:
 
 ## Batch pipeline operations
 
-The batch pipeline onboards many sources at once. It runs entirely under `scripts/batch/` and writes only to `data/batch/<run-id>/` until the deploy step, which copies verified-passing extractors into `src/scrapers/`. Full walkthrough is in [`batch.md`](batch.md); this section is the operator's view.
+The batch pipeline onboards many sources at once. It stores run state under `data/batch/<run-id>/` and copies verified-passing extractors into `src/scrapers/` only at deploy. Verification uses the normal scraper path and may warm `data/og-image-cache.json`. Full walkthrough is in [`batch.md`](batch.md); this section is the operator's view.
 
 ### When you run a batch
 
@@ -447,8 +453,9 @@ https://company-b.com/jobs
 ...
 EOF
 
-# 2. Run the whole pipeline (init → discover → generate → check → paste → auto → deploy → report)
+# 2. Run the whole pipeline (init → discover → retry-rejected → generate → check → paste → auto → deploy → report)
 pulchowk-events batch run /tmp/new-companies.txt --run 2026-11-15-companies
+# Add --no-retry-rejected to skip automatic recovery of rejected URLs.
 
 # 3. Review + commit the deployed extractors
 git status src/scrapers/
@@ -512,7 +519,7 @@ git commit -m "fix(scrapers): refine <name> after drift"
 # 5. Restart the bot
 ```
 
-The refine step appends the failure log to the prompt so the LLM sees its own error. Bounded at 3 attempts per site; if all three fail, the extractor should not be relied on. Either drop the source from the production set (delete `src/scrapers/extractors/jobs/<name>.js` and its wrapper) or investigate the site manually.
+The refine step appends the failure log to the prompt so the LLM sees its own error. Standalone `batch refine` defaults to two attempts and accepts `--max-attempts`; the `batch run` auto loop defaults to five attempts via its own `--max-attempts` flag. If the configured limit is reached, inspect the run's results and repair or remove the source deliberately.
 
 ### Inspecting a batch run
 
@@ -937,12 +944,14 @@ Before deleting, check if the old run has `generated/*.js` files worth keeping �
 
 ### "Batch paste is stuck on 'waiting for clipboard'"
 
-The poller is waiting for a reply that passes three checks: JS syntax (`node --check`), identity (`does the code reference the current site?`), and (for negative verdicts) verdict parser. If you're stuck:
+In manual mode, the poller is waiting for a reply that passes three checks: JS syntax (`node --check`), identity (`does the code reference the current site?`), and verdict parsing. If you're stuck:
 
 - **Check the warning line.** If it says "does not reference `<name>`" — the clipboard has a previous site's reply. Copy the correct one.
 - **Check that the clipboard is not still holding the prompt.** The poller waits for a change; if you never pasted the reply, it stays silent forever.
 - **Check the timeout.** Default 300s per prompt. If you took longer, it skipped the site. Re-run `batch paste --only <name>`.
 - **Ctrl+C aborts cleanly.** No state is lost; re-run resumes at the same site.
+
+If extension mode is enabled, check that `EXTENSION_TOKEN` matches the extension bridge configuration and that exactly one open provider tab matches the selected provider. Use `batch paste --manual` to switch to clipboard mode while troubleshooting.
 
 ### "Batch verify exit code 1 but report shows 0 hard failures"
 

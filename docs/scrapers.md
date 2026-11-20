@@ -395,7 +395,7 @@ The wizard is a starting point, not a guarantee. Sites with unusual structure (m
 
 ## Adding a source (batch)
 
-When you have more than two or three sources to onboard, the batch pipeline is faster than the wizard-per-source loop. It handles URL resolution, template detection, prompt generation, verification, and failure retry — you handle only the LLM paste step.
+When you have more than two or three sources to onboard, the batch pipeline is faster than the wizard-per-source loop. It handles URL resolution, template detection, prompt generation, verification, and failure retry. Prompts are processed through manual clipboard mode or the configured extension transport.
 
 ```bash
 pulchowk-events batch run urls.txt --run mybatch
@@ -407,7 +407,7 @@ pulchowk-events batch run urls.txt --run mybatch
 2. **Generates.** Renders a template where the DOM shape matches one of the four known templates; writes LLM prompts for the rest.
 3. **Pastes.** Interactive clipboard loop through every prompt. Handles `NOT_CAREERS_PAGE` verdicts (skip) and `CAREERS_PAGE_REDIRECT` verdicts (follow inline) automatically.
 4. **Verifies.** Runs every generated extractor against the live site in parallel.
-5. **Refines.** LLM-origin failures get re-prompted with their own failure log. Bounded at 3 attempts.
+5. **Refines.** LLM-origin failures get re-prompted with their own failure log. Retry limits depend on entry point: `batch run` defaults to five auto-loop attempts, while standalone `batch refine` defaults to two.
 6. **Deploys.** Verified-passing extractors are copied into `src/scrapers/` with wrappers, then you commit.
 
 Full walkthrough: [`batch.md`](batch.md). The one-line answer for "should I use the wizard or the batch?" — wizard for one or two sources, batch for three or more.
@@ -587,7 +587,7 @@ pulchowk-events batch paste  --run <run-id> --only <name>
 pulchowk-events batch verify --run <run-id> --only <name>
 ```
 
-The refine step appends a `## Prior attempts` section to the prompt containing the failure log (item count, verdict, stderr tail). The LLM sees its own failure and usually produces a corrected extractor on the second try. Bounded at 3 attempts.
+The refine step appends a `## Prior attempts` section to the prompt containing the failure log (item count, verdict, stderr tail). The LLM sees its own failure and may produce a corrected extractor. Standalone `batch refine` defaults to two attempts; `batch run` defaults to five attempts in its auto loop. Use the corresponding `--max-attempts` flag to change the limit.
 
 **2. If the site has genuinely changed shape** (moved domains, switched to ATS, became single-page), the correct response is a fresh extractor, not a refine. Either:
 
@@ -598,7 +598,7 @@ The refine step appends a `## Prior attempts` section to the prompt containing t
 
 ### Both origins
 
-**`blocked`** is not a drift problem. Set `BROWSER_EXECUTABLE_PATH` + `BROWSER_USER_DATA_DIR` to a warm profile and run on Windows. The batch pipeline and the single-source wizard both handle warm profiles — the batch just needs `--profile` to be passed through `batch run`'s environment.
+**`blocked`** is not a drift problem. Set `BROWSER_EXECUTABLE_PATH` + `BROWSER_USER_DATA_DIR` to a warm profile and run on Windows. The batch pipeline and the single-source wizard both use these browser settings. `batch run --profile low|medium|high` controls discovery/generation resource usage; it is not the browser-profile selector.
 
 ---
 

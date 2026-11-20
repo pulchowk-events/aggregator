@@ -109,11 +109,13 @@ When in doubt about a magic number, a drift history, or a workaround — comment
 
 ## Testing philosophy
 
-There is no automated test suite. This is deliberate, not an oversight.
+The repository has focused automated tests using Node's built-in test runner. Run the full suite with:
 
-The bot's behavior is dominated by interactions with external services (Discord API, Supabase, third-party websites) that can't be reliably mocked. A test suite that mocks those services would assert against the mocks, not against reality — it would pass while the bot silently breaks in production. The bot's actual correctness surface is: does the extractor return sensible data? Does the post go out once and only once? Does the audit log tell the story?
+```bash
+node --test scripts/test/*.test.js
+```
 
-Each of those is verified manually, not by assertion.
+For a focused test file, pass its path, for example `node --test scripts/test/devMode.guards.test.js`. There is no `npm test` script configured. The tests cover deterministic logic and guarded behaviors; they do not replace live checks against Discord, Supabase, or third-party sites. Keep ad-hoc utilities such as `scripts/test-discord-send.js` out of the automated test command; they require explicit arguments.
 
 ### Per-source testing: `pulchowk-events verify`
 
@@ -185,15 +187,15 @@ against `https://example.com` (which detects `unknown`, exercising the fallback 
 
 ### Batch pipeline testing
 
-For changes to `scripts/batch/`, the test is a small end-to-end run against a handful of known URLs:
+For changes to `scripts/batch/`, first run the automated tests, then run a small end-to-end smoke batch against known URLs when the change affects the live pipeline:
 
 ```bash
 pulchowk-events batch run /tmp/smoke.txt --run smoke-<date> --skip-deploy
 ```
 
-Where `/tmp/smoke.txt` contains 3-5 URLs that cover the branches you touched (one ATS site, one HTML-cards site, one wizard-fallback site). `--skip-deploy` runs everything except the final copy into `src/scrapers/`, so you can inspect `report` and `verify-summary` without touching the production tree. Delete `data/batch/smoke-<date>/` when done.
+Where `/tmp/smoke.txt` contains URLs that cover the branches you touched (for example, an ATS site, an HTML-cards site, and a wizard-fallback site). `--skip-deploy` runs everything except the final copy into `src/scrapers/`, so you can inspect `report` and `verify-summary` without deploying extractors. The smoke run still fetches live sites and can warm the shared Open Graph image cache. Remove only the specific `data/batch/smoke-<date>/` run directory when it is no longer needed.
 
-The batch pipeline's equivalent of the audit-log assertion is `batch report` — if the bucket counts match what the URLs should produce, the change is correct. If a URL that should pass is in `NOT-GENERATED`, or a URL that should reject is in `PASS`, the change has a bug.
+The batch pipeline's per-run decision trail is `data/batch/<run-id>/audit.jsonl`; use it together with `batch report` and `verify-summary.json` to inspect outcomes. Expected bucket counts are useful evidence, but do not substitute for checking the affected result details.
 
 ---
 
