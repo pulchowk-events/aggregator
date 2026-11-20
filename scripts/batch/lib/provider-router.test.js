@@ -21,7 +21,7 @@ const okClient = (rows) => ({ providers: async () => ({ ok: true, providers: row
 
 test('built-in registry: deepseek and qwen route, default is deepseek', () => {
     const r = new ProviderRouter();
-    assert.deepEqual(r.names(), ['deepseek', 'qwen']);
+    assert.deepEqual(r.names(), ['deepseek', 'qwen', 'chatgpt']);
     assert.equal(r.decide('s', {}).provider, 'deepseek');
     assert.equal(r.decide('s', { provider: 'qwen' }).provider, 'qwen');
 });
@@ -57,7 +57,7 @@ test('a server row without a definition is listed but not routable', () => {
     const hand = { name: 'hand', file: 'providers/hand.js', kind: 'config', definition: null };
     const registry = buildRegistry(BUILT.concat([hand]));
     const r = new ProviderRouter({ registry });
-    assert.deepEqual(r.names(), ['deepseek', 'qwen']);
+    assert.deepEqual(r.names(), ['deepseek', 'qwen', 'chatgpt']);
     assert.throws(
         () => r.decide('s', { provider: 'hand' }),
         (e) => is('unknown_provider')(e) && /not routable/.test(e.message)
@@ -152,7 +152,7 @@ test('the registry is frozen and detached from the server rows', () => {
 
 test('fromServer builds the router from GET /providers', async () => {
     const r = await ProviderRouter.fromServer(okClient(withGlm()), { cliProvider: 'glm' });
-    assert.deepEqual(r.names(), ['deepseek', 'qwen', 'glm']);
+    assert.deepEqual(r.names(), ['deepseek', 'qwen', 'chatgpt', 'glm']);
     assert.equal(r.decide('s', {}).provider, 'glm');
 });
 
@@ -206,4 +206,20 @@ test('the default provider must exist in the registry', () => {
     );
     const r = new ProviderRouter({ registry: buildRegistry(withGlm()), defaultProvider: 'glm' });
     assert.equal(r.decide('s', {}).provider, 'glm');
+});
+
+test('chatgpt is a built-in routed on chatgpt.com only', () => {
+    const CG = { name: 'chatgpt', file: 'providers/chatgpt.js', kind: 'built-in', definition: null };
+    const registry = buildRegistry(BUILT.concat([CG]));
+    assert.deepEqual(Array.from(registry.hosts.chatgpt), ['chatgpt.com']);
+    assert.equal(Object.keys(registry.unroutable).includes('chatgpt'), false);
+    const r = new ProviderRouter({ registry });
+    assert.equal(r.decide('s', { provider: 'chatgpt' }).provider, 'chatgpt');
+    assert.equal(r.checkTabs('chatgpt', [tab(1, 'chatgpt', 'https://chatgpt.com/c/1')]).id, 1);
+    assert.throws(
+        () => r.checkTabs('chatgpt', [tab(2, 'chatgpt', 'https://chat.openai.com/')]),
+        (e) => is('ambiguous_provider_tab')(e) && e.details.count === 0
+    );
+    assert.throws(() => buildRegistry(BUILT.concat([CG, row('evil', ['chatgpt.com'])])), is('invalid_registry'));
+    assert.throws(() => buildRegistry(BUILT.concat([row('chatgpt', ['x.example.com'])])), is('invalid_registry'));
 });

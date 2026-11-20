@@ -59,6 +59,19 @@ function stripMarkdownFences(raw) {
     let s = raw.trim();
     s = s.replace(/^```(?:js|javascript|node|mjs|typescript|ts)?\s*\n?/, '');
     s = s.replace(/\n?```\s*$/, '');
+    // CG-7.5: drop prose around unfenced code. No code-start marker => leave as is.
+    const markerRe = /^\s*(?:\/\/|\/\*|'use strict'|"use strict"|module\.exports\b|const\s|let\s|var\s|function\s|async\s+function\s|class\s)/;
+    const lines = s.split('\n');
+    const firstIdx = lines.findIndex((l) => markerRe.test(l));
+    if (firstIdx > 0) {
+        const after = lines.slice(firstIdx);
+        let lastIdx = -1;
+        for (let i = after.length - 1; i >= 0; i--) {
+            const t = after[i].trimEnd();
+            if (t.endsWith(';') || t.endsWith('}')) { lastIdx = i; break; }
+        }
+        s = (lastIdx >= 0 ? after.slice(0, lastIdx + 1) : after).join('\n');
+    }
     return s.trim() + '\n';
 }
 

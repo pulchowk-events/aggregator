@@ -41,6 +41,7 @@
 const BUILTIN_HOSTS = Object.freeze({
     deepseek: Object.freeze(['chat.deepseek.com']),
     qwen: Object.freeze(['chat.qwen.ai']),
+    chatgpt: Object.freeze(['chatgpt.com']),
 });
 const BUILTIN_PROVIDERS = Object.freeze(Object.keys(BUILTIN_HOSTS));
 // Has a domain in the extension but no module, so it is never routable.
