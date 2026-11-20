@@ -16,7 +16,7 @@
 |---|---|---|
 | **68 sources**<br/><sub>4 events · 62 jobs · 2 scholarships<br/>recount with `ls src/scrapers/extractors/*/ \| wc -l`</sub> | **9** routed<br/><sub>sports, software, hardware, gaming, music, business, misc, jobs, scholarships</sub> | **3** targets<br/><sub>Discord test · Discord live · Supabase website</sub> |
 
-[Architecture](#architecture) · [Quickstart](#quickstart) · [CLI](#command-line-tool) · [Setup wizard](#setup-wizard) · [Adding a source](#adding-a-source) · [Batch onboarding](#batch-onboarding) · [Docs](#documentation) · [Issues](https://github.com/pulchowk-events/aggregator/issues)
+[User guide](USER_GUIDE.md) · [Architecture](#architecture) · [Quickstart](#quickstart) · [CLI](#command-line-tool) · [Setup wizard](#setup-wizard) · [Adding a source](#adding-a-source) · [Batch onboarding](#batch-onboarding) · [Docs](#documentation) · [Issues](https://github.com/pulchowk-events/aggregator/issues)
 
 </div>
 
@@ -24,6 +24,7 @@
 
 ## Contents
 
+- [User guide](USER_GUIDE.md)
 - [Overview](#overview)
 - [Features](#features)
 - [Sources supported](#sources-supported)
@@ -76,7 +77,7 @@ The **batch pipeline** (`scripts/batch/`) exists because the source set keeps gr
 
 - **Two-tier delivery.** Every item type has two delivery tracks: a bot archival Supabase (service-role, full records) and the public website's Supabase (a curated subset filtered by `hasValidImage`, data-quality warnings, and a user-collision check). The two are independent — either can fail without affecting the other, and either can be dry-run independently.
 
-- **One CLI entry point.** `pulchowk-events` — installed via `npm link` or `npm install -g .`, or run as `node scripts/cli.js <cmd>` — dispatches to the operator surfaces: `setup`, `add`, `fix`, `diagnose`, `verify`, and `batch`. Use `--help` on a command for its arguments; `batch help` lists the complete batch command set.
+- **One CLI entry point.** Link this checkout with `npm link`, then use `pulchowk-events` for setup, source onboarding and diagnostics, batch work, placeholder generation, simulations, webhook smoke tests, maintenance utilities, and tests. The long-running Discord bot remains `npm start` / `npm run dev`. Use `pulchowk-events help` and command-specific `--help` for usage.
 
 - **Guided wizards.** Three interactive flows. The setup wizard (`scripts/setup/`) walks a fresh deployment end-to-end and has a `--demo` mode that runs the entire flow with mock data and writes nothing outside `data/demo-setup.env`. The source wizard (`scripts/wizard/`) scaffolds a new scraper against an LLM prompt. The batch pipeline (`scripts/batch/`) extends the wizard pattern to N sources at once with checkpointed phases. All three fall back to a plain-text recipe when stdin isn't a TTY.
 
@@ -233,7 +234,8 @@ For the full mental model — the eleven-stage lifecycle of an item, the startup
 git clone https://github.com/pulchowk-events/aggregator.git
 cd aggregator
 npm install
-npm link                      # optional — installs `pulchowk-events` on PATH
+npm link                      # links this checkout's `pulchowk-events` command onto PATH
+pulchowk-events help
 cp .env.example .env
 # fill in: DISCORD_TOKEN, HOME_GUILD_ID, LOGS_CHANNEL_ID, AUDIT_LOG_CHANNEL_ID,
 #          category channel IDs, Supabase credentials
@@ -251,11 +253,11 @@ pulchowk-events verify scholarshipsads
 pulchowk-events verify katajaam
 ```
 
-`pulchowk-events` is the CLI dispatcher (see [Command-line tool](#command-line-tool)); without an install, `node scripts/verify-source.js <name>` runs the same script directly. This runs the extractor against the live site — no bot, no Discord, no cron — and prints item count, verdict, and a sample.
+`pulchowk-events` is the package CLI (see [Command-line tool](#command-line-tool)). This runs the extractor against the live site — no bot, no Discord, no cron — and prints item count, verdict, and a sample.
 
 ## Command-line tool
 
-`pulchowk-events` is the front door for every interactive script in the repo. Install once with `npm link` (dev) or `npm install -g .` (prod); the same entry point is callable as `node scripts/cli.js <cmd>` with no install.
+`pulchowk-events` is the package binary declared in `package.json`. From a clone, run `npm link` once to expose this checkout on your PATH. All supported standalone repository tools are dispatched through it; internal modules are not separate commands. The Discord bot is intentionally separate and runs with `npm start` or `npm run dev`.
 
 | Command | Purpose |
 |---|---|
@@ -263,12 +265,17 @@ pulchowk-events verify katajaam
 | `pulchowk-events add <url> --type <type> [--name <name>]` | Scaffold a scraper source (name is inferred from the URL when omitted) |
 | `pulchowk-events fix [name]` | Diagnose drift and auto-fix if unambiguous; `fix all` sweeps every source |
 | `pulchowk-events diagnose <name>` | Report broken selectors for one source; `--full` also runs the extractor; `--fix --apply` writes suggested patches |
-| `pulchowk-events verify <name>` | Run one source's extractor against the live site (the unit test) |
+| `pulchowk-events verify <name>` | Run one source's extractor against the live site (integration check) |
 | `pulchowk-events batch run <urls> [--run <id>]` | Full pipeline for 3+ sources in one command with per-phase checkpointing |
 | `pulchowk-events batch <subcommand>` | Batch phases and utilities: `init`, `discover`, `retry-rejected`, `generate`, `check`, `paste`, `follow`, `refine`, `promote`, `verify`, `auto`, `deploy`, `report`, `status`, `dry-run`, `scrape-now`, `refine-filters` |
+| `pulchowk-events placeholders [options]` | Generate placeholder images for scraper sources |
+| `pulchowk-events simulate [sources] [--dry\|--send]` | Simulate scraping and formatting; dry by default |
+| `pulchowk-events test-send [options]` | Build or send a Discord webhook smoke test; dry by default |
+| `pulchowk-events maintenance <task>` | Run checkpoint, migration, and cache-maintenance utilities |
+| `pulchowk-events test` | Run all repository Node.js tests |
 | `pulchowk-events help [command]` / `version` | List commands or command help / print package version |
 
-No shared state, no daemon mode — one command, one process, one task. Set `NO_COLOR=1` to disable ANSI output. Run `pulchowk-events add --help`, `pulchowk-events diagnose --help`, or `pulchowk-events batch help` for current usage. The deep dive lives in [`docs/scrapers.md`](docs/scrapers.md), [`docs/batch.md`](docs/batch.md), and [`docs/operations.md`](docs/operations.md).
+No shared state, no daemon mode — one command, one process, one task. Set `NO_COLOR=1` to disable ANSI output. `simulate` and `test-send` require `--send` for real webhook messages; data-changing maintenance commands require `--confirm`. The deep dive lives in [`USER_GUIDE.md`](USER_GUIDE.md), [`docs/scrapers.md`](docs/scrapers.md), [`docs/batch.md`](docs/batch.md), and [`docs/operations.md`](docs/operations.md).
 
 ## Setup wizard
 
@@ -277,11 +284,9 @@ For a fresh deployment from zero, the setup wizard walks the entire flow interac
 ```bash
 # Walk the entire flow with mock data (never touches .env, Discord, or Supabase)
 pulchowk-events setup --demo
-# or: node scripts/setup/index.js --demo
 
 # Real setup
 pulchowk-events setup
-# or: node scripts/setup/index.js
 ```
 
 Every step asks before doing anything. Every side effect is opt-in. `.env` is never written without showing a diff and confirming. The demo mode writes to `data/demo-setup.env` (gitignored) so you can inspect the output without committing anything.
@@ -298,7 +303,6 @@ How you add a source depends on how many you're adding. One or two → wizard or
 
 ```bash
 pulchowk-events add <url> --type events
-# or: node scripts/wizard/index.js <url> <name> <type>
 ```
 
 This dumps the site's DOM structure, classifies its shape (`jsonld-first` / `listing-to-detail` / `single-page-cards`), writes a ready-to-paste prompt for DeepSeek / ChatGPT / Claude, and walks you through pasting the LLM's code back in — with an automatic verify step at the end.
@@ -338,7 +342,6 @@ Commit both. Verify:
 
 ```bash
 pulchowk-events verify mynewsite
-# or: node scripts/verify-source.js mynewsite
 ```
 
 When it returns `verdict: ok` with `items > 0`, the source is live. The registry discovers it on the next scrape run.
@@ -686,10 +689,11 @@ Two consequences worth noting:
 
 ## Documentation
 
-Five docs, each scoped to one audience.
+Six docs, each scoped to one audience.
 
 | Doc | Audience | What's inside |
 |---|---|---|
+| [`USER_GUIDE.md`](USER_GUIDE.md) | Anyone running or using the repository | Install and configure the bot, operate Discord workflows, connect integrations, add sources, use the CLI and API, back up data, and troubleshoot. |
 | [`docs/architecture.md`](docs/architecture.md) | Anyone modifying the code | System overview diagram, lifecycle of one item, startup sequence, module boundaries, the four chokepoints, why the batch pipeline is outside the runtime |
 | [`docs/scrapers.md`](docs/scrapers.md) | Anyone touching a scraper | Plugin system, extractor contract (including `browserless` and image enrichment), drift classification, fallback chains, `verify-source.js`, `wizard/index.js`, drift-fixing playbook, per-source reference |
 | [`docs/batch.md`](docs/batch.md) | Anyone onboarding many sources | State machine, phase commands, template vs prompt selection, two-way LLM loop (verdicts, redirects, refine, promote), deploy safety, run directory layout, failure modes |

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 //
-// pulchowk-events — CLI for the Pulchowk Events Aggregator bot.
+// pulchowk-events — CLI for the Pulchowk Events Aggregator repository.
 //
 // This file is only a dispatcher. Every subcommand is a thin subprocess
 // wrapper around an existing script so the interactive TUI, clipboard
@@ -8,8 +8,8 @@
 // directly. There is no shared state between subcommands and no daemon
 // mode — one command, one process, one task.
 //
-// Installed via `npm link` (dev) or `npm install -g .` (prod). Also
-// callable without installing: `node scripts/cli.js <cmd>`.
+// Link this checkout with `npm link` to expose the command on PATH. The bot
+// runtime remains available through `npm start` and is intentionally separate.
 
 const fs = require('fs');
 const path = require('path');
@@ -18,6 +18,34 @@ const { spawnSync } = require('child_process');
 const REPO = path.resolve(__dirname, '..');
 const PACKAGE = require(path.join(REPO, 'package.json'));
 const VERSION = PACKAGE.version || '0.0.0';
+
+const MAINTENANCE_COMMANDS = {
+    checkpoint: {
+        script: 'maintenance/checkpoint.js',
+        usage: 'checkpoint <save <name>|list|diff <id>|import <dir> <name>|restore <id> [--dry-run|--confirm <id>] [--force]',
+        description: 'Save, inspect, import, or restore a protected data checkpoint'
+    },
+    migrate: {
+        script: 'maintenance/migrate-from-legacy.js',
+        usage: 'migrate --from <legacy-repo> [--dry-run|--confirm]',
+        description: 'Copy legacy cache, audit, and marker files into data/'
+    },
+    'clean-erasmus': {
+        script: 'maintenance/clean-erasmus.js',
+        usage: 'clean-erasmus [--dry-run|--confirm]',
+        description: 'Remove Erasmus Mundus scholarships from cache and markers'
+    },
+    'clean-scholarships': {
+        script: 'maintenance/clean-scholorship.js',
+        usage: 'clean-scholarships --confirm',
+        description: 'Remove all scholarship records from the local cache (destructive)'
+    },
+    'cleanup-warnings': {
+        script: 'maintenance/cleanup-warnings.js',
+        usage: 'cleanup-warnings --confirm',
+        description: 'Deduplicate pending-item quality warnings in the local cache'
+    }
+};
 
 // ---------- ANSI ----------
 const supportsColor = process.stdout.isTTY && !process.env.NO_COLOR;
@@ -34,13 +62,18 @@ function printHelp() {
         ['verify <name>', 'Run one scraper against its live site'],
         ['setup', 'Bootstrap a deployment; supports --demo and --resume'],
         ['batch <command>', 'Run a batch workflow; use "batch help" for every phase'],
+        ['placeholders [options]', 'Generate missing scraper placeholder images'],
+        ['simulate [sources] [options]', 'Simulate scraping; webhook sends require --send'],
+        ['test-send [options]', 'Test Discord rendering; webhook sends require --send'],
+        ['maintenance <task>', 'Run a checkpoint, migration, or cache-maintenance tool'],
+        ['test', 'Run the repository Node.js test suite'],
         ['help [command]', 'Show general or command-specific help'],
         ['version', 'Print the package version']
     ];
     const width = Math.max(...commands.map(([name]) => name.length));
     console.log('');
     console.log(`${B}pulchowk-events${R} ${D}v${VERSION}${R}`);
-    console.log(`${D}CLI for the Pulchowk Events Aggregator bot.${R}`);
+    console.log(`${D}CLI for repository utilities; the bot runtime remains a separate process.${R}`);
     console.log('');
     console.log(`${B}USAGE${R}`);
     console.log(`  ${CYAN}pulchowk-events${R} <command> [arguments] [options]`);
@@ -62,6 +95,9 @@ function printHelp() {
     console.log('');
     console.log(`  ${D}# Run an end-to-end batch; use --skip-deploy to prevent file deployment${R}`);
     console.log(`  ${CYAN}pulchowk-events${R} batch run urls.txt --run mybatch --skip-deploy`);
+    console.log('');
+    console.log(`  ${D}# Preview a scrape without sending webhook messages${R}`);
+    console.log(`  ${CYAN}pulchowk-events${R} simulate --dry`);
     console.log('');
     console.log(`${B}ENVIRONMENT${R}`);
     console.log(`  ${D}NO_COLOR${R}  any non-empty value disables ANSI colors`);
@@ -112,6 +148,39 @@ function printCommandHelp(command) {
             'Usage: pulchowk-events batch <command> [options]',
             '',
             'Run "pulchowk-events batch help" for the list of batch commands and flags.'
+        ],
+        placeholders: [
+            'Usage: pulchowk-events placeholders [--only <name1,name2>] [--force]',
+            '',
+            'Generate missing placeholder images under assets/placeholders/. Existing images are skipped unless --force is used.'
+        ],
+        simulate: [
+            'Usage: pulchowk-events simulate [source1,source2] [--dry|--send]',
+            '',
+            '--dry prints samples without sending. This is the default.',
+            '--send permits sample messages to be sent to data/test-webhook.txt.',
+            'Without a source list, the script uses its built-in sample sources.'
+        ],
+        'test-send': [
+            'Usage: pulchowk-events test-send [--source <name>|--image <url>] [--mode <diagnostic|live>] [--webhook <url>] [--dry|--send]',
+            '',
+            '--dry builds and prints the payload without sending. This is the default.',
+            '--send permits one message to be sent to the configured test webhook.',
+            'A --source run scrapes the source even in dry mode; --image does not scrape.'
+        ],
+        maintenance: [
+            'Usage: pulchowk-events maintenance <task> [options]',
+            '',
+            ...Object.entries(MAINTENANCE_COMMANDS).map(([task, { description }]) => `  ${task.padEnd(22)} ${description}`),
+            '',
+            'Run "pulchowk-events maintenance <task> --help" for task-specific usage.',
+            'Cache-changing tasks require --confirm. Stop the bot and make a backup before maintenance.'
+        ],
+        test: [
+            'Usage: pulchowk-events test [test-file ...]',
+            '',
+            'Runs all *.test.js files under scripts/, or only the supplied test files.',
+            'Focused paths must name existing *.test.js files under scripts/.'
         ]
     };
     const lines = usage[command];
@@ -143,6 +212,131 @@ function runScript(scriptPath, args) {
         return 1;
     }
     return r.status === null ? 1 : r.status;
+}
+
+function printMaintenanceHelp(task) {
+    const command = MAINTENANCE_COMMANDS[task];
+    if (!command) return false;
+    console.log(`Usage: pulchowk-events maintenance ${command.usage}`);
+    console.log('');
+    console.log(command.description);
+    if (task === 'checkpoint') {
+        console.log('Restore is a dry run unless --confirm <full-checkpoint-id> is supplied.');
+        console.log('The restore tool refuses to run while the bot is active unless --force is supplied.');
+    } else if (task === 'migrate') {
+        console.log('Stop the bot first. --dry-run previews; --confirm is required to copy files.');
+    } else if (task === 'clean-erasmus') {
+        console.log('Stop the bot first. --dry-run previews; --confirm is required to modify data.');
+    } else if (task === 'clean-scholarships') {
+        console.log('Stop the bot and back up data/cache.json first. This legacy script has no dry-run mode.');
+    } else if (task === 'cleanup-warnings') {
+        console.log('Stop the bot and back up data/cache.json first. This script writes the cache directly.');
+    }
+    console.log('');
+    return true;
+}
+
+function cmdPlaceholders(args) {
+    if (args.includes('-h') || args.includes('--help')) {
+        printCommandHelp('placeholders');
+        return 0;
+    }
+    return runScript('generate-placeholders.js', args);
+}
+
+function cmdWebhookUtility(script, args, helpCommand, commandName) {
+    if (args.includes('-h') || args.includes('--help')) {
+        printCommandHelp(helpCommand);
+        return 0;
+    }
+    const send = args.includes('--send');
+    const dry = args.includes('--dry');
+    if (send && dry) {
+        console.error(`${RED}✗ ${commandName}${R}: choose either --dry or --send, not both`);
+        return 1;
+    }
+    const forwarded = args.filter((arg) => arg !== '--send');
+    if (!send && !dry) forwarded.push('--dry');
+    return runScript(script, forwarded);
+}
+
+function cmdMaintenance(args) {
+    const [task, ...rest] = args;
+    if (!task || task === 'help' || task === '-h' || task === '--help') {
+        printCommandHelp('maintenance');
+        return 0;
+    }
+    const command = MAINTENANCE_COMMANDS[task];
+    if (!command) {
+        console.error(`${RED}✗ maintenance${R}: unknown task "${task}"`);
+        console.error(`   run ${CYAN}pulchowk-events maintenance --help${R} for available tasks`);
+        return 1;
+    }
+    if (rest.includes('-h') || rest.includes('--help')) {
+        printMaintenanceHelp(task);
+        return 0;
+    }
+
+    if (task === 'checkpoint') return runScript(command.script, rest);
+
+    const dryRunSupported = task === 'migrate' || task === 'clean-erasmus';
+    const dryRun = rest.includes('--dry-run');
+    const confirmed = rest.includes('--confirm');
+    if (dryRun && !dryRunSupported) {
+        console.error(`${RED}✗ maintenance ${task}${R}: --dry-run is not supported by this task`);
+        return 1;
+    }
+    if (dryRun && confirmed) {
+        console.error(`${RED}✗ maintenance ${task}${R}: choose either --dry-run or --confirm, not both`);
+        return 1;
+    }
+    if (!dryRun && !confirmed) {
+        console.error(`${RED}✗ maintenance ${task}${R}: this task can change local data; stop the bot, back up data/, then pass --confirm`);
+        return 1;
+    }
+    const forwarded = rest.filter((arg) => arg !== '--confirm');
+    return runScript(command.script, forwarded);
+}
+
+function collectTestFiles(dir, out = []) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) collectTestFiles(fullPath, out);
+        else if (entry.isFile() && entry.name.endsWith('.test.js')) out.push(fullPath);
+    }
+    return out;
+}
+
+function cmdTest(args) {
+    if (args.includes('-h') || args.includes('--help')) {
+        printCommandHelp('test');
+        return 0;
+    }
+    const available = collectTestFiles(path.join(REPO, 'scripts')).sort();
+    if (!available.length) {
+        console.error(`${RED}✗ test${R}: no *.test.js files found under scripts/`);
+        return 1;
+    }
+    const availableSet = new Set(available.map((file) => path.resolve(file)));
+    let files = available;
+    if (args.length) {
+        files = [];
+        for (const arg of args) {
+            const candidate = path.resolve(REPO, arg);
+            if (!availableSet.has(candidate)) {
+                console.error(`${RED}✗ test${R}: not a repository test file: "${arg}"`);
+                console.error(`   pass an existing *.test.js path under scripts/`);
+                return 1;
+            }
+            files.push(candidate);
+        }
+    }
+    const result = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit', cwd: REPO });
+    if (result.error) {
+        console.error(`${RED}✗ failed to start test runner${R}: ${result.error.message}`);
+        return 1;
+    }
+    return result.status === null ? 1 : result.status;
 }
 
 // ---------- subcommands ----------
@@ -288,6 +482,11 @@ function main() {
         case 'verify':   return cmdVerify(rest);
         case 'batch':    return cmdBatch(rest);
         case 'setup':    return cmdSetup(rest);
+        case 'placeholders': return cmdPlaceholders(rest);
+        case 'simulate': return cmdWebhookUtility('simulate-scrape.js', rest, 'simulate', 'simulate');
+        case 'test-send': return cmdWebhookUtility('test-discord-send.js', rest, 'test-send', 'test-send');
+        case 'maintenance': return cmdMaintenance(rest);
+        case 'test': return cmdTest(rest);
         default:
             console.error(`${RED}✗ unknown command${R}: "${command}"`);
             console.error(`   run ${CYAN}pulchowk-events help${R} to see available commands`);

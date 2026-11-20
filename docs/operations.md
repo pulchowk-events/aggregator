@@ -206,7 +206,7 @@ Supabase — website sync:
 | `WEBSITE_REVALIDATE_URL` | Optional. On-demand ISR webhook URL. |
 | `WEBSITE_REVALIDATE_SECRET` | Secret for `X-Revalidate-Secret` header. |
 
-Everything after this section assumes `.env` is populated. The setup wizard (`pulchowk-events setup`, or `node scripts/setup/index.js`) can generate `.env` interactively — see [Setup wizard](#setup-wizard).
+Everything after this section assumes `.env` is populated. The setup wizard (`pulchowk-events setup`) can generate `.env` interactively — see [Setup wizard](#setup-wizard).
 
 ### Server-specific config files
 
@@ -355,7 +355,7 @@ Expected: `No discrepancies between cache.postedEvents and marker files`. Discre
 tail -500 data/audit-log.jsonl | jq -r 'select(.category=="sanitize_scraped_event" and (.data.image == null)) | "\(.data.source)\t\(.data.title)"' | head -20
 ```
 
-If a source consistently fails enrichment, the site has no `og:image` meta and no favicon. That's expected for some sites — `data/placeholder-images/<source>.png` should cover them. If a source shows null images *and* has no placeholder PNG, run `node scripts/generate-placeholders.js --only <name>` to generate one.
+If a source consistently fails enrichment, the site has no `og:image` meta and no favicon. That's expected for some sites — `assets/placeholders/<source>.png` should cover them. If a source shows null images *and* has no placeholder PNG, run `pulchowk-events placeholders --only <name>` to generate one.
 
 ### What to check when something feels wrong
 
@@ -572,7 +572,7 @@ The bot's entire state is in `data/`. Four files/directories matter:
 | `data/posted-channel-markers/` | authoritative "was this posted" truth | **No** — losing it means re-posting previously-posted items |
 | `data/audit-log.jsonl` | forensic record | No, but it's append-only and less critical |
 | `data/og-image-cache.json` | derived per-domain og:image / favicon URLs | Yes, on next scrape (30-day TTL, cache rebuilds automatically) |
-| `data/placeholder-images/` | generated placeholder PNGs | Yes, `node scripts/generate-placeholders.js` |
+| `assets/placeholders/` | committed generated placeholder PNGs | Yes, `pulchowk-events placeholders` |
 
 Back up the first three on a schedule. The last two are convenient but regenerable.
 
@@ -590,13 +590,13 @@ tar -czf "$BACKUP_DIR/data-$STAMP.tar.gz" \
     data/cache.json \
     data/posted-channel-markers \
     data/og-image-cache.json \
-    data/placeholder-images
+    assets/placeholders
 
 # Keep 30 days
 find "$BACKUP_DIR" -name 'data-*.tar.gz' -mtime +30 -delete
 ```
 
-Restore procedure: stop the bot, extract the tarball over `data/`, start the bot. Startup reconciliation will fix any inconsistency between the restored cache and any newly-created markers.
+Restore procedure: stop the bot, extract the tarball over the repository root, and start the bot. Startup reconciliation will fix any inconsistency between the restored cache and any newly-created markers.
 
 `/backup` in Discord downloads `cache.json` on demand — useful before a migration or a big cleanup operation, but not a scheduled-backup replacement.
 
@@ -604,11 +604,11 @@ Restore procedure: stop the bot, extract the tarball over `data/`, start the bot
 
 ## Migration from a legacy deployment
 
-If the bot previously ran with `cache.json`, `posted-channel-markers/`, and `audit-log.jsonl` at the repo root (pre-`data/` layout), the migration script moves them into `data/` without touching the source.
+If the bot previously ran with `cache.json`, `posted-channel-markers/`, and `audit-log.jsonl` at the repo root (pre-`data/` layout), the migration command copies them into `data/` without touching the source.
 
 ```bash
 # Stop the bot first
-node scripts/maintenance/migrate-from-legacy.js --from /path/to/old/repo --dry-run
+pulchowk-events maintenance migrate --from /path/to/old/repo --dry-run
 ```
 
 The dry-run prints every file it will copy, every cache array it will migrate, and the marker count. It does **not** modify anything.
@@ -616,7 +616,7 @@ The dry-run prints every file it will copy, every cache array it will migrate, a
 If the counts match what you expect:
 
 ```bash
-node scripts/maintenance/migrate-from-legacy.js --from /path/to/old/repo
+pulchowk-events maintenance migrate --from /path/to/old/repo --confirm
 ```
 
 The script:
@@ -651,9 +651,6 @@ For a fresh deployment from zero. If you already have a working `.env`, skip thi
 pulchowk-events setup --demo   # mock data, writes data/demo-setup.env
 pulchowk-events setup          # real
 
-# Or directly, without the CLI installed
-node scripts/setup/index.js --demo
-node scripts/setup/index.js
 ```
 
 The wizard is interactive, requires a TTY, and never writes `.env` without showing you a diff and asking for confirmation.
@@ -744,13 +741,13 @@ Live posts require a valid image URL. Scholarships are exempt. Jobs are usually 
 Check if the placeholder exists:
 
 ```bash
-ls data/placeholder-images/<source>.png
+ls assets/placeholders/<source>.png
 ```
 
 If not:
 
 ```bash
-node scripts/generate-placeholders.js --only <source>
+pulchowk-events placeholders --only <source>
 ```
 
 Then retry the post. If the placeholder exists but `hasValidImage` still rejects it, the bot can't fetch its own Express route — check that `WEB_PORT` is set and the Express server is running (it starts at boot after the Discord login).
@@ -909,19 +906,19 @@ The bot serves placeholder PNGs from its own Express server at `http://127.0.0.1
 1. **Check the PNG exists on disk:**
 
 ```bash
-ls data/placeholder-images/<name>.png
+ls assets/placeholders/<name>.png
 ```
 
 2. **Check the file is a valid PNG:**
 
 ```bash
-file data/placeholder-images/<name>.png
+file assets/placeholders/<name>.png
 # should say: PNG image data, 1024 x 1024
 ```
 
 3. **Check the Express server is running.** If the bot is running (Task Scheduler / systemd shows active), the server should be up. Test with `curl -sI http://127.0.0.1:6234/placeholders/<name>.png | head -3` — expect `HTTP/1.1 200 OK`.
 
-4. **If the PNG doesn't exist**, regenerate it: `node scripts/generate-placeholders.js --only <name>`.
+4. **If the PNG doesn't exist**, regenerate it: `pulchowk-events placeholders --only <name>`.
 
 5. **If the Express server isn't running**, restart the bot. The `/placeholders/:name` route only exists after `server.js` registers — a stale process from before the route was added won't serve it.
 
@@ -1046,9 +1043,9 @@ The bot doesn't care — it just writes; the supervisor handles retention.
 
 Not a log, but rotation-adjacent. Contains one entry per hostname (og:image URL, favicon URL, fetch timestamp). Cache TTL is 30 days per entry; stale entries are re-fetched on the next scrape. File size is bounded by the number of unique hostnames across all sources. No manual rotation needed.
 
-### `data/placeholder-images/`
+### `assets/placeholders/`
 
-Not a log. One PNG per source, generated by `scripts/generate-placeholders.js`. Total size scales with the source count (~20-30 KB per source). Regenerate with `--force` if a source's display name changes; otherwise static.
+Not a log. One PNG per source, generated by `pulchowk-events placeholders`. Total size scales with the source count (~20-30 KB per source). Regenerate with `--force` if a source's display name changes; otherwise static.
 
 ### Marker files
 

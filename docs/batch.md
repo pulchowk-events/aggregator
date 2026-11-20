@@ -483,7 +483,7 @@ Run directories are never auto-pruned. Raw HTML per URL dominates the size. See 
 
 **`batch run` says "run dir already exists".** Expected. `batch init` refuses to overwrite an existing run directory — it would corrupt the run's state. Pick a different run-id, or delete the abandoned run first (check its `generated/` for un-deployed extractors before you do).
 
-**Placeholder image returns 404 after deploy.** The bot serves placeholder PNGs from `http://127.0.0.1:${WEB_PORT}/placeholders/<name>.png`. If the PNG doesn't exist in `data/placeholder-images/`, the route returns 404. Regenerate with `node scripts/generate-placeholders.js --only <name>`. See [`operations.md#post-failed-no_image`](operations.md#post-failed-no_image) for the post-gate side.
+**Placeholder image returns 404 after deploy.** The bot serves placeholder PNGs from `http://127.0.0.1:${WEB_PORT}/placeholders/<name>.png`. If the PNG doesn't exist in `assets/placeholders/`, the route returns 404. Regenerate with `pulchowk-events placeholders --only <name>`. See [`operations.md#post-failed-no_image`](operations.md#post-failed-no_image) for the post-gate side.
 
 ---
 
