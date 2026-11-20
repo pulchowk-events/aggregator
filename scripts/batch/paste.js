@@ -19,6 +19,7 @@ const { spawnSync } = require('child_process');
 
 const { paths, readLatest, resolveRunDir, ensureRunLayout, writeClasses } = require('./lib/paths');
 const { validatePrompt } = require('./lib/prompt-structure');
+const { hasCapturedPromptEvidence } = require('./lib/prompt-evidence');
 const { parseVerdict, isSameDomainRedirect, shouldSkipVerify } = require('./lib/llm-header');
 const { followOneSite } = require('./follow');
 const { audit } = require('./lib/audit');
@@ -410,33 +411,25 @@ async function runPaste(opts) {
     });
 
 
-    // Starved-prompt filter. A prompt under 40KB lacks enough raw HTML to
-    // give the LLM real structure -- it will produce hollow code that
-    // fails verify. Skip unless --include-small was passed. The threshold
-    // matches the triage output: sites under 40K after chrome-strip
-    // either have tiny content (legit) or wrong-content fallback (bug).
+    // Prompt size is not a reliable evidence signal: compact JSON-LD or field
+    // evidence can be useful well below 40KB. Only skip prompts with no
+    // captured DOM, structural, or field evidence.
     if (!opts.includeSmall) {
-        const MIN_PROMPT_BYTES = 40000;
         const starved = [];
         const kept = [];
         for (const name of pending) {
             const promptPath = path.join(p.prompts, `${name}.md`);
             try {
-                const stat = fs.statSync(promptPath);
-                if (stat.size < MIN_PROMPT_BYTES) {
-                    starved.push({ name, size: stat.size });
-                } else {
-                    kept.push(name);
-                }
+                const body = fs.readFileSync(promptPath, 'utf8');
+                if (!hasCapturedPromptEvidence(body)) starved.push(name);
+                else kept.push(name);
             } catch (e) {
-                kept.push(name);  // can't stat = pass through, don't block
+                kept.push(name);  // let structural validation report read failures
             }
         }
         if (starved.length > 0) {
-            ui.warn(`skipping ${starved.length} starved prompt(s) (<${MIN_PROMPT_BYTES / 1000}KB)`);
-            for (const item of starved) {
-                ui.info(`  ${item.name.padEnd(22)} ${item.size}B`);
-            }
+            ui.warn(`skipping ${starved.length} prompt(s) with no captured evidence`);
+            for (const name of starved) ui.info(`  ${name}`);
             ui.info('pass --include-small to force-include');
             pending.length = 0;
             pending.push(...kept);

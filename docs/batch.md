@@ -519,7 +519,7 @@ Run directories are never auto-pruned. Raw HTML per URL dominates the size. See 
 | `--timeout SEC` | 300 | Per-prompt wait |
 | `--no-browser` | false | Skip auto-opening the LLM |
 | `--no-poll` | false | Enter-driven manual mode instead of clipboard polling |
-| `--include-small` | false | Include prompts normally skipped as too small |
+| `--include-small` | false | Force-include prompts with no captured structural or field evidence |
 | `--manual` | auto | Force clipboard mode, even when `EXTENSION_TOKEN` is set |
 | `--extension` | auto | Require extension transport; errors if `EXTENSION_TOKEN` is missing |
 
@@ -543,6 +543,8 @@ Manual mode only opens the selected web app and uses the clipboard; it does not 
 Generated prompts are capped at 52,000 UTF-8 bytes. The listing/detail JSON keeps selector candidates, link patterns, pagination and field evidence without embedding the raw HTML a second time. Representative card and detail HTML excerpts are each capped at 6,000 bytes and truncated only at balanced element boundaries; field-specific evidence remains separate so values outside an excerpt are still available to the extractor.
 
 When a prompt still exceeds the limit, the optional sample-detail JSON is dropped first, then valid listing evidence is compacted without cutting JSON mid-value. Required prompt sections remain present.
+
+Paste decides whether a prompt has usable evidence from its captured HTML, selector, JSON-LD, or field evidence—not its total byte length. Compact prompts below 40 KB are therefore still processed when evidence is present. `--include-small` only overrides the skip for prompts with no captured evidence.
 
 ---
 
