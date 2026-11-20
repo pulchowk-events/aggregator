@@ -8,6 +8,7 @@
 //   report     -- aggregate, print table, write report.json
 //   status     -- show current run state (a quick report without verify)
 //   dry-run    -- pipe items.json through posting gates (policy only, no Discord)
+//   scrape-now -- scrape committed sources into a run directory for dry-run
 //
 // Usage:
 //   pulchowk-events batch init <file> [--run <id>]
@@ -55,6 +56,7 @@ const { runBatch, parseArgs: parseBatchArgs } = require('./run');
 const { runPromote, parseArgs: parsePromoteArgs } = require('./promote');
 const { runRefineFilters, parseArgs: parseRefineFiltersArgs } = require('./refine-filters');
 const { runRetryRejected, parseArgs: parseRetryRejectedArgs } = require('./retry-rejected');
+const { scrapeNow, parseArgs: parseScrapeNowArgs } = require('./scrape-now');
 
 const C = (code) => (process.stdout.isTTY ? `\x1b[${code}m` : '');
 const R = C('0'), B = C('1'), D = C('2');
@@ -75,6 +77,7 @@ function printHelp() {
     console.log(`  ${CYAN}report${R}            Print a table of pass/fail/blocked.`);
     console.log(`  ${CYAN}check${R}             Validate prompt structure (guards against wizard-template drift).`);
     console.log(`  ${CYAN}dry-run${R}           Pipe items.json through posting gates (--run <id> [--mode main|test] [--source <name>] [--items <dir>] [--json]).`);
+    console.log(`  ${CYAN}scrape-now${R}        Scrape committed sources into a run directory for dry-run.`);
     console.log(`  ${CYAN}paste${R}             Interactive loop: copy prompt, paste LLM reply, write extractor.`);
     console.log(`  ${CYAN}follow${R}            Follow CAREERS_PAGE_REDIRECT verdicts (re-dump, re-prompt).`);
     console.log(`  ${CYAN}refine${R}            Re-prompt LLM-origin failed sites with verify failure evidence.`);
@@ -102,6 +105,10 @@ function printHelp() {
     console.log(`  ${D}# ... paste each prompts/*.md into DeepSeek, save reply as generated/<name>.js${R}`);
     console.log(`  ${CYAN}pulchowk-events${R} batch verify`);
     console.log(`  ${CYAN}pulchowk-events${R} batch report`);
+    console.log('');
+    console.log(`  ${D}# Scrape selected sources, then evaluate their items without posting${R}`);
+    console.log(`  ${CYAN}pulchowk-events${R} batch scrape-now --sources blacktech,f1soft --run review`);
+    console.log(`  ${CYAN}pulchowk-events${R} batch dry-run --run review`);
     console.log('');
 }
 
@@ -349,6 +356,29 @@ function main() {
                 console.error(`${RED}x dry-run failed:${R} ${e.message}`);
                 return 1;
             }
+        }
+        case 'scrape-now': {
+            if (rest.includes('--help') || rest.includes('-h')) {
+                console.log('Usage: pulchowk-events batch scrape-now --sources <name1,name2> [--run <id>] [--type <type>] [--timeout <ms>]');
+                console.log('');
+                console.log('Scrapes committed sources and saves items under data/batch/<run>/results/ for batch dry-run.');
+                console.log('No Discord posting, bot cache writes, or audit logging is performed.');
+                return 0;
+            }
+            let opts;
+            try {
+                opts = parseScrapeNowArgs(rest);
+            } catch (e) {
+                console.error(`${RED}✗ batch scrape-now${R}: ${e.message}`);
+                console.error(`   usage: ${CYAN}pulchowk-events${R} batch scrape-now --sources <name1,name2> [--run <id>] [--type jobs] [--timeout <ms>]`);
+                return 2;
+            }
+            return scrapeNow(opts)
+                .then((r) => r.exitCode)
+                .catch((e) => {
+                    console.error(`${RED}✗ scrape-now failed:${R} ${e.message}`);
+                    return 1;
+                });
         }
         case 'check': {
             const opts = parseCheckArgs(rest);

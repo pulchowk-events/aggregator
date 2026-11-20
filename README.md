@@ -76,7 +76,7 @@ The **batch pipeline** (`scripts/batch/`) exists because the source set keeps gr
 
 - **Two-tier delivery.** Every item type has two delivery tracks: a bot archival Supabase (service-role, full records) and the public website's Supabase (a curated subset filtered by `hasValidImage`, data-quality warnings, and a user-collision check). The two are independent — either can fail without affecting the other, and either can be dry-run independently.
 
-- **One CLI entry point.** `pulchowk-events` — installed via `npm link` or `npm install -g .`, or run as `node scripts/cli.js <cmd>` — dispatches to every operator surface: `setup`, `add`, `fix`, `diagnose`, `verify`, `batch`. Each subcommand is a thin subprocess wrapper, so the TUI, prompts, and signal handling behave identically to running the underlying script directly.
+- **One CLI entry point.** `pulchowk-events` — installed via `npm link` or `npm install -g .`, or run as `node scripts/cli.js <cmd>` — dispatches to the operator surfaces: `setup`, `add`, `fix`, `diagnose`, `verify`, and `batch`. Use `--help` on a command for its arguments; `batch help` lists the complete batch command set.
 
 - **Guided wizards.** Three interactive flows. The setup wizard (`scripts/setup/`) walks a fresh deployment end-to-end and has a `--demo` mode that runs the entire flow with mock data and writes nothing outside `data/demo-setup.env`. The source wizard (`scripts/wizard/`) scaffolds a new scraper against an LLM prompt. The batch pipeline (`scripts/batch/`) extends the wizard pattern to N sources at once with checkpointed phases. All three fall back to a plain-text recipe when stdin isn't a TTY.
 
@@ -260,15 +260,15 @@ pulchowk-events verify katajaam
 | Command | Purpose |
 |---|---|
 | `pulchowk-events setup` | Walk a fresh deployment end-to-end (.env, Discord channels, Supabase) |
-| `pulchowk-events add <url> --type <type>` | Scaffold a single new scraper source (LLM-assisted, guided) |
+| `pulchowk-events add <url> --type <type> [--name <name>]` | Scaffold a scraper source (name is inferred from the URL when omitted) |
 | `pulchowk-events fix [name]` | Diagnose drift and auto-fix if unambiguous; `fix all` sweeps every source |
 | `pulchowk-events diagnose <name>` | Report broken selectors for one source; `--full` also runs the extractor; `--fix --apply` writes suggested patches |
 | `pulchowk-events verify <name>` | Run one source's extractor against the live site (the unit test) |
 | `pulchowk-events batch run <urls> [--run <id>]` | Full pipeline for 3+ sources in one command with per-phase checkpointing |
-| `pulchowk-events batch <subcommand>` | Batch phases and utilities: `init`, `discover`, `retry-rejected`, `generate`, `check`, `paste`, `follow`, `refine`, `promote`, `verify`, `auto`, `deploy`, `report`, `status`, `dry-run`, `refine-filters` |
-| `pulchowk-events help` / `version` | List commands / print package version |
+| `pulchowk-events batch <subcommand>` | Batch phases and utilities: `init`, `discover`, `retry-rejected`, `generate`, `check`, `paste`, `follow`, `refine`, `promote`, `verify`, `auto`, `deploy`, `report`, `status`, `dry-run`, `scrape-now`, `refine-filters` |
+| `pulchowk-events help [command]` / `version` | List commands or command help / print package version |
 
-No shared state, no daemon mode — one command, one process, one task. Set `NO_COLOR=1` to disable ANSI output. Each subcommand maps 1:1 to an underlying script under `scripts/`; the deep dive lives in [`docs/scrapers.md`](docs/scrapers.md), [`docs/batch.md`](docs/batch.md), and [`docs/operations.md`](docs/operations.md).
+No shared state, no daemon mode — one command, one process, one task. Set `NO_COLOR=1` to disable ANSI output. Run `pulchowk-events add --help`, `pulchowk-events diagnose --help`, or `pulchowk-events batch help` for current usage. The deep dive lives in [`docs/scrapers.md`](docs/scrapers.md), [`docs/batch.md`](docs/batch.md), and [`docs/operations.md`](docs/operations.md).
 
 ## Setup wizard
 
