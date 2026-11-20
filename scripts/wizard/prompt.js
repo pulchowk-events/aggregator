@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { fitHtmlToBudget } = require('./dump');
 
 const REPO = path.resolve(__dirname, '..', '..');
 
@@ -254,6 +255,8 @@ const FIELD_EVIDENCE_HEADER = [
 
 function buildPrompt({ name, type, url, listing, detail, detected }) {
     const ref = loadReference(type, detected.type);
+    const rawCard = fitRawHtmlForPrompt(listing && listing.rawCardHtml, 'rawCardHtml');
+    const rawDetail = fitRawHtmlForPrompt(detail && detail.rawDetailHtml, 'rawDetailHtml');
 
     const parts = [];
 
@@ -352,20 +355,19 @@ function buildPrompt({ name, type, url, listing, detail, detected }) {
     parts.push('## Evidence dump (listing page)');
     parts.push('');
     parts.push('```json');
-    parts.push(JSON.stringify(listing, null, 2));
+    parts.push(JSON.stringify(compactListingEvidence(listing, rawCard), null, 1));
     parts.push('```');
     parts.push('');
     if (detail) {
         parts.push('## Evidence dump (sample detail page)');
         parts.push('');
         parts.push('```json');
-        parts.push(JSON.stringify(detail, null, 2));
+        parts.push(JSON.stringify(compactDetailEvidence(detail), null, 1));
         parts.push('```');
         parts.push('');
     }
     // Raw HTML evidence -- the primary structural signal for the LLM.
     // Wizard heuristics can be wrong; raw HTML is always right.
-    const rawCard = listing && listing.rawCardHtml;
     if (rawCard && rawCard.html) {
         parts.push('## Raw HTML (one representative listing card)');
         parts.push('');
@@ -382,7 +384,7 @@ function buildPrompt({ name, type, url, listing, detail, detected }) {
             const stripped = rawCard.removed.filter((r) => r.step !== 'truncated').map((r) => `${r.step}(-${r.delta})`).join(', ');
             parts.push(`HTML budget report: ${rawCard.originalSize}B original -> ${rawCard.finalSize}B final.`);
             if (stripped) parts.push(`Stripped: ${stripped}`);
-            if (truncated) parts.push(`TRUNCATED ${truncated.delta}B -- this means the wizard's card selector matched a block LARGER than a single card. Consider using the raw HTML below to find a more specific nested selector for one card.`);
+            if (truncated)             parts.push(`TRUNCATED ${truncated.delta}B -- the HTML excerpt is capped at a balanced element boundary. Use the field evidence below for values beyond the visible excerpt.`);
             parts.push('');
         }
         parts.push('```html');
@@ -390,7 +392,6 @@ function buildPrompt({ name, type, url, listing, detail, detected }) {
         parts.push('```');
         parts.push('');
     }
-    const rawDetail = detail && detail.rawDetailHtml;
     if (rawDetail && rawDetail.html) {
         parts.push('## Raw HTML (detail page role-body region)');
         parts.push('');
@@ -403,7 +404,7 @@ function buildPrompt({ name, type, url, listing, detail, detected }) {
             const stripped = rawDetail.removed.filter((r) => r.step !== 'truncated').map((r) => `${r.step}(-${r.delta})`).join(', ');
             parts.push(`HTML budget report: ${rawDetail.originalSize}B original -> ${rawDetail.finalSize}B final.`);
             if (stripped) parts.push(`Stripped: ${stripped}`);
-            if (truncated) parts.push(`TRUNCATED ${truncated.delta}B -- content was cut. Reason from the visible portion, and note in your extractor comments that some detail HTML was truncated.`);
+            if (truncated) parts.push(`TRUNCATED ${truncated.delta}B -- the HTML excerpt is capped at a balanced element boundary. Use field evidence below for values beyond the visible excerpt.`);
             parts.push('');
         }
         parts.push('```html');
@@ -452,12 +453,12 @@ function buildPrompt({ name, type, url, listing, detail, detected }) {
     parts.push('Do not invent selectors you have not seen in the field evidence. If a field cannot be extracted with confidence, use `<field>_status: "extraction_failed"` with the selector you tried.');
     parts.push('');
 
-    // Hard total budget (MAX_PROMPT_BYTES, 118KB). Under budget this returns the
+    // Hard total budget (MAX_PROMPT_BYTES, 52KB). Under budget this returns the
     // assembled prompt untouched and the trimmer is never called. Over budget,
     // trimPartsToBudget walks the sacrifice ladder documented below. REQUIRED
     // sections (scripts/batch/lib/prompt-structure.js) are truncated, never deleted.
     const assembled = parts.join('\n');
-    if (assembled.length <= MAX_PROMPT_BYTES) return assembled;
+    if (Buffer.byteLength(assembled, 'utf8') <= MAX_PROMPT_BYTES) return assembled;
     return trimPartsToBudget(parts, { max: MAX_PROMPT_BYTES, minEvidence: MIN_EVIDENCE_BYTES });
 }
 
@@ -467,15 +468,91 @@ function buildPrompt({ name, type, url, listing, detail, detected }) {
 // only requires fs, so there is no import cycle.)
 const promptStructure = require('../batch/lib/prompt-structure');
 
-const MAX_PROMPT_BYTES = 118000;
-// Floor for the listing evidence dump body when it has to be truncated.
-const MIN_EVIDENCE_BYTES = 4096;
-// Room kept for the trailing "prompt trimmed" marker so output stays in budget.
-const MARKER_RESERVE = 400;
+const MAX_PROMPT_BYTES = 52000;
+const MIN_EVIDENCE_BYTES = 2048;
+const MARKER_RESERVE = 300;
 const SAMPLE_DETAIL_HEADER = '## Evidence dump (sample detail page)';
 const LISTING_DUMP_HEADER = '## Evidence dump (listing page)';
 const TRUNC_PREFIX = '\u2026truncated ';
 const TRUNC_SUFFIX = ' bytes';
+
+function compactPromptValue(value, depth) {
+    if (typeof value === 'string') return value.length > 500 ? value.slice(0, 500) + '\u2026' : value;
+    if (!value || typeof value !== 'object' || depth > 4) return value;
+    if (Array.isArray(value)) {
+        return value.slice(0, 8).map((item) => compactPromptValue(item, depth + 1));
+    }
+
+    const result = {};
+    for (const [key, item] of Object.entries(value)) {
+        if (/^(?:raw.*html|fieldEvidence|sampleHtml)$/i.test(key)) continue;
+        const compacted = compactPromptValue(item, depth + 1);
+        result[key] = compacted;
+        if (Array.isArray(item) && item.length > 8) result[key + 'OmittedCount'] = item.length - 8;
+    }
+    return result;
+}
+
+function compactListingEvidence(listing, rawCard) {
+    if (!listing || typeof listing !== 'object') return listing;
+
+    const result = {};
+    for (const key of ['url', 'title', 'jsonLdTypes', 'pagination', 'categoryChips', 'bodySnippet']) {
+        if (listing[key] !== undefined) result[key] = compactPromptValue(listing[key], 0);
+    }
+    if (Array.isArray(listing.anchorGroups)) {
+        result.anchorGroups = compactPromptValue(listing.anchorGroups.slice(0, 8), 0);
+        if (listing.anchorGroups.length > 8) result.anchorGroupsOmittedCount = listing.anchorGroups.length - 8;
+    }
+    for (const key of ['cardCandidates', 'cardCandidatesWeak', 'detailLinkCandidates']) {
+        if (!Array.isArray(listing[key])) continue;
+        const candidates = listing[key].slice(0, 8).map((candidate, index) => {
+            const compacted = compactPromptValue(candidate, 0);
+            if (candidate && Array.isArray(candidate.hrefs)) {
+                const limit = index === 0 ? 8 : 3;
+                compacted.hrefs = candidate.hrefs.slice(0, limit);
+                if (candidate.hrefs.length > limit) compacted.hrefsOmittedCount = candidate.hrefs.length - limit;
+            }
+            return compacted;
+        });
+        result[key] = candidates;
+        if (listing[key].length > 8) result[key + 'OmittedCount'] = listing[key].length - 8;
+    }
+    if (rawCard && typeof rawCard === 'object') {
+        const raw = rawCard;
+        result.rawCardHtml = {};
+        for (const key of ['label', 'originalSize', 'finalSize', 'truncated', 'jobSignalHits', 'qualityWarning']) {
+            if (raw[key] !== undefined) result.rawCardHtml[key] = raw[key];
+        }
+    }
+    return result;
+}
+
+function compactDetailEvidence(detail) {
+    if (!detail || typeof detail !== 'object') return detail;
+    return compactPromptValue(detail, 0);
+}
+
+function fitRawHtmlForPrompt(raw, label) {
+    if (!raw || typeof raw.html !== 'string') return raw;
+    const fitted = fitHtmlToBudget(raw.html, 6000, label);
+    const originalSize = Number(raw.originalSize) || fitted.originalSize;
+    const removed = Array.isArray(raw.removed)
+        ? raw.removed.filter((entry) => entry.step !== 'truncated')
+        : [];
+    if (originalSize > fitted.finalSize) {
+        removed.push({ step: 'truncated', delta: originalSize - fitted.finalSize });
+    }
+    return {
+        ...raw,
+        html: fitted.html,
+        originalSize,
+        finalSize: fitted.finalSize,
+        removed,
+        truncated: originalSize > fitted.finalSize,
+        label: raw.label || label
+    };
+}
 
 function isRequiredHeader(header) {
     return promptStructure.REQUIRED_SECTIONS.some((spec) =>
@@ -500,9 +577,7 @@ function dropSectionByHeader(parts, header, dropped) {
 }
 
 // Shrink the largest body block of a section in place. The header element and
-// the code-fence elements are never touched, so the section stays present and
-// its fence stays closed. Removes about `need` chars, but never leaves fewer
-// than `minKeep` chars of content. Returns the number of chars removed (0 if none).
+// code fences remain untouched. Returns the number of UTF-8 bytes removed.
 function truncateSectionBody(parts, header, need, minKeep) {
     const start = parts.findIndex((p) => p === header);
     if (start < 0) return 0;
@@ -519,18 +594,84 @@ function truncateSectionBody(parts, header, need, minKeep) {
     if (idx < 0) return 0;
 
     const payload = parts[idx];
-    const noteMax = (TRUNC_PREFIX + String(payload.length) + TRUNC_SUFFIX).length;
-    let keep = Math.max(minKeep, payload.length - need - 1 - noteMax);
-    if (keep >= payload.length) return 0;
-    // Do not cut a surrogate pair in half.
-    const prev = keep > 0 ? payload.charCodeAt(keep - 1) : 0;
-    if (prev >= 0xd800 && prev <= 0xdbff) keep--;
+    const payloadBytes = Buffer.byteLength(payload, 'utf8');
+    let keepBytes = Math.max(minKeep, payloadBytes - need - 1 - 40);
+    if (keepBytes >= payloadBytes) return 0;
+    let keep = Math.min(payload.length, keepBytes);
+    while (keep > 0 && Buffer.byteLength(payload.slice(0, keep), 'utf8') > keepBytes) keep--;
+    if (keep > 0 && payload.charCodeAt(keep - 1) >= 0xd800 && payload.charCodeAt(keep - 1) <= 0xdbff) keep--;
 
-    const removed = payload.length - keep;
+    const keptBytes = Buffer.byteLength(payload.slice(0, keep), 'utf8');
+    const removed = payloadBytes - keptBytes;
     const note = TRUNC_PREFIX + removed + TRUNC_SUFFIX;
-    if (keep + 1 + note.length >= payload.length) return 0; // no net saving
     parts[idx] = payload.slice(0, keep) + '\n' + note;
     return removed;
+}
+
+function listingJsonPayloadIndex(parts) {
+    const start = parts.findIndex((p) => p === LISTING_DUMP_HEADER);
+    if (start < 0) return -1;
+    const fence = parts.indexOf('```json', start);
+    return fence >= 0 && typeof parts[fence + 1] === 'string' ? fence + 1 : -1;
+}
+
+function reduceJsonEvidence(value, arrayLimit, stringLimit) {
+    if (typeof value === 'string') return value.length > stringLimit ? value.slice(0, stringLimit) + '\u2026' : value;
+    if (!value || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.slice(0, arrayLimit).map((item) =>
+        reduceJsonEvidence(item, arrayLimit, stringLimit));
+
+    const result = {};
+    for (const [key, item] of Object.entries(value)) {
+        if (/OmittedCount$/.test(key) && Array.isArray(value[key.slice(0, -'OmittedCount'.length)])) continue;
+        const reduced = Array.isArray(item)
+            ? item.slice(0, arrayLimit).map((entry) => reduceJsonEvidence(entry, arrayLimit, stringLimit))
+            : reduceJsonEvidence(item, arrayLimit, stringLimit);
+        result[key] = reduced;
+        if (Array.isArray(item) && item.length > arrayLimit) {
+            const countKey = key + 'OmittedCount';
+            result[countKey] = (Number(value[countKey]) || 0) + item.length - arrayLimit;
+        }
+    }
+    return result;
+}
+
+function compactListingJsonSection(parts, maxBytes) {
+    const payloadIndex = listingJsonPayloadIndex(parts);
+    if (payloadIndex < 0) return false;
+    let evidence;
+    try {
+        evidence = JSON.parse(parts[payloadIndex]);
+    } catch (e) {
+        return false;
+    }
+
+    let compact = JSON.stringify(evidence);
+    const limit = Number.isFinite(maxBytes) ? Math.max(0, maxBytes) : Infinity;
+    for (const [arrayLimit, stringLimit] of [[4, 400], [2, 200], [1, 100]]) {
+        if (Buffer.byteLength(compact, 'utf8') <= limit) break;
+        compact = JSON.stringify(reduceJsonEvidence(evidence, arrayLimit, stringLimit));
+    }
+    if (Buffer.byteLength(compact, 'utf8') > limit) {
+        const candidates = Array.isArray(evidence.cardCandidates) ? evidence.cardCandidates
+            : Array.isArray(evidence.cardCandidatesWeak) ? evidence.cardCandidatesWeak
+                : [];
+        compact = JSON.stringify({
+            url: evidence.url,
+            title: evidence.title,
+            jsonLdTypes: evidence.jsonLdTypes,
+            evidenceOmittedForBudget: true,
+            cardCandidates: candidates.slice(0, 3).filter((candidate) =>
+                candidate && typeof candidate === 'object').map((candidate) => ({
+                selector: candidate.selector,
+                count: candidate.count,
+                jobTitleRatio: candidate.jobTitleRatio,
+                looksLikeSectionWrapper: candidate.looksLikeSectionWrapper
+            }))
+        });
+    }
+    parts[payloadIndex] = compact;
+    return true;
 }
 
 function buildTrimMarker(dropped, truncated, budget, before, overBy) {
@@ -543,20 +684,20 @@ function buildTrimMarker(dropped, truncated, budget, before, overBy) {
 
 // Sacrifice ladder, applied only when the assembled prompt is over budget:
 //   1. Drop "Evidence dump (sample detail page)" -- the only OPTIONAL section.
-//   2. Truncate the body of "Evidence dump (listing page)" in place, only as
-//      much as needed and never below minEvidence. This section is REQUIRED by
-//      prompt-structure.js, so its header and fences always stay.
-//   3. Truncate any block over 30000 chars to 30000 (unchanged from before).
-// If it still does not fit, the fixed sections alone exceed the budget: warn
-// and return the prompt over budget (with a marker) rather than throw.
-// Mutates `parts`. "bytes" in the note counts string length, like the budget.
+//   2. Compact valid listing JSON while preserving its evidence structure.
+//   3. If the listing fixture is not JSON, truncate its body while preserving
+//      the required header and code fence.
+//   4. Reduce any still-oversized content, keeping every required header.
+// If fixed prompt structure alone exceeds the budget, fail explicitly instead
+// of returning malformed Markdown or JSON.
+// Mutates `parts`. All limits and reports use UTF-8 bytes.
 function trimPartsToBudget(parts, opts) {
     const o = opts || {};
     const budget = o.max || MAX_PROMPT_BYTES;
     const minEvidence = o.minEvidence === undefined ? MIN_EVIDENCE_BYTES : o.minEvidence;
     const warn = o.warn || console.warn;
 
-    let total = parts.join('\n').length;
+    let total = Buffer.byteLength(parts.join('\n'), 'utf8');
     if (total <= budget) return parts.join('\n');
 
     const before = total;
@@ -567,39 +708,74 @@ function trimPartsToBudget(parts, opts) {
     // 1. Drop sample-detail evidence dump
     if (total > target) {
         dropSectionByHeader(parts, SAMPLE_DETAIL_HEADER, dropped);
-        total = parts.join('\n').length;
+        total = Buffer.byteLength(parts.join('\n'), 'utf8');
     }
 
-    // 2. Truncate listing evidence dump in place (REQUIRED: never deleted)
+    // 2. Compact valid listing JSON structurally, retaining evidence types.
     if (total > target) {
-        const removed = truncateSectionBody(parts, LISTING_DUMP_HEADER, total - target, minEvidence);
+        const listingIndex = listingJsonPayloadIndex(parts);
+        const listingBytes = listingIndex >= 0 ? Buffer.byteLength(parts[listingIndex], 'utf8') : 0;
+        compactListingJsonSection(parts, target - (total - listingBytes));
+        total = Buffer.byteLength(parts.join('\n'), 'utf8');
+    }
+
+    // 3. Non-JSON fixtures can only be shortened as plain text.
+    if (total > target) {
+        const validListing = listingJsonPayloadIndex(parts) >= 0 &&
+            (() => {
+                try { JSON.parse(parts[listingJsonPayloadIndex(parts)]); return true; }
+                catch (e) { return false; }
+            })();
+        const removed = validListing ? 0 :
+            truncateSectionBody(parts, LISTING_DUMP_HEADER, total - target, minEvidence);
         if (removed > 0) truncated.push(LISTING_DUMP_HEADER + ' -' + removed + 'B');
-        total = parts.join('\n').length;
+        total = Buffer.byteLength(parts.join('\n'), 'utf8');
     }
 
-    // 3. If still over, truncate raw HTML blocks in place
+    // 4. If still over, reduce oversized blocks in place.
     if (total > target) {
-        const trimmed = parts.map((p) => {
-            if (typeof p === 'string' && p.length > 30000) {
-                return p.slice(0, 30000) + '\n<!-- truncated -->';
+        const listingIndex = listingJsonPayloadIndex(parts);
+        const trimmed = parts.map((p, index) => {
+            if (index !== listingIndex && typeof p === 'string' && Buffer.byteLength(p, 'utf8') > 30000) {
+                return p.slice(0, 15000) + '\n<!-- truncated -->';
             }
             return p;
         });
         parts.length = 0;
         parts.push(...trimmed);
-        total = parts.join('\n').length;
+        total = Buffer.byteLength(parts.join('\n'), 'utf8');
         dropped.push('truncated-oversized-blocks');
     }
 
-    // Single exit.
-    const base = parts.join('\n');
-    let out = base + buildTrimMarker(dropped, truncated, budget, before, 0);
-    if (out.length > budget) {
-        out = base + buildTrimMarker(dropped, truncated, budget, before, base.length - budget);
-        warn('[prompt] trimmer could not fit the ' + budget + 'B budget: content is still ' +
-            (base.length - budget) + 'B over after every rung. Required sections were kept.');
+    let base = parts.join('\n');
+    let marker = buildTrimMarker(dropped, truncated, budget, before, 0);
+    while (Buffer.byteLength(base + marker, 'utf8') > budget) {
+        const overBy = Buffer.byteLength(base + marker, 'utf8') - budget;
+        const removable = Math.max(1, overBy);
+        const lines = base.split('\n');
+        let bodyIndex = -1;
+        const listingBody = listingJsonPayloadIndex(parts);
+        const listingPayload = listingBody >= 0 ? parts[listingBody] : null;
+        for (let i = 0; i < lines.length; i++) {
+            if (listingPayload !== null && lines[i] === listingPayload) continue;
+            if (!lines[i].startsWith('## ') && !lines[i].startsWith('```') && lines[i].length > 0 &&
+                (bodyIndex < 0 || lines[i].length > lines[bodyIndex].length)) bodyIndex = i;
+        }
+        if (bodyIndex < 0) {
+            const message = '[prompt] required prompt structure exceeds the ' + budget + 'B budget.';
+            warn(message);
+            throw new Error(message);
+        }
+        const line = lines[bodyIndex];
+        const keepBytes = Math.max(0, Buffer.byteLength(line, 'utf8') - removable - 1);
+        let keep = Math.min(line.length, keepBytes);
+        while (keep > 0 && Buffer.byteLength(line.slice(0, keep), 'utf8') > keepBytes) keep--;
+        if (keep > 0 && line.charCodeAt(keep - 1) >= 0xd800 && line.charCodeAt(keep - 1) <= 0xdbff) keep--;
+        lines[bodyIndex] = line.slice(0, keep);
+        base = lines.join('\n');
+        marker = buildTrimMarker(dropped, truncated, budget, before, 0);
     }
-    return out;
+    return base + marker;
 }
 
 function describeSiteType(detected) {
