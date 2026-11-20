@@ -182,9 +182,19 @@ When something goes wrong or you want finer control, run individual phases:
 | `batch status [--run <id>]` | Read-only view of current run state |
 | `batch retry-rejected [--run <id>] [--only ...]` | Retry rejected URLs using alternate career links and URL probes |
 | `batch dry-run --run <id> [--mode main|test] [--source <name>] [--items <dir>] [--json]` | Evaluate saved items against posting gates without posting |
+| `batch scrape-now --sources <name1,name2> [--run <id>] [--type <type>] [--timeout <ms>]` | Scrape committed sources into a run directory for later dry-run; does not post |
 | `batch refine-filters --type jobs|events|scholarships [options]` | Refine item-filter rules; separate from source onboarding |
 
 `batch run` runs `init → discover → retry-rejected → generate → check → paste → auto → deploy → report`; rejected-URL recovery is enabled by default and can be disabled with `--no-retry-rejected`. If you're debugging, use `--skip-deploy` to run the pipeline without copying passing extractors into `src/scrapers/`.
+
+To evaluate current, committed extractors without running the onboarding pipeline, scrape selected sources first and then run the gate-only dry-run:
+
+```sh
+pulchowk-events batch scrape-now --sources blacktech,f1soft --run review
+pulchowk-events batch dry-run --run review
+```
+
+`scrape-now` saves items beneath `data/batch/<run>/results/`. It does not post to Discord, update the bot cache, or write the bot audit log. Its default run ID is timestamped; pass `--run` when you want to share a run with a subsequent `dry-run`.
 
 ---
 
