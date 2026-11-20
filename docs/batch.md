@@ -538,6 +538,12 @@ The external `deepseek-connect` bridge does support provider selection: it expos
 
 Manual mode only opens the selected web app and uses the clipboard; it does not send an API request. It supports the listed manual providers (DeepSeek, ChatGPT, and Claude). Without `EXTENSION_TOKEN`, paste defaults to manual mode. Use `--extension` to require extension mode or `--manual` to force clipboard mode.
 
+### Prompt evidence budget
+
+Generated prompts are capped at 52,000 UTF-8 bytes. The listing/detail JSON keeps selector candidates, link patterns, pagination and field evidence without embedding the raw HTML a second time. Representative card and detail HTML excerpts are each capped at 6,000 bytes and truncated only at balanced element boundaries; field-specific evidence remains separate so values outside an excerpt are still available to the extractor.
+
+When a prompt still exceeds the limit, the optional sample-detail JSON is dropped first, then valid listing evidence is compacted without cutting JSON mid-value. Required prompt sections remain present.
+
 ---
 
 ## Limitations

@@ -383,7 +383,7 @@ The wizard:
    - `src/scrapers/extractors/<type>/<name>.md` — a prompt file for an LLM (see below)
 6. **Opens the interactive flow** — copies the prompt to your clipboard, offers to open DeepSeek, waits for you to paste the LLM's code back, writes it to the extractor, runs `verify` on it, and reports the verdict.
 
-The prompt file contains: the site URL, the detected site type and evidence, the extractor contract, the item shape, one worked reference extractor (whichever of Khalti / KataJaam / NepVents matches the detected type), the full dump from steps 2-3, and a required `VERDICT:` line the LLM emits before the code (see [`batch.md`](batch.md#the-two-way-loop) for why).
+The prompt file contains: the site URL, the detected site type and evidence, the extractor contract, the item shape, one worked reference extractor, bounded listing/detail DOM evidence and per-field evidence, and a required `VERDICT:` line the LLM emits before the code (see [`batch.md`](batch.md#the-two-way-loop) for why). Prompts are capped at 52,000 UTF-8 bytes; HTML excerpts remain structurally balanced, and field evidence carries values beyond the visible excerpts.
 
 If the LLM's output fails verification, the wizard offers to retry (paste new code) or regenerate the prompt with extra notes (`--notes "the cards are behind a Show More button"`).
 

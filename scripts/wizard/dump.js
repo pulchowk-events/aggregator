@@ -69,22 +69,23 @@ function isChromeSelector(sel) {
 //   3. Semantic chrome: <header>, <footer>, <nav>, <aside>, aria-hidden.
 //      Often removable, occasionally contains a company name we care about.
 //   4. Cookie/newsletter/modal blocks -- pure junk.
-//   5. If still over: truncate at the byte boundary with a visible marker.
+//   5. If still over: truncate at an element boundary and close open tags.
 //
 // For each step, we log the byte delta. Callers get a report they can
 // print or audit so a site that keeps hitting truncation is visible.
 function fitHtmlToBudget(html, budgetBytes, label) {
     if (!html) return { html: null, removed: [], originalSize: 0, finalSize: 0 };
-    const originalSize = html.length;
+    const originalSize = Buffer.byteLength(String(html), 'utf8');
     let current = String(html);
     const removed = [];
 
     const tryStrip = (step, re) => {
-        if (current.length <= budgetBytes) return;
-        const before = current.length;
+        if (Buffer.byteLength(current, 'utf8') <= budgetBytes) return;
+        const before = Buffer.byteLength(current, 'utf8');
         current = current.replace(re, '');
-        if (current.length < before) {
-            removed.push({ step, delta: before - current.length });
+        const after = Buffer.byteLength(current, 'utf8');
+        if (after < before) {
+            removed.push({ step, delta: before - after });
         }
     };
 
@@ -111,12 +112,12 @@ function fitHtmlToBudget(html, budgetBytes, label) {
     tryStrip('cookie-blocks', /<div[^>]*class="[^"]*(?:cookie|gdpr|newsletter|modal|dropdown)[^"]*"[\s\S]*?<\/div>/gi);
     tryStrip('aria-hidden', /<div[^>]*aria-hidden="true"[^>]*>[\s\S]*?<\/div>/gi);
 
-    // Pass 5: truncate if still over
+    // Pass 5: truncate if still over, preserving a balanced DOM prefix
     let truncated = false;
-    if (current.length > budgetBytes) {
-        const cut = current.slice(0, budgetBytes);
-        removed.push({ step: 'truncated', delta: current.length - budgetBytes });
-        current = cut + '\n<!-- truncated: budget=' + budgetBytes + ' -->';
+    const beforeTruncate = Buffer.byteLength(current, 'utf8');
+    if (beforeTruncate > budgetBytes) {
+        current = truncateHtmlBalanced(current, budgetBytes);
+        removed.push({ step: 'truncated', delta: beforeTruncate - Buffer.byteLength(current, 'utf8') });
         truncated = true;
     }
 
@@ -124,10 +125,137 @@ function fitHtmlToBudget(html, budgetBytes, label) {
         html: current,
         removed,
         originalSize,
-        finalSize: current.length,
+        finalSize: Buffer.byteLength(current, 'utf8'),
         truncated,
         label
     };
+}
+
+const VOID_HTML_TAGS = new Set([
+    'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
+    'meta', 'param', 'source', 'track', 'wbr'
+]);
+const HTML_OMISSION_MARKER = '<!-- remaining DOM omitted; use field evidence for values -->';
+
+function tokenizeHtml(html) {
+    const tokens = [];
+    let offset = 0;
+    while (offset < html.length) {
+        if (html[offset] !== '<') {
+            const next = html.indexOf('<', offset);
+            const end = next < 0 ? html.length : next;
+            tokens.push({ value: html.slice(offset, end), type: 'text' });
+            offset = end;
+            continue;
+        }
+        if (html.startsWith('<!--', offset)) {
+            const close = html.indexOf('-->', offset + 4);
+            const end = close < 0 ? html.length : close + 3;
+            tokens.push({ value: html.slice(offset, end), type: 'other' });
+            offset = end;
+            continue;
+        }
+
+        let quote = null;
+        let end = offset + 1;
+        for (; end < html.length; end++) {
+            const char = html[end];
+            if (quote) {
+                if (char === quote) quote = null;
+            } else if (char === '"' || char === "'") {
+                quote = char;
+            } else if (char === '>') {
+                end++;
+                break;
+            }
+        }
+        if (end > html.length || html[end - 1] !== '>') {
+            tokens.push({ value: html.slice(offset), type: 'text' });
+            break;
+        }
+
+        const value = html.slice(offset, end);
+        const match = /^<\s*(\/?)\s*([a-z][\w:-]*)/i.exec(value);
+        if (!match) {
+            tokens.push({ value, type: 'other' });
+        } else {
+            tokens.push({
+                value,
+                type: match[1] ? 'close' : 'open',
+                tag: match[2].toLowerCase(),
+                selfClosing: /\/\s*>$/.test(value) || VOID_HTML_TAGS.has(match[2].toLowerCase())
+            });
+        }
+        offset = end;
+    }
+    return tokens;
+}
+
+function fitTextToBytes(text, budget) {
+    let low = 0;
+    let high = text.length;
+    while (low < high) {
+        const mid = Math.ceil((low + high) / 2);
+        if (Buffer.byteLength(text.slice(0, mid), 'utf8') <= budget) low = mid;
+        else high = mid - 1;
+    }
+    let prefix = text.slice(0, low);
+    if (prefix && /&(?:#(?:x[\da-f]*|\d*)|[a-z][a-z\d]*)?$/i.test(prefix)) {
+        prefix = prefix.slice(0, prefix.lastIndexOf('&'));
+    }
+    return prefix;
+}
+
+function truncateHtmlBalanced(html, budgetBytes) {
+    const tokens = tokenizeHtml(html);
+    let output = '';
+    let outputBytes = 0;
+    const stack = [];
+
+    const closingTags = (tags) => tags.slice().reverse().map((tag) => '</' + tag + '>').join('');
+    const append = (value) => {
+        output += value;
+        outputBytes += Buffer.byteLength(value, 'utf8');
+    };
+
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        let nextStack = stack.slice();
+        if (token.type === 'open' && !token.selfClosing) nextStack.push(token.tag);
+        if (token.type === 'close') {
+            const matchAt = nextStack.lastIndexOf(token.tag);
+            if (matchAt >= 0) nextStack = nextStack.slice(0, matchAt);
+        }
+        const reserveMarker = i < tokens.length - 1 ? HTML_OMISSION_MARKER : '';
+        const reserve = Buffer.byteLength(reserveMarker + closingTags(nextStack), 'utf8');
+        const tokenBytes = Buffer.byteLength(token.value, 'utf8');
+        if (outputBytes + tokenBytes + reserve <= budgetBytes) {
+            append(token.value);
+            stack.splice(0, stack.length, ...nextStack);
+            continue;
+        }
+
+        if (token.type === 'text') {
+            const closeText = closingTags(stack);
+            const textBudget = Math.max(0, budgetBytes - outputBytes -
+                Buffer.byteLength(HTML_OMISSION_MARKER + closeText, 'utf8'));
+            const prefix = fitTextToBytes(token.value, textBudget);
+            append(prefix);
+        }
+        const closeText = closingTags(stack);
+        if (outputBytes + Buffer.byteLength(HTML_OMISSION_MARKER + closeText, 'utf8') <= budgetBytes) {
+            append(HTML_OMISSION_MARKER);
+        }
+        if (outputBytes + Buffer.byteLength(closeText, 'utf8') <= budgetBytes) append(closeText);
+        stack.length = 0;
+        break;
+    }
+
+    if (stack.length > 0) {
+        const closeText = closingTags(stack);
+        if (outputBytes + Buffer.byteLength(closeText, 'utf8') <= budgetBytes) append(closeText);
+    }
+    return output;
 }
 
 async function dumpCardHtml(page, cardSelector, anchorHrefs) {
@@ -165,10 +293,10 @@ async function dumpCardHtml(page, cardSelector, anchorHrefs) {
             return best ? best.el.outerHTML : null;
         }, cardSelector, Array.isArray(anchorHrefs) ? anchorHrefs : [], isGenericSelector(cardSelector));
         if (!html) return null;
-        // Budget: 40KB. A real job card should be under 20KB; if it's
-        // bigger, the selector matched something too broad (whole page).
+        // A single representative card is capped so evidence leaves room for
+        // field diagnostics and detail-page structure in the final prompt.
         // Feedback report will show truncated=true in that case.
-        return fitHtmlToBudget(html, 40000, 'rawCardHtml');
+        return fitHtmlToBudget(html, 6000, 'rawCardHtml');
     } catch (e) {
         return null;
     }
@@ -186,7 +314,7 @@ async function dumpDetailHtml(page, bodySelector) {
             return el ? el.outerHTML : null;
         }, bodySelector);
         if (!html) return null;
-        return fitHtmlToBudget(html, 55000, 'rawDetailHtml');
+        return fitHtmlToBudget(html, 6000, 'rawDetailHtml');
     } catch (e) {
         return null;
     }
@@ -220,10 +348,10 @@ async function dumpFallbackContentHtml(page) {
                 return clone.outerHTML;
             });
             if (fullBody && fullBody.length > html.length) {
-                return fitHtmlToBudget(fullBody, 40000, 'rawCardHtml-fallback-fullbody');
+                return fitHtmlToBudget(fullBody, 6000, 'rawCardHtml-fallback-fullbody');
             }
         }
-        return fitHtmlToBudget(html, 40000, 'rawCardHtml-fallback');
+        return fitHtmlToBudget(html, 6000, 'rawCardHtml-fallback');
     } catch (e) {
         return null;
     }
@@ -915,4 +1043,11 @@ function appearsInCards(cards, candidateHrefs) {
     });
 }
 
-module.exports = { dumpListingPage, dumpDetailPage, dumpCardHtml, hrefMatches, appearsInCards };
+module.exports = {
+    dumpListingPage,
+    dumpDetailPage,
+    dumpCardHtml,
+    fitHtmlToBudget,
+    hrefMatches,
+    appearsInCards
+};
