@@ -22,6 +22,8 @@
 // want; it only does the work that's still pending.
 //
 // Paste is the only interactive step. All other phases are unattended.
+// `--provider` and `--manual` / `--extension` are passed through to every
+// paste step, including paste retries in the auto loop.
 
 const fs = require('fs');
 const path = require('path');
@@ -48,6 +50,8 @@ function parseArgs(argv) {
         timeoutMs: 60000,
         maxRounds: 5,
         maxAttempts: 5,
+        provider: null,
+        pasteMode: null,
         skipDeploy: false,
         retryRejected: true,
         profile: 'medium',
@@ -58,6 +62,11 @@ function parseArgs(argv) {
         const a = argv[i];
         if (a === '--run' && argv[i + 1]) args.runId = argv[++i];
         else if (a === '--only' && argv[i + 1]) args.only = argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
+        else if (a === '--provider') {
+            if (!argv[i + 1] || argv[i + 1].startsWith('-')) throw new Error('--provider needs a value');
+            args.provider = argv[++i];
+        } else if (a === '--manual') args.pasteMode = 'manual';
+        else if (a === '--extension') args.pasteMode = 'extension';
         else if (a === '--parallel' && argv[i + 1]) args.parallel = Math.max(1, parseInt(argv[++i], 10) || 10);
         else if (a === '--timeout' && argv[i + 1]) args.timeoutMs = Math.max(15000, parseInt(argv[++i], 10) || 60000);
         else if (a === '--max-rounds' && argv[i + 1]) args.maxRounds = Math.max(1, parseInt(argv[++i], 10) || 5);
@@ -291,7 +300,8 @@ async function runBatch(opts) {
                 const r = await runPaste({
                     runId,
                     only: opts.only,
-                    provider: null,
+                    provider: opts.provider,
+                    mode: opts.pasteMode,
                     skipBrowser: false,
                     timeoutMs: 5 * 60 * 1000,
                     usePoll: true
@@ -309,7 +319,9 @@ async function runBatch(opts) {
                     parallel: opts.parallel,
                     timeoutMs: opts.timeoutMs,
                     maxRounds: opts.maxRounds,
-                    maxAttempts: opts.maxAttempts
+                    maxAttempts: opts.maxAttempts,
+                    provider: opts.provider,
+                    pasteMode: opts.pasteMode
                 });
                 return { ok: true, detail: 'verify loop complete' };
             }

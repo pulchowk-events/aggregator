@@ -78,12 +78,12 @@ function printHelp() {
     console.log(`  ${CYAN}check${R}             Validate prompt structure (guards against wizard-template drift).`);
     console.log(`  ${CYAN}dry-run${R}           Pipe items.json through posting gates (--run <id> [--mode main|test] [--source <name>] [--items <dir>] [--json]).`);
     console.log(`  ${CYAN}scrape-now${R}        Scrape committed sources into a run directory for dry-run.`);
-    console.log(`  ${CYAN}paste${R}             Interactive loop: copy prompt, paste LLM reply, write extractor.`);
+    console.log(`  ${CYAN}paste${R}             Send prompts to an LLM; supports --provider and --manual/--extension.`);
     console.log(`  ${CYAN}follow${R}            Follow CAREERS_PAGE_REDIRECT verdicts (re-dump, re-prompt).`);
     console.log(`  ${CYAN}refine${R}            Re-prompt LLM-origin failed sites with verify failure evidence.`);
-    console.log(`  ${CYAN}auto${R}              One-shot: discover -> generate -> paste -> verify -> refine, loops until stable.`);
+    console.log(`  ${CYAN}auto${R}              One-shot pipeline loop; supports --provider and --manual/--extension.`);
     console.log(`  ${CYAN}deploy${R}            Copy verified-passing extractors into src/scrapers/ for production.`);
-    console.log(`  ${CYAN}run${R} <urls>        One-shot: all phases with checkpointing -- the recommended entry point.`);
+    console.log(`  ${CYAN}run${R} <urls>        One-shot pipeline; supports --provider and --manual/--extension.`);
     console.log(`  ${CYAN}promote${R}           Promote template-failed sites to LLM prompts (dump-reuse, no re-scrape).`);
     console.log(`  ${CYAN}refine-filters${R}    LLM-driven rule refinement for itemFilter (jobs|events|scholarships).`);
     console.log(`  ${CYAN}retry-rejected${R}    Recover sources discover rejected (career-link / suffix-probe).`);
@@ -93,6 +93,8 @@ function printHelp() {
     console.log(`${B}COMMON FLAGS${R}`);
     console.log(`  ${D}--run <id>${R}       Use a specific run instead of the latest.`);
     console.log(`  ${D}--only name1,name2${R} Limit generate/verify to specific sources.`);
+    console.log(`  ${D}--provider <name>${R}  Select the LLM provider for paste steps (run, auto, paste).`);
+    console.log(`  ${D}--manual${R} / ${D}--extension${R}  Select clipboard or extension transport; default follows EXTENSION_TOKEN.`);
     console.log(`  ${D}--json${R}            Machine-readable report output (report subcommand).`);
     console.log(`  ${D}-v, --verbose${R}     Extra detail per source (report subcommand).`);
     console.log('');
@@ -102,7 +104,7 @@ function printHelp() {
     console.log(`  ${CYAN}pulchowk-events${R} batch discover`);
     console.log(`  ${CYAN}pulchowk-events${R} batch generate`);
     console.log(`  ${CYAN}pulchowk-events${R} batch check      ${D}# validate prompt structure${R}`);
-    console.log(`  ${D}# ... paste each prompts/*.md into DeepSeek, save reply as generated/<name>.js${R}`);
+    console.log(`  ${D}# ... paste each prompt into the selected provider and save the extractor reply${R}`);
     console.log(`  ${CYAN}pulchowk-events${R} batch verify`);
     console.log(`  ${CYAN}pulchowk-events${R} batch report`);
     console.log('');

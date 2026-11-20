@@ -355,10 +355,26 @@ function pickRunDir(runId) {
 }
 
 async function runPaste(opts) {
+    const mode = opts.mode || (process.env.EXTENSION_TOKEN ? 'extension' : 'manual');
+    if (mode !== 'manual' && mode !== 'extension') {
+        throw new Error(`unknown paste mode "${mode}"`);
+    }
+    if (mode === 'extension' && !process.env.EXTENSION_TOKEN) {
+        throw new Error('--extension requires EXTENSION_TOKEN in .env');
+    }
+    opts = Object.assign({}, opts, { mode });
+
     // Dispatch to extension mode. Lazy require avoids a circular import
     // (paste-extension.js requires helpers from this file).
     if (opts.mode === 'extension') {
         return require('./paste-extension').runPasteExtension(opts);
+    }
+    const manualProvider = opts.provider
+        ? LLM_PROVIDERS.find((x) => x.value === opts.provider && x.url)
+        : LLM_PROVIDERS.find((x) => x.value === 'deepseek');
+    if (!manualProvider) {
+        const supported = LLM_PROVIDERS.filter((x) => x.url).map((x) => x.value).join(', ');
+        throw new Error(`unknown manual provider "${opts.provider}"; supported: ${supported}`);
     }
     const runDir = pickRunDir(opts.runId);
     const p = ensureRunLayout(runDir);
@@ -441,8 +457,8 @@ async function runPaste(opts) {
     ui.info('How this works:');
     ui.plain('  For each site:');
     ui.plain('    1. Prompt copied to your clipboard.');
-    ui.plain('    2. Ctrl+V into DeepSeek (NEW chat), send.');
-    ui.plain('    3. Copy DeepSeek\'s reply.');
+    ui.plain(`    2. Ctrl+V into ${manualProvider.label} (NEW chat), send.`);
+    ui.plain(`    3. Copy ${manualProvider.label}'s reply.`);
     ui.plain('    4. Come back here -- do NOTHING in this terminal.');
     ui.plain('  The loop watches your clipboard. Three reply shapes accepted:');
     ui.plain('    - Extractor code (module.exports...)     -> written to generated/');
@@ -453,6 +469,7 @@ async function runPaste(opts) {
     ui.plain('  Ctrl+C aborts.');
     ui.blank();
     ui.info(`Mode: ${opts.usePoll ? `clipboard polling (${POLL_INTERVAL_MS/1000}s interval, ${Math.round(opts.timeoutMs/1000)}s timeout)` : 'Enter-driven (--no-poll)'}`);
+    ui.info(`Provider: ${manualProvider.label}`);
     ui.blank();
 
     const malformed = [];
@@ -475,10 +492,9 @@ async function runPaste(opts) {
     }
 
     if (!opts.skipBrowser) {
-        const provider = LLM_PROVIDERS.find((x) => x.value === opts.provider) || LLM_PROVIDERS[0];
-        if (provider.url) {
-            openUrl(provider.url);
-            ui.ok(`opened ${provider.label} (${provider.url})`);
+        if (manualProvider.url) {
+            openUrl(manualProvider.url);
+            ui.ok(`opened ${manualProvider.label} (${manualProvider.url})`);
             ui.blank();
         }
     }
@@ -532,7 +548,7 @@ async function runPaste(opts) {
             let raw;
             if (opts.usePoll) {
                 ui.waitingFor(
-                    'you to copy DeepSeek\'s reply to your clipboard',
+                    `you to copy ${manualProvider.label}'s reply to your clipboard`,
                     `${Math.round(opts.timeoutMs/1000)}s timeout · Ctrl+C aborts`
                 );
                 const reply = await pollClipboardForReply({ timeoutMs: opts.timeoutMs, promptBody, name, targetUrl: (classes[name] && (classes[name].targetUrl || classes[name].url)) || null });
@@ -545,7 +561,7 @@ async function runPaste(opts) {
                 ui.blank();
                 raw = reply.raw;
             } else {
-                await waitForEnter('paste in DeepSeek, copy reply, press Enter:');
+                await waitForEnter(`paste in ${manualProvider.label}, copy reply, press Enter:`);
                 raw = readFromClipboard();
                 if (!raw || raw.trim().length < 50) raw = await readFromStdin();
             }
