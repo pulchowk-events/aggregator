@@ -95,6 +95,7 @@ function printHelp() {
     console.log(`  ${D}--only name1,name2${R} Limit generate/verify to specific sources.`);
     console.log(`  ${D}--provider <name>${R}  Select the LLM provider for paste steps (run, auto, paste).`);
     console.log(`  ${D}--manual${R} / ${D}--extension${R}  Select clipboard or extension transport; default follows EXTENSION_TOKEN.`);
+    console.log(`  ${D}--include-small${R}  Force-include prompts with no captured structural or field evidence (paste).`);
     console.log(`  ${D}--json${R}            Machine-readable report output (report subcommand).`);
     console.log(`  ${D}-v, --verbose${R}     Extra detail per source (report subcommand).`);
     console.log('');

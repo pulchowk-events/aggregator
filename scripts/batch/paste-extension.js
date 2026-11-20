@@ -32,6 +32,7 @@ const {
 const { ensureRunLayout, writeClasses } = require('./lib/paths');
 const { ChatMap } = require('./lib/chat-map');
 const { validatePrompt } = require('./lib/prompt-structure');
+const { hasCapturedPromptEvidence } = require('./lib/prompt-evidence');
 const { parseVerdict, isSameDomainRedirect } = require('./lib/llm-header');
 const { followOneSite } = require('./follow');
 const { audit } = require('./lib/audit');
@@ -143,28 +144,24 @@ async function runPasteExtension(opts) {
         return t === null || t === 'FOLLOWED';
     });
 
-    // Starved-prompt filter — same threshold and same --include-small
-    // escape hatch as paste.js. Prompts under 40KB lack enough HTML for
-    // the LLM to produce real structure.
+    // Keep this evidence-based like paste.js. Total prompt bytes are not a
+    // proxy for quality after prompt compaction.
     if (!opts.includeSmall) {
-        const MIN_PROMPT_BYTES = 40000;
         const starved = [];
         const kept = [];
         for (const name of pending) {
             const promptPath = path.join(p.prompts, `${name}.md`);
             try {
-                const stat = fs.statSync(promptPath);
-                if (stat.size < MIN_PROMPT_BYTES) starved.push({ name, size: stat.size });
+                const body = fs.readFileSync(promptPath, 'utf8');
+                if (!hasCapturedPromptEvidence(body)) starved.push(name);
                 else kept.push(name);
             } catch (e) {
-                kept.push(name);
+                kept.push(name);  // let structural validation report read failures
             }
         }
         if (starved.length > 0) {
-            ui.warn(`skipping ${starved.length} starved prompt(s) (<${MIN_PROMPT_BYTES / 1000}KB)`);
-            for (const item of starved) {
-                ui.info(`  ${item.name.padEnd(22)} ${item.size}B`);
-            }
+            ui.warn(`skipping ${starved.length} prompt(s) with no captured evidence`);
+            for (const name of starved) ui.info(`  ${name}`);
             ui.info('pass --include-small to force-include');
             pending.length = 0;
             pending.push(...kept);
