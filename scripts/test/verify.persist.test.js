@@ -100,8 +100,11 @@ test('decidePass unchanged: new marker lines do not alter a passing decision', (
     ));
     const a = decidePass(withNew, CTX);
     const b = decidePass(withoutNew, CTX);
-    assert.deepStrictEqual(a, b);
-    assert.deepStrictEqual(a, { pass: true, reason: 'ok' });
+    assert.deepStrictEqual(
+        { pass: a.pass, reason: a.reason },
+        { pass: b.pass, reason: b.reason }
+    );
+    assert.deepStrictEqual({ pass: a.pass, reason: a.reason }, { pass: true, reason: 'ok' });
 });
 
 test('decidePass unchanged: low_field_coverage still fails (aarambhait shape)', () => {

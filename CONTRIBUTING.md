@@ -109,23 +109,22 @@ When in doubt about a magic number, a drift history, or a workaround — comment
 
 ## Testing philosophy
 
-The repository has focused automated tests using Node's built-in test runner. Run the full suite with:
+The repository has focused automated tests using Node's built-in test runner. Run the full suite through the package CLI with:
 
 ```bash
-node --test scripts/test/*.test.js
+pulchowk-events test
+# or: npm test
 ```
 
-For a focused test file, pass its path, for example `node --test scripts/test/devMode.guards.test.js`. There is no `npm test` script configured. The tests cover deterministic logic and guarded behaviors; they do not replace live checks against Discord, Supabase, or third-party sites. Keep ad-hoc utilities such as `scripts/test-discord-send.js` out of the automated test command; they require explicit arguments.
+For a focused test file, pass its path, for example `pulchowk-events test scripts/test/devMode.guards.test.js`. The tests cover deterministic logic and guarded behaviors; they do not replace live checks against Discord, Supabase, or third-party sites. Manual webhook smoke tests (`pulchowk-events test-send`) are separate from the automated suite; `--send` is required for an actual webhook post.
 
 ### Per-source testing: `pulchowk-events verify`
 
 ```bash
 pulchowk-events verify <name>
-# or, without the CLI installed:
-# node scripts/verify-source.js <name>
 ```
 
-This is the unit test for a scraper. It runs the extractor against the live site, prints item count, verdict, listing/detail counts, and a sample. If it returns `verdict: ok` with `items > 0`, the source works. Output is identical between the CLI and the raw script — the CLI is a subprocess wrapper.
+This is the live-site integration check for a scraper. It runs the extractor against the live site, prints item count, verdict, listing/detail counts, and a sample. If it returns `verdict: ok` with `items > 0`, the source works.
 
 Run this after **every** extractor edit. Before every commit that touches `src/scrapers/extractors/`. Before every PR. It takes 30-90 seconds depending on the source.
 
@@ -135,7 +134,6 @@ For selector-level diagnosis (which specific selector broke, and what currently 
 
 ```bash
 pulchowk-events diagnose <name>
-# or: node scripts/diagnose.js <name>
 ```
 
 `diagnose` reports every selector the extractor uses, marks the zero-match ones, and lists alternatives that currently match. Use it when `verify` returns a non-`ok` verdict and you need to know what to fix.
@@ -171,7 +169,6 @@ For setup wizard changes, run:
 
 ```bash
 pulchowk-events setup --demo
-# or: node scripts/setup/index.js --demo
 ```
 
 It walks the full flow with mock data and writes only to `data/demo-setup.env`. Reset with `rm data/demo-setup.env` between runs.
@@ -180,7 +177,6 @@ For source-wizard changes, run:
 
 ```bash
 pulchowk-events add https://example.com --type events
-# or: node scripts/wizard/index.js https://example.com example events
 ```
 
 against `https://example.com` (which detects `unknown`, exercising the fallback path) and against a known source URL (which detects `single-page-cards` or `listing-to-detail`, exercising the main path).
@@ -304,7 +300,7 @@ For 1-2 sources, the manual pattern below is fastest. For 3+ sources, use `pulch
 
 **Before opening a PR that adds a source (either origin):**
 
-1. `pulchowk-events verify <name>` (or `node scripts/verify-source.js <name>`) must return `verdict: ok` with `items > 0`
+1. `pulchowk-events verify <name>` must return `verdict: ok` with `items > 0`
 2. The item sample must have reasonable data: title populated, dates parseable, images real URLs (not placeholders)
 3. If the source has category pages or pagination, the extractor must report `meta.listingHits` and `meta.detailPagesVisited` correctly
 4. `meta.looksBlocked` must be set true if the source is captcha-gated, and the extractor must respect `--profile` correctly
@@ -396,7 +392,7 @@ items: 14
 verdict: ok
 ```
 
-`node scripts/verify-source.js khalti` produces identical output if the CLI isn't installed — either form is acceptable evidence.
+Use `pulchowk-events verify khalti` for the live-site check.
 
 Or, for a `posting/` change:
 
@@ -461,7 +457,7 @@ pulchowk-events diagnose khalti
 pulchowk-events verify khalti
 ```
 
-Paste both. `diagnose` shows which specific selectors broke and what alternatives currently match; `verify` shows the formal verdict and item count. Together they're the complete scraper diagnosis — without them the maintainer will run the same two commands first thing, adding a full round-trip. `node scripts/diagnose.js khalti` and `node scripts/verify-source.js khalti` produce identical output if the CLI isn't installed.
+Paste both. `diagnose` shows which specific selectors broke and what alternatives currently match; `verify` shows the formal verdict and item count. Together they're the complete scraper diagnosis — without them the maintainer will run the same two commands first thing, adding a full round-trip. Use `pulchowk-events diagnose khalti` and `pulchowk-events verify khalti` for the complete check.
 
 If the bug is in a batch-maintained source, also paste `pulchowk-events batch report --run <run-id>` and, if the source failed verify, the per-site result via `jq . data/batch/<run-id>/results/<name>.json`. Those two artifacts replace the manual `diagnose`/`verify` pair for batch-produced extractors.
 

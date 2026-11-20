@@ -124,7 +124,7 @@ Do not use it for the cross-cutting cleanups the common sanitizer already handle
 Job postings rarely carry a per-item image. After `extract()` returns, `runSource` (in `src/scrapers/sources/_orchestrate.js`) derives one for every job item that came back without a valid image:
 
 1. `deriveImageForUrl(url)` — fetches `<meta og:image>` from the site's homepage (falling back to `<link rel="icon">`). Caches the result per-hostname for 30 days in `data/og-image-cache.json`, and deduplicates concurrent in-flight fetches for the same hostname.
-2. `derivePlaceholderForSource(name)` — returns a URL to a generated placeholder PNG in `data/placeholder-images/` if one exists, `null` otherwise. Placeholders are produced by `scripts/generate-placeholders.js` (Puppeteer one-shot: black background, white company name centered, auto-shrinking font for long names). Served from the bot's own Express route at `http://127.0.0.1:${WEB_PORT}/placeholders/<name>.png`.
+2. `derivePlaceholderForSource(name)` — returns a URL to a generated placeholder PNG in `assets/placeholders/` if one exists, `null` otherwise. Placeholders are produced by `pulchowk-events placeholders` (Puppeteer one-shot: black background, white company name centered, auto-shrinking font for long names). Served from the bot's own Express route at `http://127.0.0.1:${WEB_PORT}/placeholders/<name>.png`.
 
 Both functions live in `src/scrapers/ogImage.js` and are called from `sources/_orchestrate.js`, not from individual extractors. No job extractor handles image extraction itself — enrichment is uniform across every job source, hand-maintained or batch-maintained. Do not add `companyLogoUrl` extraction to any individual extractor.
 
@@ -246,7 +246,7 @@ Not every field needs a fallback chain. Use one for the fields most likely to dr
 
 ## Verifying a source
 
-`pulchowk-events verify <name>` (or `node scripts/verify-source.js <name>` without the CLI installed) runs a single extractor against the live site with no bot, no Discord, no cron. It's the unit test for a scraper. Output is identical between the two — the CLI is a thin subprocess wrapper around the script.
+`pulchowk-events verify <name>` runs a single extractor against the live site with no bot, no Discord, and no cron. It's the live-site integration check for a scraper.
 
 ```bash
 pulchowk-events verify khalti
@@ -301,7 +301,7 @@ For sources that need a warm browser profile (Cloudflare, logged-in pages), the 
 
 ## Diagnosing a source
 
-`pulchowk-events diagnose <name>` (or `node scripts/diagnose.js <name>`) goes one level deeper than verify. Where verify tells you *whether* the source is broken (the verdict), diagnose tells you *which selectors broke* and what alternatives currently match.
+`pulchowk-events diagnose <name>` goes one level deeper than verify. Where verify tells you *whether* the source is broken (the verdict), diagnose tells you *which selectors broke* and what alternatives currently match.
 
 ```bash
 pulchowk-events diagnose sathijob
@@ -367,8 +367,6 @@ The `add` command walks you through source creation end-to-end for a single sour
 
 ```bash
 pulchowk-events add https://example.com/events --type events
-# or, without the CLI:
-# node scripts/wizard/index.js https://example.com/events mynewsite events
 ```
 
 The wizard:
@@ -509,7 +507,6 @@ Commit both files, then verify:
 
 ```bash
 pulchowk-events verify mynewsite
-# or: node scripts/verify-source.js mynewsite
 ```
 
 When it returns `verdict: ok` with a sensible item count, the source is live. The registry discovers it on the next scrape run.
