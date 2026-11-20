@@ -265,7 +265,7 @@ pulchowk-events verify katajaam
 | `pulchowk-events diagnose <name>` | Report broken selectors for one source; `--full` also runs the extractor; `--fix --apply` writes suggested patches |
 | `pulchowk-events verify <name>` | Run one source's extractor against the live site (the unit test) |
 | `pulchowk-events batch run <urls> [--run <id>]` | Full pipeline for 3+ sources in one command with per-phase checkpointing |
-| `pulchowk-events batch <subcommand>` | Individual batch phases: `init`, `discover`, `generate`, `check`, `paste`, `follow`, `refine`, `promote`, `verify`, `deploy`, `report`, `status` |
+| `pulchowk-events batch <subcommand>` | Batch phases and utilities: `init`, `discover`, `retry-rejected`, `generate`, `check`, `paste`, `follow`, `refine`, `promote`, `verify`, `auto`, `deploy`, `report`, `status`, `dry-run`, `refine-filters` |
 | `pulchowk-events help` / `version` | List commands / print package version |
 
 No shared state, no daemon mode — one command, one process, one task. Set `NO_COLOR=1` to disable ANSI output. Each subcommand maps 1:1 to an underlying script under `scripts/`; the deep dive lives in [`docs/scrapers.md`](docs/scrapers.md), [`docs/batch.md`](docs/batch.md), and [`docs/operations.md`](docs/operations.md).
@@ -355,7 +355,7 @@ Full walkthrough (both manual and wizard paths, plus the drift-fixing playbook):
 
 ## Batch onboarding
 
-For adding many sources at once. The batch pipeline is a source-code generator: it produces files under `src/scrapers/`, verifies them against the live site, and asks for the LLM round-trip paste step. It does not participate in the runtime item lifecycle — after deploy, the running bot only sees the new sources when it restarts.
+For adding many sources at once. The batch pipeline is a source-code generator: it produces files under `src/scrapers/`, verifies them against the live site, and processes LLM prompts through clipboard or extension transport. It does not participate in the runtime item lifecycle — after deploy, the running bot only sees the new sources when it restarts.
 
 ```bash
 # 1. Prepare URLs (one per line)
@@ -376,20 +376,21 @@ git commit -m "feat(scrapers): add N batch-generated job sources"
 # 4. Restart the bot so it picks up the new sources
 ```
 
-The pipeline runs these phases in order, skipping any whose work is already done:
+The pipeline runs these phases in order, skipping work already present in the run directory. Rejected-URL recovery is enabled by default:
 
 | Phase | What it does |
 |---|---|
 | `init` | Create the run directory, snapshot `src/scrapers/` state, seed `urls.txt` |
 | `discover` | Fetch every URL in parallel, classify site shape, follow career-page hints, reject dead links |
+| `retry-rejected` | Retry rejected URLs using career-link discovery and common URL probes (`--no-retry-rejected` disables this phase) |
 | `generate` | Render templates for ATS and single-page HTML listings; write LLM prompts for everything else |
 | `check` | Validate every prompt against the canonical structure so a `prompt.js` edit can't silently degrade future extractors |
-| `paste` | Interactive clipboard loop through every prompt. Handles `NOT_CAREERS_PAGE` and `CAREERS_PAGE_REDIRECT` verdicts automatically |
+| `paste` | Process prompts through manual clipboard mode or the configured extension transport; handles not-careers and redirect verdicts |
 | `auto` | Verify → classify failures → refine/promote → paste → verify. Loops until every site reaches terminal state |
-| `deploy` | Copy verified-passing extractors into `src/scrapers/` with wrappers, syntax-check each file, refuse to overwrite existing |
+| `deploy` | Apply the minimum-quality gate, then copy verified-passing extractors into `src/scrapers/` with wrappers and syntax checks; refuses to overwrite existing files |
 | `report` | Bucket every site into PASS / REJECT / LLM-NOT-CAREERS / FAIL-* with human-readable labels |
 
-The two-way LLM loop is what makes the batch usable on real URLs. Every prompt asks the LLM to declare a verdict before writing code — `CAREERS_PAGE`, `NOT_CAREERS_PAGE`, or `CAREERS_PAGE_REDIRECT -- <url>`. A redirect verdict is followed inline; a not-careers verdict is recorded with the reason and the site is dropped. Only genuinely wrong URLs (Facebook pages, 404s, dead domains) need human intervention, and those are surfaced with clear reasoning.
+The two-way LLM loop is what makes the batch usable on real URLs. Every prompt asks the LLM to declare a verdict before writing code — `CAREERS_PAGE`, `NOT_CAREERS_PAGE`, or `CAREERS_PAGE_REDIRECT -- <url>`. A redirect verdict is followed inline; a not-careers verdict is recorded with the reason and the site is dropped. Paste defaults to clipboard mode unless `EXTENSION_TOKEN` is configured; `batch paste --manual` and `--extension` explicitly select a transport.
 
 For the full pipeline reference — state machine, phase commands, template vs prompt selection, empty-vs-drift discrimination, refine/promote, deploy safety — see [`docs/batch.md`](docs/batch.md). For batch operations (inspecting runs, cleaning up old directories, refreshing drifted sources): [`docs/operations.md#batch-pipeline-operations`](docs/operations.md#batch-pipeline-operations).
 
@@ -458,7 +459,7 @@ All commands are guild-scoped to `HOME_GUILD_ID` and require Discord's `ADMINIST
 
 Two independent config layers, both loaded at boot.
 
-**Secrets and deployment identifiers — `.env`** (see [`.env.example`](.env.example)). Read via `src/config/env.js`, validated at startup. Every missing value produces a named warning rather than a silent `undefined`. Key vars:
+**Secrets and deployment identifiers — `.env`** (see [`.env.example`](.env.example)). Bot runtime settings are read via `src/config/env.js` and validated at startup. `EXTENSION_TOKEN` is a batch-CLI-only setting read directly by the batch tools. Key vars:
 
 | Var | Purpose |
 |---|---|
@@ -478,6 +479,8 @@ Two independent config layers, both loaded at boot.
 | `DASHBOARD_API_KEY` | Bearer token for `/api/*`; mutating routes are unauthenticated if unset |
 | `WEBSITE_*_TABLE` | Table name overrides for the website project (`events`, `jobs`, `scholarships` by default) |
 | `BROWSER_EXECUTABLE_PATH` + `BROWSER_USER_DATA_DIR` | Windows-only: real browser + warm profile for Cloudflare/login-required sites |
+| `DEV_MODE` | Blocks live actions when `true`; remove or set `false` in production |
+| `EXTENSION_TOKEN` | Optional batch CLI token for extension-backed LLM prompt transport; not used by the bot runtime |
 
 **Server-specific non-secrets — `src/config/`.** Emoji IDs and ping role IDs live here so a forker can swap servers by editing three files, not re-running `.env` setup:
 
@@ -550,8 +553,9 @@ Supporting directories, outside `src/`:
 scripts/
 ├── cli.js                  pulchowk-events binary — dispatches to the rest
 ├── diagnose.js             selector-level drift diagnosis
-├── verify-source.js        run one scraper in isolation (the "unit test")
+├── verify-source.js        run one scraper against the live site
 ├── generate-placeholders.js one-shot: render 1024×1024 placeholder PNGs per source
+├── test/                   Node built-in automated tests
 ├── setup/                  interactive setup wizard
 │   index · adapters · discord · discord-create
 │   env-writer · supabase · validators
@@ -559,10 +563,12 @@ scripts/
 │   index · dump · detect · prompt · templates
 │   tui · interactive · fix · browser
 ├── batch/                  multi-source pipeline
-│   run · index · discover · generate · classify · paste · follow
-│   refine · promote · verify · verify-worker · deploy · report · auto
-│   lib/   audit · heartbeat · llm-header · messages(shim) · naming · paths
-│          preflight · prompt-structure · snapshot · ui(shim) · url-resolve
+│   run · index · discover · retry-rejected · generate · classify · paste
+│   paste-extension · follow · refine · promote · verify · verify-worker
+│   deploy · report · auto · dry-run · refine-filters · check
+│   lib/   audit · heartbeat · llm-header · provider-router · chat-map
+│          naming · paths · preflight · prompt-structure · snapshot
+│          transport-extension · url-resolve · filter-rules · anomaly-detect
 │   templates/   workable · personio · smartrecruiters · html-cards-listing
 ├── shared/platform.js      cross-wizard helpers (clipboard, URL open)
 └── maintenance/            one-shot migration + cleanup tools
@@ -655,7 +661,7 @@ Two consequences worth noting:
 
 - **`scrapers/` only talks to `posting/` through `scrapeAll`'s return value.** A scraper returns `{items, meta}`; it never calls into `posting/` and never touches cache. This is what makes `verify-source.js` possible — the whole scrapers layer can be run in isolation from the posting layer.
 - **`discord/` and `web/` are entirely thin.** Every mutation they trigger goes through a `posting/` function; every read goes through a `core/` or a `bot.*` accessor. There's no cache write, no marker reservation, no dedup decision inside a handler. That's why both can be tested by booting the bot and clicking buttons — the handler is just a transport, the logic is elsewhere.
-- **`scripts/batch/` writes into `scrapers/` and nothing else.** It's a source-code generator; it doesn't import from `posting/`, `discord/`, `web/`, or `integrations/`. The batch pipeline has its own audit surface and its own state directory. The only runtime-visible side effect is that new extractor files appear on disk, which the running bot won't see until restart.
+- **`scripts/batch/` produces scraper source files without joining the runtime item lifecycle.** It doesn't import from `posting/`, `discord/`, `web/`, or `integrations/`; its per-run state and audit surface are separate. Verification may warm the shared Open Graph image cache, and deploy writes extractor files that the running bot won't load until restart.
 
 ### Where a specific file lives
 
@@ -712,7 +718,7 @@ Read them in the order that matches what you're about to do. If you're modifying
 
 - The paste step is linear and human-paced. Multi-prompt-in-one-chat was considered and rejected — DeepSeek output caps at ~4K–8K tokens, a single extractor is 250–400 lines, and truncating an extractor produces a syntax error that loses the whole reply.
 - Template coverage varies by batch. In the companies-76 run, 13 of 76 sites templated (17%). Templates excel when the DOM structure is common — Workable / Personio / SmartRecruiters ATS, or single-page card listings. They fall down on multi-stage navigation and culture-card false positives.
-- `refine` stops at 3 attempts per site. A site that genuinely needs a fourth round is not retried automatically — it gets a terminal state and requires `--force` to continue.
+- Retry limits differ by entry point: `batch run` defaults to five attempts in its auto loop (`--max-attempts`), while standalone `batch refine` defaults to two. Both expose flags to adjust their caps.
 - Batch state is per-run — no cross-run reuse. Re-adding a site from a previous batch re-runs discover, generate, and paste for it. There is no "resume from previous run's extractor" optimization.
 
 **Not done**

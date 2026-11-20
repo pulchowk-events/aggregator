@@ -163,9 +163,9 @@ The audit log is written at every stage. Every decision point — sanitize pass,
 
 ## Batch pipeline entry path
 
-The batch pipeline (`scripts/batch/*`, documented in [`batch.md`](batch.md)) is a source code generator. Its entire job is to produce files under `src/scrapers/extractors/jobs/` and `src/scrapers/sources/jobs/`. It does not participate in the runtime item lifecycle at all.
+The batch pipeline (`scripts/batch/*`, documented in [`batch.md`](batch.md)) is a source code generator. Its production output is files under `src/scrapers/extractors/jobs/` and `src/scrapers/sources/jobs/`; verification also runs the normal scraper path and can warm the shared Open Graph image cache. It does not participate in the runtime item lifecycle at all.
 
-This separation is deliberate. If the batch pipeline could post, cache, or reserve markers, then a batch run would need to coordinate with the running bot's cache mutex, the marker system's atomicity guarantees, and the audit log's ordering. All three are hard enough inside the runtime; making an external CLI participate would break every assumption the current design relies on.
+This separation is deliberate. If the batch pipeline could post, mutate `data/cache.json`, or reserve markers, then a batch run would need to coordinate with the running bot's cache mutex, the marker system's atomicity guarantees, and the audit log's ordering. All three are hard enough inside the runtime; making an external CLI participate would break every assumption the current design relies on.
 
 **What the batch pipeline does:**
 
@@ -179,7 +179,7 @@ This separation is deliberate. If the batch pipeline could post, cache, or reser
 **What the batch pipeline does not do:**
 
 - **Does not post to Discord.** No `bot.postEventToCategory`, no `channel.send()`, no marker reserves. The Discord client is never even logged in during a batch run.
-- **Does not touch `cache.json`.** The batch reads nothing from `data/cache.json` and writes nothing to it. All batch state lives under `data/batch/<run-id>/`.
+- **Does not touch `cache.json`.** The batch reads nothing from `data/cache.json` and writes nothing to it. Its per-run state lives under `data/batch/<run-id>/`; verification may separately warm `data/og-image-cache.json`.
 - **Does not mutate `data/posted-channel-markers/`.** The batch's own verify step stages/unstages extractor source files, but never touches the marker directory.
 - **Does not write to `data/audit-log.jsonl`.** Every batch decision is audited, but to `data/batch/<run-id>/audit.jsonl` — a separate file with a separate schema (`phase`, `event`, `decision`) tuned for pipeline debugging rather than item debugging.
 - **Does not push to Supabase.** Archival and website sync are runtime concerns; the batch has no reason to know they exist.
