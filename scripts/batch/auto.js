@@ -30,6 +30,8 @@
 //   --timeout <ms>      verify per-site timeout (default 60000)
 //   --max-rounds <n>    hard cap on loop iterations (default 5)
 //   --max-attempts <n>  refine/promote attempt cap per site (default 3)
+//   --provider <name>   LLM provider for paste steps
+//   --manual | --extension  choose paste transport (default: EXTENSION_TOKEN controls it)
 //
 // Uses existing phase functions directly (not subprocess-spawned) so
 // state passes in-memory between phases and errors propagate cleanly.
@@ -62,12 +64,19 @@ function parseArgs(argv) {
         parallel: DEFAULTS.parallel,
         timeoutMs: DEFAULTS.timeoutMs,
         maxRounds: DEFAULTS.maxRounds,
-        maxAttempts: DEFAULTS.maxAttempts
+        maxAttempts: DEFAULTS.maxAttempts,
+        provider: null,
+        pasteMode: null
     };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--run' && argv[i + 1]) args.runId = argv[++i];
         else if (a === '--only' && argv[i + 1]) args.only = argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
+        else if (a === '--provider') {
+            if (!argv[i + 1] || argv[i + 1].startsWith('-')) throw new Error('--provider needs a value');
+            args.provider = argv[++i];
+        } else if (a === '--manual') args.pasteMode = 'manual';
+        else if (a === '--extension') args.pasteMode = 'extension';
         else if (a === '--parallel' && argv[i + 1]) args.parallel = Math.max(1, parseInt(argv[++i], 10) || DEFAULTS.parallel);
         else if (a === '--timeout' && argv[i + 1]) args.timeoutMs = Math.max(15000, parseInt(argv[++i], 10) || DEFAULTS.timeoutMs);
         else if (a === '--max-rounds' && argv[i + 1]) args.maxRounds = Math.max(1, parseInt(argv[++i], 10) || DEFAULTS.maxRounds);
@@ -248,7 +257,8 @@ async function runAuto(opts) {
                 await runPaste({
                     runId: opts.runId,
                     only: opts.only,
-                    provider: null,
+                    provider: opts.provider,
+                    mode: opts.pasteMode,
                     skipBrowser: false,
                     timeoutMs: 5 * 60 * 1000,
                     usePoll: true

@@ -125,6 +125,14 @@ pulchowk-events batch run urls.txt --run mybatch
 
 That's the whole pipeline. Behind the scenes it runs `init → discover → generate → check → paste → auto → deploy → report`, each phase with its own checkpoint.
 
+Choose the provider and transport for all paste steps in the pipeline:
+
+```sh
+pulchowk-events batch run urls.txt --run mybatch --provider chatgpt --extension
+```
+
+`--provider` is forwarded to the initial paste and any paste retries in `auto`. If omitted, extension mode uses a per-source `classes.json` provider when configured, otherwise it defaults to DeepSeek. An explicit provider that conflicts with a per-source override is sent to `needs-review`.
+
 Typical fresh-run output:
 
 ```
@@ -167,16 +175,17 @@ When something goes wrong or you want finer control, run individual phases:
 
 | Command | What it does |
 |---|---|
+| `batch run <urls-file> [--run <id>] [--provider <name>] [--manual\|--extension]` | Run the resumable end-to-end pipeline with the selected LLM provider and paste transport |
 | `batch init <urls-file> [--run <id>]` | Create the run directory, snapshot `src/scrapers/` state, seed `urls.txt` |
 | `batch discover [--run <id>]` | Fetch every URL, classify, follow career links, write `classes.json` |
 | `batch generate [--run <id>] [--only ...]` | Render templates for ATS sites, write LLM prompts for the rest |
 | `batch check [--run <id>]` | Validate prompt structure; catches template drift before paste |
-| `batch paste [--run <id>] [--only ...]` | Process pending prompts using manual clipboard or extension transport |
+| `batch paste [--run <id>] [--only ...] [--provider <name>] [--manual\|--extension]` | Process pending prompts using the selected provider and transport |
 | `batch follow [--run <id>]` | Consume LLM redirect verdicts (only when inline follow failed) |
 | `batch refine [--run <id>] [--only ...] [--max-attempts N] [--force]` | Append verify-failure evidence to prompts for LLM retry |
 | `batch promote [--run <id>] [--only ...]` | Regenerate broken template extractors as fresh LLM prompts |
 | `batch verify [--run <id>] [--parallel N] [--timeout MS]` | Stage + run + unstage extractors against live sites |
-| `batch auto [--run <id>]` | Drive the verify → refine → paste → verify loop until stable |
+| `batch auto [--run <id>] [--provider <name>] [--manual\|--extension]` | Drive the verify → refine → paste → verify loop until stable |
 | `batch deploy [--run <id>]` | Copy verified-passing extractors into `src/scrapers/` |
 | `batch report [--run <id>]` | Human-readable bucket summary; exit code 0/1/2 |
 | `batch status [--run <id>]` | Read-only view of current run state |
@@ -486,6 +495,8 @@ Run directories are never auto-pruned. Raw HTML per URL dominates the size. See 
 |---|---|---|
 | `--run <id>` | URL file stem, otherwise latest run | Run directory id |
 | `--only a,b,c` | all sites | Restrict supported source-scoped phases (generate, paste, auto, deploy); init/discover/retry/check/report remain run-wide |
+| `--provider <name>` | no CLI override | Select provider for all paste steps; valid provider names depend on the selected transport. Extension mode uses the deepseek-connect provider registry. |
+| `--manual` / `--extension` | auto from `EXTENSION_TOKEN` | Force clipboard mode or require extension transport |
 | `--parallel N` | 10 | Verify worker count |
 | `--timeout MS` | 60000 | Per-site verify timeout |
 | `--max-rounds N` | 5 | Hard cap on auto loop iterations |
@@ -504,12 +515,12 @@ Run directories are never auto-pruned. Raw HTML per URL dominates the size. See 
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--provider <name>` | router default (`deepseek`) | Select the provider for the prompt transport |
+| `--provider <name>` | source override or default (`deepseek`) in extension mode; DeepSeek in manual mode | Select the provider for this paste step |
 | `--timeout SEC` | 300 | Per-prompt wait |
 | `--no-browser` | false | Skip auto-opening the LLM |
 | `--no-poll` | false | Enter-driven manual mode instead of clipboard polling |
 | `--include-small` | false | Include prompts normally skipped as too small |
-| `--manual` | auto | Force clipboard mode |
+| `--manual` | auto | Force clipboard mode, even when `EXTENSION_TOKEN` is set |
 | `--extension` | auto | Require extension transport; errors if `EXTENSION_TOKEN` is missing |
 
 ### Environment
@@ -521,9 +532,11 @@ Run directories are never auto-pruned. Raw HTML per URL dominates the size. See 
 | `WEB_PORT` | Placeholder-image URL derivation (`http://127.0.0.1:<port>/placeholders/<name>.png`) |
 | `BROWSER_EXECUTABLE_PATH`, `BROWSER_USER_DATA_DIR` | Optional browser/profile for sites that need a warm session |
 | `JOB_BROWSER_EXECUTABLE_PATH`, `JOB_BROWSER_USER_DATA_DIR` | Optional job-specific browser/profile overrides |
-| `EXTENSION_TOKEN` | Enables extension transport; `batch paste --manual` forces clipboard mode |
+| `EXTENSION_TOKEN` | Authenticates the extension bridge and makes paste use extension transport by default; it does not select an LLM provider |
 
-No provider API key is required by this repository. Manual clipboard mode remains available; extension mode sends prompts through the configured extension bridge and requires its token plus a matching provider tab. Without `EXTENSION_TOKEN`, paste defaults to manual mode. Use `--extension` to require extension mode or `--manual` to explicitly select clipboard mode.
+The external `deepseek-connect` bridge does support provider selection: it exposes the provider registry and accepts a provider when opening a chat and sending a prompt. In extension mode, `--provider chatgpt` selects ChatGPT; the token only authenticates the bridge. If no provider is specified, the router defaults to DeepSeek unless a per-source `classes.json` override is configured. A conflicting explicit CLI provider and per-source override is refused for that source.
+
+Manual mode only opens the selected web app and uses the clipboard; it does not send an API request. It supports the listed manual providers (DeepSeek, ChatGPT, and Claude). Without `EXTENSION_TOKEN`, paste defaults to manual mode. Use `--extension` to require extension mode or `--manual` to force clipboard mode.
 
 ---
 

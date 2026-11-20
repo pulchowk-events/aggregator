@@ -9,7 +9,7 @@
 // UI is byte-for-byte consistent with paste.js: same banner title, same
 // divider, same stepLine, same ok/fail/warn/info, same summary block.
 // The one visual difference is the waiting indicator: paste.js shows
-// "waiting for you to copy DeepSeek's reply to your clipboard", this
+// "waiting for you to copy the provider's reply to your clipboard", this
 // shows a spinner with elapsed time. Everything else is identical.
 //
 // Provider routing: ProviderRouter is the only place a provider is
@@ -184,11 +184,11 @@ async function runPasteExtension(opts) {
 
     ui.info('How this works:');
     ui.plain('  For each site:');
-    ui.plain('    1. Extension opens (or creates) a DeepSeek chat named after the source.');
+    ui.plain('    1. Extension opens (or creates) a chat with the routed provider.');
     ui.plain('    2. Prompt sent, reply awaited (5–15s typical).');
     ui.plain('    3. Reply validated, extractor written to generated/.');
     ui.plain('  Requires the deepseek-connect extension loaded in brave://extensions');
-    ui.plain('  with one chat.deepseek.com tab open. Ctrl+C aborts.');
+    ui.plain('  with a tab open for each selected provider. Ctrl+C aborts.');
     ui.blank();
     ui.info(`Mode: extension round-trip (per-prompt timeout ${Math.round((opts.timeoutMs || 180000) / 1000)}s)`);
     ui.blank();
@@ -221,7 +221,7 @@ async function runPasteExtension(opts) {
     } catch (err) {
         ui.fail(`extension not connected: ${describeError(err)}`);
         ui.info('load the deepseek-connect extension in brave://extensions');
-        ui.info('and keep one chat.deepseek.com tab open');
+        ui.info('and keep a tab open for each selected provider');
         ui.info('the popup token must match EXTENSION_TOKEN in .env');
         await transport.shutdown();
         throw err;
