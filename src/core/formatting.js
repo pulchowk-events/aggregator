@@ -80,6 +80,10 @@ function formatJobMessage(job, customPing = null) {
         if (job.registrationUrl || job.url) {
             const link = job.registrationUrl || job.url;
             message += `\n**Apply Here:** [Click here](<${link}>)\n`;
+            // DQ-4: apply-by-email. registrationUrl is the source page when the site only offers mailto:.
+            if (typeof job.applyEmail === 'string' && job.applyEmail.trim()) {
+                message += `\uD83D\uDCE7 **Email:** ${job.applyEmail.trim()}\n`;
+            }
         }
         if (displaySkills.length > 0) {
             message += `\n🏷️ **Skills:** ${displaySkills.join(', ')}${skillsMore > 0 ? ` (+${skillsMore} more)` : ''}\n`;
