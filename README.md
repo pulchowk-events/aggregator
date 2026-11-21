@@ -704,6 +704,8 @@ Read them in the order that matches what you're about to do. If you're modifying
 
 ## Limitations
 
+- **Batch extension speed:** The extension-based paste is intelligent but slow. Large batches require manual oversight and will be optimized later.
+
 **Data**
 
 - Scraper sources are third-party sites with no published APIs. Selector drift happens — the `pickOne` fallback chains and `classifyOutcome` diagnostics make drift visible, but they don't prevent it. `pulchowk-events diagnose <name>` and `pulchowk-events fix` make per-source testing and drift repair a one-command operation.
