@@ -587,11 +587,13 @@ pasting an old prompt. Compact prompts are not skipped only because they are
 under 40 KB; paste checks for captured evidence. `--include-small` forces
 prompts with no captured evidence through.
 
-If an extension request times out after dispatch, the batch stops rather than
-retrying or sending later sources. The global request guard blocks later
-extension jobs. Confirm the extension queue is idle and the original CLI
-process has exited before using `--resume-after-timeout`; that flag clears
-local bookkeeping, not remote work.
+Extension requests carry request IDs through to the bridge. The batch retries
+only when the bridge confirms a failure happened before dispatch; an uncertain
+or post-dispatch failure stops the batch and leaves a global request guard.
+Inspect the provider tab and confirm the bridge queue is idle, then make sure
+the original CLI process has exited before using `--resume-after-timeout`.
+That flag clears local bookkeeping only—it does not cancel remote work or
+prove that a reply was not already generated.
 
 `batch run --dry-run` is currently parsed but is **not** a safety switch. Use
 `--skip-deploy` to prevent deployment, keep `DEV_MODE=true` for bot safety,

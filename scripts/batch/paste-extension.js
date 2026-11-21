@@ -37,7 +37,6 @@ const { hasCapturedPromptEvidence } = require('./lib/prompt-evidence');
 const { parseVerdict, isSameDomainRedirect } = require('./lib/llm-header');
 const { followOneSite } = require('./follow');
 const { audit } = require('./lib/audit');
-const { ExtensionTransport } = require('./lib/transport-extension');
 const { ProviderRouter, ProviderRouterError } = require('./lib/provider-router');
 const ui = require('./lib/ui');
 
@@ -45,51 +44,48 @@ const MAX_HOPS = 3;
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-function isTimeoutError(err) {
-    const code = String(err && err.code || '').toLowerCase();
-    const message = String(err && err.message || '');
-    return code === 'extension_timeout' || code === 'timeout' || code === 'etimedout' ||
-        code === 'request_timeout' || /\b(?:timed?\s*out|timeout)\b/i.test(message);
-}
-
-// Retry policy per deepseek-connect/docs/error-codes.md:
-//   rate_limited         -> 1 delayed retry
-//   retryable            -> up to 3 attempts (2 retries)
-//   userFixable+no-retry -> fail immediately
-//   neither              -> fail immediately
+// Retry only a retryable failure that the bridge confirms was not dispatched.
+// Each attempt gets a unique ID so the bridge can deduplicate retries safely.
 // No beeps — that's a wizard UX follow-up; the error surfaces in the
 // summary and the per-source row.
-async function sendWithRetry(transport, chatName, provider, prompt, timeoutMs) {
+async function sendWithRetry(transport, sync, chatName, provider, prompt, timeoutMs) {
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-            return await transport.chat({ chatName, provider, prompt, timeoutMs });
+            return await sendGuardedRequest(sync, {
+                name: chatName,
+                provider,
+                operation: 'chat'
+            }, (pending) => transport.chat({
+                chatName,
+                provider,
+                prompt,
+                timeoutMs,
+                requestId: pending.requestId,
+            }));
         } catch (err) {
             const code = err.code || 'unknown';
             const retryable = err.retryable === true;
             const retryAfter = err.retryAfter || 0;
 
-            // The extension may have accepted the request before the client
-            // timed out. Retrying could enqueue duplicate work behind it.
-            if (isTimeoutError(err)) throw err;
-            if (code === 'rate_limited') {
-                if (attempt >= 2) throw err;
-                ui.warn(`rate limited — retrying in ${Math.round(retryAfter / 1000)}s`);
-                await sleep(retryAfter);
-                continue;
-            }
-            if (!retryable) throw err;
+            // A retry is safe only when the bridge confirms this attempt was
+            // never dispatched. Each attempt gets a fresh id because the
+            // bridge deduplicates request IDs to their original result.
+            if (err.executionState !== 'not_dispatched' || !retryable) throw err;
             if (attempt >= 3) throw err;
             if (retryAfter > 0) await sleep(retryAfter);
-            ui.warn(`retryable failure (${code}) — attempt ${attempt + 1}/3`);
+            ui.warn(`${code} before dispatch — retrying attempt ${attempt + 1}/3` +
+                (retryAfter > 0 ? ` in ${Math.round(retryAfter / 1000)}s` : ''));
         }
     }
 }
 
 function describeError(err) {
     if (!err) return 'unknown error';
-    if (err.code && err.reason) return `${err.code}: ${err.reason}`;
-    if (err.code) return err.code;
-    return err.message || String(err);
+    if (err.extensionRequestUncertain) return err.message;
+    const label = err.code ? `${err.code}: ${err.reason || err.message || err.code}` : (err.message || String(err));
+    const state = err.executionState ? ` [${err.executionState}]` : '';
+    const request = err.requestId ? ` [request ${err.requestId}]` : '';
+    return `${label}${state}${request}`;
 }
 
 // Spinner that also ticks elapsed time in the label. Uses ui.spinner as
@@ -230,6 +226,7 @@ async function runPasteExtension(opts) {
         throw new Error('prompt structure validation failed; aborting before LLM');
     }
 
+    const { ExtensionTransport } = require('./lib/transport-extension');
     const transport = new ExtensionTransport();
     try {
         await transport.start();
@@ -352,20 +349,20 @@ async function runPasteExtension(opts) {
                 const provider = decision.provider;
                 if (hop === 0) ui.info(`provider: ${provider} (${decision.source})`);
 
-                // Establish the chat. On first attempt this navigates to
-                // / for a fresh chat; on retry it finds the existing chat
-                // in the sidebar so the LLM sees its prior turn.
-                const persisted = null;
+                // Establish the chat, navigating directly to its saved URL
+                // when this source already has a chat on this provider.
+                const persisted = chatMap.get(name, provider);
                 let openResult;
                 try {
                     openResult = await sendGuardedRequest(extensionSync, {
                         name,
                         provider,
                         operation: 'open'
-                    }, () => transport.open({
+                    }, (request) => transport.open({
                         chatName: name,
                         provider,
                         url: persisted && persisted.url,
+                        requestId: request.requestId,
                     }));
                 } catch (err) {
                     ui.fail(`open("${name}" via ${provider}) failed: ${describeError(err)}`);
@@ -382,11 +379,14 @@ async function runPasteExtension(opts) {
                 spinner.start();
                 let result;
                 try {
-                    result = await sendGuardedRequest(extensionSync, {
+                    result = await sendWithRetry(
+                        transport,
+                        extensionSync,
                         name,
                         provider,
-                        operation: 'chat'
-                    }, () => sendWithRetry(transport, name, provider, promptBody, opts.timeoutMs || 180000));
+                        promptBody,
+                        opts.timeoutMs || 180000
+                    );
                 } catch (err) {
                     spinner.stop(`failed: ${describeError(err)}`, false);
                     audit.skip(runDir, {
@@ -611,4 +611,4 @@ function emptyResult() {
     return { written: 0, redirected: 0, skipped: 0, failed: 0, manualFollow: [], notCareers: [], needsReview: [] };
 }
 
-module.exports = { runPasteExtension };
+module.exports = { runPasteExtension, sendWithRetry };

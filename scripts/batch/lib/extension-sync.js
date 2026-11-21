@@ -153,17 +153,30 @@ function createExtensionSync(opts = {}) {
 async function sendGuardedRequest(sync, request, send) {
     const pending = sync.beginRequest(request);
     try {
-        const result = await send();
+        const result = await send(pending);
         sync.completeRequest(pending.requestId);
         return result;
     } catch (err) {
+        if (err && err.executionState === 'not_dispatched') {
+            sync.completeRequest(pending.requestId);
+            throw err;
+        }
         const reason = err && (err.message || err.code) ? (err.message || err.code) : String(err);
+        const requestId = err && err.requestId ? err.requestId : pending.requestId;
+        const executionState = err && err.executionState ? err.executionState : 'outcome_unknown';
         const failure = new Error(
-            `extension ${request.operation} for "${request.name}" via ${request.provider} failed after dispatch: ` +
-            `${reason}. It may still be queued. No later source was sent; confirm the extension queue is idle, ` +
+            `extension ${request.operation} for "${request.name}" via ${request.provider} failed ` +
+            `(${executionState}, request ${requestId}): ${reason}. It may still be queued. ` +
+            'No later source was sent; confirm the extension queue is idle, ' +
             'then rerun with --resume-after-timeout to acknowledge the pending request.'
         );
         failure.code = err && err.code ? err.code : 'extension_request_uncertain';
+        failure.requestId = requestId;
+        failure.executionState = executionState;
+        failure.retryable = false;
+        failure.userFixable = !!(err && err.userFixable);
+        failure.details = err && err.details;
+        failure.trace = err && err.trace;
         failure.stopBatchRun = true;
         failure.extensionRequestUncertain = true;
         failure.cause = err;

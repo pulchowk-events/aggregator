@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const { createExtensionSync, sendGuardedRequest } = require('../batch/lib/extension-sync');
+const { sendWithRetry } = require('../batch/paste-extension');
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'extension-sync-'));
 test.after(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
@@ -111,6 +112,83 @@ test('successful dispatch clears the guard; a timed-out dispatch leaves it and s
 
     assert.equal(fs.existsSync(markerPath), true);
     assert.throws(() => guard.assertReady(false), (err) => err.stopBatchRun);
+});
+
+test('guard request id is forwarded and confirmed pre-dispatch failures clear the guard', async () => {
+    const markerPath = path.join(tmpDir, 'request-id.json');
+    const guard = createExtensionSync({ markerPath });
+    let sentId;
+
+    await assert.rejects(() => sendGuardedRequest(guard, {
+        name: 'source-five',
+        provider: 'deepseek',
+        operation: 'chat'
+    }, async (pending) => {
+        sentId = pending.requestId;
+        const err = new Error('queue deadline elapsed');
+        err.code = 'extension_timeout';
+        err.requestId = pending.requestId;
+        err.executionState = 'not_dispatched';
+        err.retryable = true;
+        throw err;
+    }), (err) => err.executionState === 'not_dispatched' && err.requestId === sentId);
+
+    assert.match(sentId, /^[a-f0-9]{32}$/);
+    assert.equal(fs.existsSync(markerPath), false);
+});
+
+test('chat retries only confirmed-not-dispatched requests with a fresh request id', async () => {
+    const markerPath = path.join(tmpDir, 'safe-retry.json');
+    const guard = createExtensionSync({ markerPath });
+    const ids = [];
+    let attempts = 0;
+    const transport = {
+        async chat(request) {
+            ids.push(request.requestId);
+            attempts++;
+            if (attempts === 1) {
+                const err = new Error('extension queue expired');
+                err.code = 'extension_timeout';
+                err.requestId = request.requestId;
+                err.executionState = 'not_dispatched';
+                err.retryable = true;
+                throw err;
+            }
+            return { content: 'ok', requestId: request.requestId };
+        }
+    };
+
+    const result = await sendWithRetry(transport, guard, 'source-six', 'deepseek', 'prompt', 1000);
+    assert.equal(result.content, 'ok');
+    assert.equal(attempts, 2);
+    assert.notEqual(ids[0], ids[1]);
+    assert.equal(fs.existsSync(markerPath), false);
+});
+
+test('chat does not retry an outcome-unknown request and preserves its guard id', async () => {
+    const markerPath = path.join(tmpDir, 'unknown-outcome.json');
+    const guard = createExtensionSync({ markerPath });
+    let attempts = 0;
+    const transport = {
+        async chat(request) {
+            attempts++;
+            const err = new Error('client wait timed out');
+            err.code = 'extension_timeout';
+            err.requestId = request.requestId;
+            err.executionState = 'outcome_unknown';
+            err.retryable = true;
+            throw err;
+        }
+    };
+
+    await assert.rejects(
+        () => sendWithRetry(transport, guard, 'source-seven', 'qwen', 'prompt', 1000),
+        (err) => err.stopBatchRun && err.executionState === 'outcome_unknown' &&
+            /request [a-f0-9]{32}/.test(err.message)
+    );
+    assert.equal(attempts, 1);
+    const pending = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+    assert.match(pending.requestId, /^[a-f0-9]{32}$/);
 });
 
 test('malformed guard state fails closed without deleting the file', () => {
