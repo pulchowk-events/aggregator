@@ -4,7 +4,7 @@
 //
 // Policy (product decision, 2026-11-15):
 //   - Nepal locations            -> keep
-//   - India locations            -> keep (many Pulchowk students apply here)
+//   - India locations            -> drop (policy change 2026-11-21; was keep)
 //   - Remote                     -> keep (regardless of company origin)
 //   - Foreign (non-India)        -> drop
 //   - Empty / ambiguous / unknown ->
@@ -40,6 +40,36 @@ const remotePats = (rules.remote_patterns || []).map(s => s.toLowerCase());
 const neighborhoods = (rules.known_nepali_neighborhoods || []).map(s => s.toLowerCase());
 const misspellings = Object.keys(rules.misspelling_variants || {}).map(s => s.toLowerCase());
 
+// ---- Reject list (policy change 2026-11-21) ---------------------------------
+// India and other foreign markets are dropped. Nepal patterns are still checked
+// first in classifyLocation, so a multi-location string naming a Nepali place
+// passes. The list runs before the remote rule, so "Remote, India" and
+// "Remote (US only)" drop while plain "Remote" still passes.
+const REJECT_TERMS = [
+    'india', 'bangalore', 'bengaluru', 'new delhi', 'delhi', 'mumbai', 'hyderabad',
+    'pune', 'chennai', 'kolkata', 'ahmedabad', 'jaipur', 'noida', 'gurgaon', 'gurugram',
+    'tamil nadu', 'karnataka', 'maharashtra', 'telangana',
+    'united states', 'united kingdom', 'canada', 'australia'
+];
+const REJECT_TERMS_RE = new RegExp(
+    '\\b(?:' + REJECT_TERMS.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\b', 'i');
+// Case-sensitive on purpose: "US"/"UK" as words, never "us" in prose.
+const REJECT_CODES_RE = /(?:^|[^A-Za-z])(US|USA|UK|U\.S\.A?\.?|U\.K\.?)(?![A-Za-z])/;
+const US_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA',
+    'ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI',
+    'SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'];
+// ", NJ" / ", NJ 08540" at the end of the string, case-sensitive.
+const US_STATE_RE = new RegExp(',\\s*(?:' + US_STATES.join('|') + ')\\b\\s*(?:\\d{5}(?:-\\d{4})?)?\\s*$');
+
+function matchRejectList(s) {
+    let m = s.match(REJECT_TERMS_RE);
+    if (m) return m[0].toLowerCase();
+    m = s.match(REJECT_CODES_RE);
+    if (m) return m[1];
+    if (US_STATE_RE.test(s)) return 'us-state';
+    return null;
+}
+
 /**
  * Classify a single location string.
  * @param {string|null|undefined} loc
@@ -53,7 +83,11 @@ function classifyLocation(loc) {
     // Nepal patterns first -- highest priority.
     for (const re of nepalRes) if (re.test(s)) return { class: 'nepal', matchedBy: 'nepal_re' };
 
-    // India (user policy: keep).
+    // Explicit reject list: after Nepal (a Nepal signal wins), before India/remote.
+    const rejected = matchRejectList(s);
+    if (rejected) return { class: 'foreign', matchedBy: 'reject:' + rejected };
+
+    // India patterns from the gazetteer (also dropped, see isNepalRelevant).
     for (const re of indiaRes) if (re.test(s)) return { class: 'india', matchedBy: 'india_re' };
 
     const lower = s.toLowerCase();
@@ -98,7 +132,7 @@ function isNepalRelevant(item, source) {
 
     switch (c.class) {
         case 'nepal':  return { keep: true, reason: 'nepal' };
-        case 'india':  return { keep: true, reason: 'india' };
+        case 'india':  return { keep: false, reason: 'india' };
         case 'remote': return { keep: true, reason: 'remote' };
         case 'foreign': return { keep: false, reason: c.matchedBy };
         case 'empty':  return { keep: true, reason: 'empty', review: 'empty' };
