@@ -351,10 +351,10 @@ async function _runAutopostTickLocked(bot, itemType, mode) {
         }
     }
 
-    // Sufficient-data filter (live only): a job needs an apply-by date, a location or a salary.
+    // Sufficient-data filter (live and test): a job needs an apply-by date, a location or a salary.
     const afterData = [];
     for (const e of afterImage) {
-        if (channelMode === 'main' && !hasSufficientData(e)) {
+        if (!hasSufficientData(e)) {
             const key = String(e.id || e.title || '');
             if (!INSUFFICIENT_AUDITED.has(key)) {
                 if (INSUFFICIENT_AUDITED.size >= INSUFFICIENT_AUDITED_MAX) INSUFFICIENT_AUDITED.clear();
@@ -378,8 +378,8 @@ async function _runAutopostTickLocked(bot, itemType, mode) {
             continue;
         }
 
-        // sanitize may have cleared a field, so re-check after it (live only).
-        if (channelMode === 'main' && !hasSufficientData(event)) {
+        // sanitize may have cleared a field, so re-check after it (live and test).
+        if (!hasSufficientData(event)) {
             continue;
         }
 

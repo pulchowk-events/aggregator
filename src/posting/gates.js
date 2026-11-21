@@ -26,6 +26,13 @@
 const { isValidImageUrl } = require('../core/normalize');
 const { canUsePlaceholder } = require('../scrapers/placeholderRender');
 
+// EDGE-1: dynamic placeholders are jobs-only. An event or scholarship with no real image
+// never gets a generated placeholder: events are blocked from live, scholarships are exempt
+// in hasValidImage and post text-only.
+function canAttachPlaceholder(event) {
+    return Boolean(event) && event.itemType === 'job' && canUsePlaceholder(event);
+}
+
 function hasValidImage(bot, event) {
     if (!event) return false;
     // Product decision: images are optional for scholarships.
@@ -37,27 +44,40 @@ function hasValidImage(bot, event) {
     if (event.itemType === 'scholarship') return true;
     // Session 2: a null image (or one of our own placeholder URLs) is fine, because
     // post.js and /pending render the placeholder PNG locally and attach it.
-    return isValidImageUrl(event.image) || canUsePlaceholder(event);
+    return isValidImageUrl(event.image) || canAttachPlaceholder(event);
 }
 
 // Session 2: a JOB must carry at least one of: apply-by date, location, salary.
-// Stateless (judged on the current fields), LIVE only, no force bypass. Scoped to jobs
+// Stateless (judged on the current fields), enforced for LIVE and TEST, no force bypass. Scoped to jobs
 // because those fields only exist on jobs; events and scholarships always pass.
 //   apply-by : applicationEndsRaw or date (non-blank, not TBD-like)
-//   location : non-blank, not TBD-like
-//   salary   : salary or price containing at least one digit (rejects "rs, K")
+//   location : non-blank, not TBD-like, under 50 chars
+//   salary   : salary or price containing at least one digit and under 30 chars (rejects "rs, K")
 const SUFFICIENCY_BLANK_RE = /^(?:tbd|tba|n\/a|na|none|null|undefined|-+)$/i;
 function hasText(v) {
     if (typeof v !== 'string') return false;
     const s = v.trim();
     return s !== '' && !SUFFICIENCY_BLANK_RE.test(s);
 }
+// EDGE-1: sanity limits. The GrowByData extractor put paragraphs into location and salary,
+// which are non-blank and used to pass. A real salary ("Rs. 50k") or location
+// ("Kathmandu, Nepal") is short; a value at or over its limit counts as missing.
+const SALARY_MAX_CHARS = 30;
+const LOCATION_MAX_CHARS = 50;
+function hasShortText(v, max) {
+    return hasText(v) && v.trim().length < max;
+}
+
 function hasSufficientData(event) {
     if (!event) return false;
     if (event.itemType !== 'job') return true;
     if (hasText(event.applicationEndsRaw) || hasText(event.date)) return true;
-    if (hasText(event.location)) return true;
-    const pay = [event.salary, event.price].find((v) => v !== null && v !== undefined && /\d/.test(String(v)));
+    if (hasShortText(event.location, LOCATION_MAX_CHARS)) return true;
+    const pay = [event.salary, event.price].find((v) => {
+        if (v === null || v === undefined) return false;
+        const s = String(v).trim();
+        return /\d/.test(s) && s.length < SALARY_MAX_CHARS;
+    });
     return pay !== undefined;
 }
 
@@ -219,5 +239,6 @@ module.exports = {
     hasValidImage,
     shouldPingForEvent,
     hasDataQualityWarnings,
+    canAttachPlaceholder,
     hasSufficientData
 };

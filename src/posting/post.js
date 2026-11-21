@@ -36,10 +36,11 @@ const { AttachmentBuilder } = require('discord.js');
 const { auditLog } = require('../core/auditLogger');
 const markers = require('../core/markers');
 const { resolveAttachmentImage } = require('./imageBytes');
-const { renderPlaceholderPng, canUsePlaceholder, placeholderLabelFor } = require('../scrapers/placeholderRender');
+const { renderPlaceholderPng, placeholderLabelFor } = require('../scrapers/placeholderRender');
 const { sanitizeEventFields } = require('../core/sanitize');
 const { buildPostContent } = require('../core/formatting');
-const { hasValidImage, shouldPingForEvent, hasDataQualityWarnings, hasSufficientData, getJunkTitleReason } = require('./gates');
+const { hasValidImage, shouldPingForEvent, hasDataQualityWarnings, hasSufficientData, getJunkTitleReason, canAttachPlaceholder } = require('./gates');
+const { isValidImageUrl } = require('../core/normalize');
 
 // Junk-title refusals are audited once per (item, rule) per process. A
 // pending queue that stays junk would otherwise write one audit line per
@@ -149,14 +150,14 @@ async function _postEventToCategoryInner(bot, event, mode, categoryKeyOverride =
         noteJunkTitleOnce(event, junkRule);
         return { ok: false, reason: 'junk_title', skipped: 'junk_title', junkRule };
     }
-    if (mode === 'main' && !hasValidImage(bot, event) && !canUsePlaceholder(event)) {
+    if (mode === 'main' && !hasValidImage(bot, event)) {
         auditLog('post_event_outcome', `Post outcome for "${event.title}": failed (no_image)`,
             { ...postOutcomeBase, channelId, ok: false, reason: 'no_image' }, 'warn');
         return { ok: false, reason: 'no_image' };
     }
 
-    // Session 2: a job needs an apply-by date, a location or a salary (LIVE only, no force bypass).
-    if (mode === 'main' && !hasSufficientData(event)) {
+    // Session 2: a job needs an apply-by date, a location or a salary (LIVE and TEST, no force bypass).
+    if (!hasSufficientData(event)) {
         auditLog('post_event_outcome', 'Post outcome for "' + event.title + '": failed (insufficient_data)',
             { ...postOutcomeBase, channelId, ok: false, reason: 'insufficient_data' }, 'warn');
         return { ok: false, reason: 'insufficient_data' };
@@ -229,7 +230,7 @@ async function _postEventToCategoryInner(bot, event, mode, categoryKeyOverride =
         // not fatal to the send itself.
         markers.heartbeat(dedupKey, channelId);
 
-        if (canUsePlaceholder(event)) {
+        if (canAttachPlaceholder(event)) {
             // No real image (null) or a generated-placeholder URL: render the PNG locally and
             // upload it as a file. No URL is involved, so Discord never has to reach this machine.
             try {
@@ -248,7 +249,7 @@ async function _postEventToCategoryInner(bot, event, mode, categoryKeyOverride =
                 markers.heartbeat(dedupKey, channelId);
                 await channel.send(message);
             }
-        } else if (hasValidImage(bot, event)) {
+        } else if (isValidImageUrl(event.image)) {
             try {
                 const response = await axios.get(event.image, {
                     responseType: 'arraybuffer',

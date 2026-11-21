@@ -116,7 +116,7 @@ function startWebServer(bot) {
 
             if (!result.ok) {
                 if (result.reason === 'no_image') return res.status(422).json({ error: 'Item has no image — cannot go to a LIVE channel.', noImage: true });
-                if (result.reason === 'insufficient_data') return res.status(422).json({ error: 'Job has no apply-by date, location or salary - cannot go to a LIVE channel.', insufficientData: true });
+                if (result.reason === 'insufficient_data') return res.status(422).json({ error: 'Job has no apply-by date, location or salary - cannot go to a LIVE or TEST channel.', insufficientData: true });
                 if (result.reason === 'data_quality_warning') return res.status(422).json({ error: 'Item has unresolved data-quality warnings.', dataQualityWarnings: event.dataQualityWarnings || [] });
                 if (result.reason === 'already_posted' || result.reason === 'already_posted_or_racing') return res.status(409).json({ error: 'Already posted to this channel.', alreadyPosted: true });
                 if (result.reason === 'in_progress') return res.status(429).json({ error: 'A post for this item to this channel is already in progress.' });

@@ -6,8 +6,8 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBu
 const { auditLog } = require('../core/auditLogger');
 const { isEventPast, compareByEventDate } = require('../core/dateUtils');
 const { deduplicateEventsByKey } = require('../posting/dedup');
-const { hasSufficientData } = require('../posting/gates');
-const { renderPlaceholderPng, canUsePlaceholder, placeholderLabelFor } = require('../scrapers/placeholderRender');
+const { hasSufficientData, canAttachPlaceholder } = require('../posting/gates');
+const { renderPlaceholderPng, placeholderLabelFor } = require('../scrapers/placeholderRender');
 
 const EMBED_LIMITS = { title: 256, description: 4096, fieldName: 256, fieldValueTarget: 1000 };
 
@@ -56,13 +56,13 @@ async function sendOnePendingEmbed(bot, channel, event) {
         description += `\n\n⏳ **Less than ${bot.getAutopostMinLeadDays()} day(s) away** - registration is likely closing/closed. Autopost will skip this; post manually only if you are sure it is still valid.`;
     }
     const eventHasImage = bot.hasValidImage(event);
-    const usePlaceholder = canUsePlaceholder(event);
+    const usePlaceholder = canAttachPlaceholder(event);
     const dataSufficient = hasSufficientData(event);
     if (usePlaceholder && !event.image) {
         description += '\n\n\u{1F5BC}\u{FE0F} **No image** - a branded placeholder is generated and attached when this is posted.';
     }
     if (!dataSufficient) {
-        description += '\n\n\u26D4 **Insufficient data** - a job needs at least one of: apply-by date, location, salary. It cannot go to a LIVE channel until one is added (Customize).';
+        description += '\n\n\u26D4 **Insufficient data** - a job needs at least one of: apply-by date, a short location (under 50 chars), or a salary figure (under 30 chars). It cannot go to a LIVE or TEST channel until one is added (Customize).';
     }
     if (!eventHasImage) {
         description += '\n\n🖼️ **No image** - this can never go to a LIVE channel until one is added. Use Customize to add an image URL, or it will stay Test-only.';
@@ -128,7 +128,7 @@ async function sendOnePendingEmbed(bot, channel, event) {
 
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`post_live:${event.id}`).setLabel('Post to Live').setStyle(ButtonStyle.Success).setDisabled(!eventHasImage || !dataSufficient),
-        new ButtonBuilder().setCustomId(`post_test:${event.id}`).setLabel('Post to Test').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`post_test:${event.id}`).setLabel('Post to Test').setStyle(ButtonStyle.Primary).setDisabled(!dataSufficient),
         new ButtonBuilder().setCustomId(`customize:${event.id}`).setLabel('Customize').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`skip:${event.id}`).setLabel('Skip').setStyle(ButtonStyle.Danger)
     );
