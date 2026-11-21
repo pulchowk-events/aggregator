@@ -1,7 +1,7 @@
 // scripts/batch/lib/transport-extension.js
 //
 // Thin wrapper around deepseek-connect's createServer + createClient.
-// One instance per paste run. start() binds an OS-assigned port and
+// One instance per paste run. start() binds the configured port and
 // probes readiness; chat() and open() dispatch single-attempt requests
 // (retry policy lives in paste-extension.js, not here — the transport
 // reports errors as-is and the loop decides whether to resend).
@@ -65,15 +65,18 @@ class ExtensionTransport {
     // open({ chatName })                        -> sidebar walk OR fresh /
     // open({ chatName, url })                   -> direct nav, skip sidebar
     // open({ chatName, url, provider })         -> provider-scoped (default: deepseek)
-    async open({ chatName, url, provider } = {}) {
-        return this.client.open({ chatName, url, provider });
+    async open({ chatName, url, provider, requestId, timeoutMs, signal } = {}) {
+        return this.client.open({ chatName, url, provider, requestId, timeoutMs, signal });
     }
 
-    async chat({ chatName, prompt, timeoutMs, provider }) {
+    async chat({ chatName, prompt, timeoutMs, provider, url, requestId, signal }) {
         const result = await this.client.chat({
             messages: [{ role: 'user', content: prompt }],
             chat: chatName,
             provider,
+            url,
+            requestId,
+            signal,
             timeoutMs: timeoutMs || 180000,
         });
         return {
@@ -81,6 +84,7 @@ class ExtensionTransport {
             url: result.url,
             elapsedMs: result.elapsedMs,
             chat: result.chat,
+            requestId: result.requestId || requestId,
             provider: provider || 'deepseek',
         };
     }
