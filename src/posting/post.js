@@ -261,7 +261,14 @@ async function _postEventToCategoryInner(bot, event, mode, categoryKeyOverride =
                     auditLog('image_placeholder_swap', 'Image bytes not previewable by Discord; swapped to source placeholder for "' + event.title + '"',
                         { id: event.id || null, source: event.source || null, imageUrl: event.image || null, contentType });
                 }
-                const attachment = new AttachmentBuilder(resolved.buffer, { name: `event.${resolved.ext}` });
+                // IMG-2: attachment type comes from the actual bytes, never from headers or a default.
+                const { sniffImage } = require('../scrapers/imageSniff');
+                const sniffed = sniffImage(resolved && resolved.buffer);
+                if (!sniffed) {
+                    const buf = resolved && resolved.buffer ? Buffer.from(resolved.buffer) : null;
+                    throw new Error('image bytes are not jpg/png/gif/webp (declared ext ' + (resolved && resolved.ext) + ', ' + (buf ? buf.length : 0) + ' bytes, first bytes ' + (buf ? buf.subarray(0, 8).toString('hex') : 'none') + ')');
+                }
+                const attachment = new AttachmentBuilder(resolved.buffer, { name: 'event.' + sniffed.ext });
                 await channel.send({ content: message, files: [attachment] });
             } catch (error) {
                 console.error('Failed to fetch/send image, sending text only:', error.message);

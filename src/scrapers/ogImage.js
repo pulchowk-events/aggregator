@@ -24,12 +24,22 @@
 const fs = require('fs');
 const path = require('path');
 const env = require('../config/env');
+const { sniffImage } = require('./imageSniff');
 
 const REPO = path.resolve(__dirname, '..', '..');
 const CACHE_PATH = path.join(REPO, 'data', 'og-image-cache.json');
 const TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const FAILURE_TTL_MS = 6 * 60 * 60 * 1000;  // retry a broken site in 6h
 const FETCH_TIMEOUT_MS = 8000;
+const IMAGE_PROBE_TIMEOUT_MS = 8000;
+
+// IMG-2: cache schema version. Entries without a matching "v" are treated as
+// missing and refetched, which drops entries cached before image validation
+// existed (e.g. a .ico favicon stored as ok:true). Bump to invalidate again.
+const CACHE_VERSION = 2;
+
+// Content types that are never usable as a Discord embed/attachment image.
+const REJECT_TYPES_RE = /text\/html|image\/x-icon|image\/vnd\.microsoft\.icon|image\/svg/i;
 
 let cache = null;
 
@@ -138,6 +148,47 @@ function matchFavicon(html, baseUrl) {
     try { return new URL(m[1], baseUrl).href; } catch (e) { return null; }
 }
 
+// IMG-2: confirm a candidate URL is really a jpg/png/gif/webp. Rejects non-2xx,
+// html/ico/svg content-types, and anything whose first bytes are not a known image
+// signature (this also catches HTML soft 404s served with a 200). Reads only the
+// first few bytes of the body. Returns the URL or null. Never throws.
+async function validateImage(url) {
+    if (!url) return null;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), IMAGE_PROBE_TIMEOUT_MS);
+    try {
+        const res = await fetch(url, {
+            method: 'GET',
+            signal: ctrl.signal,
+            redirect: 'follow',
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'image/jpeg,image/png,image/webp,image/gif,*/*;q=0.1' }
+        });
+        if (!res.ok) return null;
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (REJECT_TYPES_RE.test(ct)) return null;
+        let head = Buffer.alloc(0);
+        if (res.body && typeof res.body.getReader === 'function') {
+            const reader = res.body.getReader();
+            try {
+                while (head.length < 16) {
+                    const chunk = await reader.read();
+                    if (chunk.done) break;
+                    head = Buffer.concat([head, Buffer.from(chunk.value)]);
+                }
+            } finally {
+                try { await reader.cancel(); } catch (e) { /* ignore */ }
+            }
+        } else {
+            head = Buffer.from(await res.arrayBuffer()).subarray(0, 16);
+        }
+        return sniffImage(head) ? url : null;
+    } catch (e) {
+        return null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 async function fetchAndExtract(url) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
@@ -156,13 +207,12 @@ async function fetchAndExtract(url) {
         const baseUrl = res.url || url;
         const ogCandidate = absolutize(ogRaw, baseUrl);
         const favCandidate = absolutize(matchFavicon(html, baseUrl), baseUrl);
-        // Probe only if we actually upgraded from http (upgrade is the only
-        // path where reachability is uncertain). Pure-https URLs are trusted
-        // as-is -- they came from the site with the right scheme.
-        const ogWasHttp = ogRaw && /^http:\/\//i.test(ogRaw);
-        const favWasHttp = matchFavicon(html, baseUrl) && /^http:\/\//i.test(matchFavicon(html, baseUrl));
-        const og = ogWasHttp ? await probeHttps(ogCandidate) : ogCandidate;
-        const favicon = favWasHttp ? await probeHttps(favCandidate) : favCandidate;
+        // IMG-2: every candidate must really be a jpg/png/gif/webp (content-type
+        // plus magic bytes), not just upgraded ones. HTML soft 404s, .ico and .svg
+        // are discarded, so a bad favicon can no longer be cached as usable.
+        // deriveImageForUrl still prefers og over favicon, now only when valid.
+        const og = await validateImage(ogCandidate);
+        const favicon = await validateImage(favCandidate);
         return { og, favicon, status: res.status };
     } catch (e) {
         return { og: null, favicon: null, status: null, error: e.message };
@@ -184,7 +234,7 @@ async function deriveImageForUrl(url) {
     if (!host) return null;
     const c = loadCache();
     const now = Date.now();
-    const existing = c[host];
+    const existing = c[host] && c[host].v === CACHE_VERSION ? c[host] : null;
 
     // Successful cache hit within TTL: return immediately.
     if (existing && existing.ok && (now - (existing.fetchedAt || 0)) < TTL_MS) {
@@ -216,6 +266,7 @@ async function deriveImageForUrl(url) {
                 ok,
                 og: result.og || null,
                 favicon: result.favicon || null,
+                v: CACHE_VERSION,
                 fetchedAt: now,
                 status: result.status || null,
                 error: result.error || null
@@ -235,7 +286,7 @@ function getCachedImage(url) {
     const host = hostOf(url);
     if (!host) return null;
     const c = loadCache();
-    const e = c[host];
+    const e = c[host] && c[host].v === CACHE_VERSION ? c[host] : null;
     if (!e) return null;
     return e.og || e.favicon || null;
 }
