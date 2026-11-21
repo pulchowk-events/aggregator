@@ -12,6 +12,7 @@ const { TITLE_EMOJIS, DESCRIPTION_EMOJIS, pickRandom, VERIFIED_BADGE } = require
 const { MAX_TAGS_RENDERED, MAX_TAG_LENGTH, DISCORD_CONTENT_LIMIT, SAFETY_BUFFER, SAFETY_NOTE } = require('../config/constants');
 const { sanitizeTagsForDisplay, hardTruncateDescription } = require('./normalize');
 const { auditLog } = require('./auditLogger');
+const { formatDescription } = require('./descriptionFormat');
 
 // Appended to job descriptions only. The SAFETY_NOTE toggle lives in
 // constants.js — currently disabled by making this return the input
@@ -30,6 +31,7 @@ function appendSafetyNote(text) {
 // branch is audited so we know if the guard ever really fires.
 function buildLengthGuardedMessage({ item, build }) {
     let description = item.description || '';
+    if (item.itemType === 'job') description = formatDescription(description);
     if (item.itemType === 'job') description = appendSafetyNote(description);
 
     let message = build(description);

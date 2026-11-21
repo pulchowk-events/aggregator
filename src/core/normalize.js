@@ -112,6 +112,23 @@ function isValidImageUrl(value) {
     return true;
 }
 
+// Login-redirect wrappers (e.g. kumarijob: /jobseeker?next=<real job url>) send people to a login page.
+// Returns the inner URL when 'next' is an absolute http(s) URL on the SAME host; anything else is returned unchanged.
+function unwrapRedirectUrl(value) {
+    if (typeof value !== 'string') return value;
+    const v = value.trim();
+    if (!/^https?:\/\//i.test(v) || !/[?&]next=/i.test(v)) return value;
+    try {
+        const u = new URL(v);
+        const inner = u.searchParams.get('next');
+        if (!inner || !/^https?:\/\//i.test(inner)) return value;
+        const t = new URL(inner);
+        const host = (h) => h.replace(/^www\./i, '').toLowerCase();
+        if (host(t.hostname) !== host(u.hostname)) return value;
+        return t.toString();
+    } catch (e) { return value; }
+}
+
 // Registration / source URLs must be absolute http(s) and parseable.
 function isValidRegistrationUrl(value) {
     if (!value || typeof value !== 'string') return false;
@@ -230,6 +247,7 @@ module.exports = {
     looksLikeMisplacedNonCategoryValue,
     isValidImageUrl,
     isValidRegistrationUrl,
+    unwrapRedirectUrl,
     applyMailtoFallback,
     extractMailtoAddress,
     stripLogoSuffix,

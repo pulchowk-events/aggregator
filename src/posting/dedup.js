@@ -43,7 +43,7 @@ function dedupTitleOf(event) {
 // unrelated events. Prefer registrationUrl (stable, uniquely identifies the
 // source page); otherwise hash the source + first 200 chars of description.
 function getDedupFallbackComponent(event) {
-    const url = (event.registrationUrl || event.url || '').trim();
+    const url = (event.rawDedupUrl || event.registrationUrl || event.url || '').trim();
     if (url) return `url:${url.toLowerCase()}`;
     const desc = (event.rawSuspectDescription || event.description || '').trim().slice(0, 200).toLowerCase();
     const source = (event.source || '').toLowerCase();

@@ -286,6 +286,18 @@ function sanitizeEventFields(event) {
     // DQ-2: mailto: apply links fall back to the source page and keep the address in applyEmail
     // (no warning). Runs before the generic check below; other non-http schemes still clear+warn.
     applyMailtoFallback(event);
+    // Unwrap login-redirect wrappers (kumarijob /jobseeker?next=<real url>). The original is kept in
+    // rawDedupUrl so the dedup key keeps seeing what it saw before (see posting/dedup.js).
+    {
+        const { unwrapRedirectUrl } = require('./normalize');
+        const dedupOriginal = event.registrationUrl || event.url || null;
+        let unwrapped = false;
+        for (const field of ['registrationUrl', 'url']) {
+            const next = unwrapRedirectUrl(event[field]);
+            if (typeof next === 'string' && next !== event[field]) { event[field] = next; unwrapped = true; }
+        }
+        if (unwrapped && !event.rawDedupUrl && dedupOriginal) event.rawDedupUrl = dedupOriginal;
+    }
     if (event.registrationUrl && !isValidRegistrationUrl(event.registrationUrl)) {
         if (!event.rawSuspectRegistrationUrl) event.rawSuspectRegistrationUrl = event.registrationUrl;
         warnings.push(`Registration URL was not a well-formed http(s) URL: "${event.registrationUrl}" — cleared.`);
