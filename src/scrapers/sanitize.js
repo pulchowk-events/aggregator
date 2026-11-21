@@ -19,7 +19,13 @@
 // so we never diverge on what "a category chip" or "a valid URL" means.
 
 const { auditLog } = require('../core/auditLogger');
-const { looksLikeCategoryLabel, looksLikeMisplacedNonCategoryValue, isValidImageUrl } = require('../core/normalize');
+const {
+    looksLikeCategoryLabel,
+    looksLikeMisplacedNonCategoryValue,
+    isValidImageUrl,
+    applyMailtoFallback,
+    stripLogoSuffix
+} = require('../core/normalize');
 
 // Detect a "category chip" value in a field that should hold a date/time/
 // price/organizer — the emoji + no-digits pattern. This is a local copy
@@ -52,6 +58,15 @@ function sanitizeImageUrl(url) {
 function sanitizeScrapedEvent(event, { source = null } = {}) {
     if (!event) return event;
     const warnings = [];
+
+    // DQ-2: mailto: apply link -> source page + applyEmail, no warning.
+    applyMailtoFallback(event);
+
+    // DQ-2: "eSewa - Logo" style company names come from <img alt>. Strip the suffix.
+    if (typeof event.company === 'string') {
+        const cleanedCompany = stripLogoSuffix(event.company);
+        if (cleanedCompany !== event.company) event.company = cleanedCompany;
+    }
 
     if (event.date && looksLikeCategoryChip(event.date)) {
         warnings.push(`Date field looked like a category/tag, not a date: "${event.date}" — cleared.`);

@@ -26,7 +26,9 @@ const {
     looksLikeCategoryLabel,
     looksLikeMisplacedNonCategoryValue,
     isValidImageUrl,
-    isValidRegistrationUrl
+    isValidRegistrationUrl,
+    applyMailtoFallback,
+    stripLogoSuffix
 } = require('./normalize');
 
 // Warnings are collected rather than thrown so a single bad field never
@@ -42,6 +44,18 @@ function isOpenEndedJobDate(event) {
 function sanitizeEventFields(event) {
     if (!event) return event;
     const warnings = [];
+
+    // ---------- Company / organizer logo-alt suffix ----------
+    // DQ-3: "eSewa - Logo" comes from an <img alt>. Strip it here too, so items that never
+    // passed the scraper-side sanitizer (or were stored earlier) are cleaned on every pass.
+    if (typeof event.company === 'string') {
+        const c = stripLogoSuffix(event.company);
+        if (c !== event.company) event.company = c;
+    }
+    if (typeof event.organizer === 'string') {
+        const o = stripLogoSuffix(event.organizer);
+        if (o !== event.organizer) event.organizer = o;
+    }
 
     // ---------- Date ----------
     // If the date field looks like a category label, clear it (it's not a
@@ -124,6 +138,9 @@ function sanitizeEventFields(event) {
         warnings.push('Image field was not a usable image URL (placeholder or data URI) — cleared.');
         event.image = null;
     }
+    // DQ-2: mailto: apply links fall back to the source page and keep the address in applyEmail
+    // (no warning). Runs before the generic check below; other non-http schemes still clear+warn.
+    applyMailtoFallback(event);
     if (event.registrationUrl && !isValidRegistrationUrl(event.registrationUrl)) {
         if (!event.rawSuspectRegistrationUrl) event.rawSuspectRegistrationUrl = event.registrationUrl;
         warnings.push(`Registration URL was not a well-formed http(s) URL: "${event.registrationUrl}" — cleared.`);
