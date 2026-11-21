@@ -25,6 +25,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@supabase/supabase-js": "^2.112.3",
     "axios": "^1.10.0",
     "cors": "^2.8.5",

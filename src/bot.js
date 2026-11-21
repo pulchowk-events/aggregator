@@ -233,6 +233,7 @@ class EventsBot {
     purgeStuckNeedsAttentionEvents() { return pipeline.purgeStuckNeedsAttentionEvents(this); }
     getNeedsAttentionExpiryDays() { return pipeline.getNeedsAttentionExpiryDays(this); }
     isStuckNeedsAttentionEvent(event) { return pipeline.isStuckNeedsAttentionEvent(this, event); }
+    hasSufficientData(event) { return require('./posting/gates').hasSufficientData(event); }
     reconcilePendingAgainstMarkers() {
         const channelIds = consistency.allConfiguredChannelIds(this);
         return pipeline.reconcilePendingAgainstMarkers(this, channelIds);

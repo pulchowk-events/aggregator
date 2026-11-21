@@ -33,7 +33,7 @@ const { auditLog } = require('../core/auditLogger');
 const { isEventPast } = require('../core/dateUtils');
 const { sanitizeEventFields } = require('../core/sanitize');
 const { getEventDedupKey, findFuzzyDuplicateMatch, findYearDriftDuplicate, deduplicateEventsByKey } = require('./dedup');
-const { hasValidImage, hasDataQualityWarnings } = require('./gates');
+const { hasValidImage, hasDataQualityWarnings, hasSufficientData } = require('./gates');
 const markers = require('../core/markers');
 const { CACHE_CAP, NEEDS_ATTENTION_EXPIRY_DAYS, DEFAULT_NEEDS_ATTENTION_EXPIRY_DAYS } = require('../config/constants');
 
@@ -77,7 +77,10 @@ function isStuckNeedsAttentionEvent(bot, event) {
     if (event.itemType === 'scholarship') {
         return hasDataQualityWarnings(event);
     }
-    return hasDataQualityWarnings(event) || !hasValidImage(bot, event);
+    // Session 2: a job with no apply-by date, location or salary can never pass the LIVE gate
+    // (hasSufficientData), so it ages out like any other stuck item. A null image is NOT stuck:
+    // hasValidImage is true for it because post.js renders a placeholder PNG.
+    return hasDataQualityWarnings(event) || !hasValidImage(bot, event) || !hasSufficientData(event);
 }
 
 // Move stuck items past the expiry window into needsAttentionExpiredEvents.
@@ -104,7 +107,9 @@ function purgeStuckNeedsAttentionEvents(bot) {
     bot.cache.needsAttentionExpiredEvents = bot.cache.needsAttentionExpiredEvents || [];
     for (const event of justArchived) {
         event.needsAttentionExpiredAt = now;
-        event.needsAttentionExpiredReason = hasDataQualityWarnings(event) ? 'data_quality_warnings' : 'no_valid_image';
+        event.needsAttentionExpiredReason = hasDataQualityWarnings(event)
+            ? 'data_quality_warnings'
+            : (!hasSufficientData(event) ? 'insufficient_data' : 'no_valid_image');
     }
     bot.cache.needsAttentionExpiredEvents.push(...justArchived);
     if (bot.cache.needsAttentionExpiredEvents.length > CACHE_CAP) {

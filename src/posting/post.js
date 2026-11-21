@@ -36,9 +36,10 @@ const { AttachmentBuilder } = require('discord.js');
 const { auditLog } = require('../core/auditLogger');
 const markers = require('../core/markers');
 const { resolveAttachmentImage } = require('./imageBytes');
+const { renderPlaceholderPng, canUsePlaceholder, placeholderLabelFor } = require('../scrapers/placeholderRender');
 const { sanitizeEventFields } = require('../core/sanitize');
 const { buildPostContent } = require('../core/formatting');
-const { hasValidImage, shouldPingForEvent, hasDataQualityWarnings, getJunkTitleReason } = require('./gates');
+const { hasValidImage, shouldPingForEvent, hasDataQualityWarnings, hasSufficientData, getJunkTitleReason } = require('./gates');
 
 // Junk-title refusals are audited once per (item, rule) per process. A
 // pending queue that stays junk would otherwise write one audit line per
@@ -148,10 +149,17 @@ async function _postEventToCategoryInner(bot, event, mode, categoryKeyOverride =
         noteJunkTitleOnce(event, junkRule);
         return { ok: false, reason: 'junk_title', skipped: 'junk_title', junkRule };
     }
-    if (mode === 'main' && !hasValidImage(bot, event)) {
+    if (mode === 'main' && !hasValidImage(bot, event) && !canUsePlaceholder(event)) {
         auditLog('post_event_outcome', `Post outcome for "${event.title}": failed (no_image)`,
             { ...postOutcomeBase, channelId, ok: false, reason: 'no_image' }, 'warn');
         return { ok: false, reason: 'no_image' };
+    }
+
+    // Session 2: a job needs an apply-by date, a location or a salary (LIVE only, no force bypass).
+    if (mode === 'main' && !hasSufficientData(event)) {
+        auditLog('post_event_outcome', 'Post outcome for "' + event.title + '": failed (insufficient_data)',
+            { ...postOutcomeBase, channelId, ok: false, reason: 'insufficient_data' }, 'warn');
+        return { ok: false, reason: 'insufficient_data' };
     }
 
     if (mode === 'main' && hasDataQualityWarnings(event) && !force) {
@@ -221,7 +229,26 @@ async function _postEventToCategoryInner(bot, event, mode, categoryKeyOverride =
         // not fatal to the send itself.
         markers.heartbeat(dedupKey, channelId);
 
-        if (hasValidImage(bot, event)) {
+        if (canUsePlaceholder(event)) {
+            // No real image (null) or a generated-placeholder URL: render the PNG locally and
+            // upload it as a file. No URL is involved, so Discord never has to reach this machine.
+            try {
+                const label = placeholderLabelFor(event);
+                const png = renderPlaceholderPng(label);
+                markers.heartbeat(dedupKey, channelId);
+                auditLog('image_placeholder_attach', 'Rendered placeholder attached for "' + event.title + '"',
+                    { id: event.id || null, source: event.source || null, label, imageUrl: event.image || null });
+                const attachment = new AttachmentBuilder(png, { name: 'placeholder.png' });
+                await channel.send({ content: message, files: [attachment] });
+            } catch (error) {
+                console.error('Failed to render/send placeholder, sending text only:', error.message);
+                auditLog('discord_api_error', `Placeholder render/attach failed for "${event.title}", falling back to text-only`,
+                    { ...postOutcomeBase, channelId, imageUrl: event.image || null, errorMessage: error.message, errorCode: error.code || null, errorStack: error.stack },
+                    'error');
+                markers.heartbeat(dedupKey, channelId);
+                await channel.send(message);
+            }
+        } else if (hasValidImage(bot, event)) {
             try {
                 const response = await axios.get(event.image, {
                     responseType: 'arraybuffer',

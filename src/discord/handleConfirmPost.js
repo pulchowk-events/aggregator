@@ -66,6 +66,9 @@ async function handleConfirmPost(bot, interaction) {
     if (result.reason === 'no_image') {
         return interaction.editReply({ content: `❌ Not posted — **"${event.title}"** has no image, so it can't go to a LIVE channel. Use **Customize** to add an image URL, or post it to Test only.`, components: [] });
     }
+    if (result.reason === 'insufficient_data') {
+        return interaction.editReply({ content: '\u26D4 Not posted \u2014 **"' + event.title + '"** has no apply-by date, location or salary, so it cannot go to a LIVE channel (force does not bypass this). Use **Customize** to add one, or post it to Test only.', components: [] });
+    }
     if (result.reason === 'already_posted' || result.reason === 'already_posted_or_racing') {
         const when = result.lastPostedAt;
         const whenText = when ? `<t:${Math.floor(when / 1000)}:R>` : 'moments ago';

@@ -41,6 +41,116 @@ function isOpenEndedJobDate(event) {
         /^\s*(open\s+until\s+filled|until\s+filled|rolling|ongoing|always\s+open|open[\s-]?ended|asap|immediate(ly)?)\s*\.?\s*$/i.test(String(event.date || ''));
 }
 
+// ---------------------------------------------------------------------------
+// Session 2: concatenated-text cleanup + description quality
+// ---------------------------------------------------------------------------
+
+// Scrapers sometimes glue card metadata onto the previous word:
+// "SeniorVacancy: 1View Details". Only these explicit patterns are touched. A blanket
+// lower-to-upper split would corrupt JavaScript, OpenAI, LangChain, LlamaIndex, iOS,
+// DevOps and eSewa.
+const GLUED_LABEL_RE = /([a-z0-9])(Vacanc(?:y|ies)|Openings?|Location|Salary|Experience|Deadline|Posted|Apply By|Job Type|Employment Type)(\s*:)/g;
+const CTA_PHRASES = 'View Details?|Apply Now|Apply Here|Read More|Learn More|Know More|See Details|View Job|View More';
+const GLUED_CTA_RE = new RegExp('([a-z0-9.,;:!?)])(' + CTA_PHRASES + ')\\b', 'g');
+const TRAILING_CTA_RE = new RegExp('\\s*(?:' + CTA_PHRASES + ')\\s*$');
+
+// opts.collapseSpaces   : NBSP -> space, runs of spaces/tabs -> one space, trim (short fields)
+// opts.stripTrailingCta : drop a trailing "View Details" / "Apply Now" etc. (titles)
+// Idempotent; returns the input unchanged when no pattern matches.
+function cleanupConcatenatedText(value, opts) {
+    if (typeof value !== 'string' || !value) return value;
+    const o = opts || {};
+    let t = value.replace(GLUED_LABEL_RE, '$1 $2$3');
+    t = t.replace(GLUED_CTA_RE, '$1 $2');
+    if (o.collapseSpaces) t = t.replace(/\u00A0/g, ' ').replace(/[ \t]{2,}/g, ' ').trim();
+    if (o.stripTrailingCta) {
+        for (;;) {
+            const next = t.replace(TRAILING_CTA_RE, '');
+            if (next === t) break;
+            t = next.trim();
+        }
+        if (!t) return value;
+    }
+    return t;
+}
+
+// Description quality: 0-100, higher is better. Below DESC_QUALITY_MIN the description is
+// treated as scraped footer/nav text and nullified (no data-quality warning: formatting.js
+// skips an empty description, so an otherwise good job is not blocked).
+// Long, prose-like text is always kept, even if a footer is attached to it.
+const DESC_QUALITY_MIN = 50;
+const FOOTER_STRONG_RES = [
+    /\u00A9/,
+    /\bcopyright\b/i,
+    /\ball rights reserved\b/i,
+    /\bprivacy policy\b/i,
+    /\bterms (?:of (?:service|use)|(?:&|and) conditions)\b/i,
+    /\bcookies? policy\b/i,
+    /\bfollow us\b/i,
+    /\bsubscribe (?:to )?(?:our )?newsletter\b/i,
+    /\bstart your project\b/i,
+    /\brequest a (?:quote|demo)\b/i
+];
+const NAV_LINE_WORDS = new Set([
+    'home', 'about', 'about us', 'services', 'our services', 'contact', 'contact us', 'careers',
+    'career', 'blog', 'portfolio', 'case studies', 'products', 'solutions', 'pricing', 'faq',
+    'login', 'log in', 'sign in', 'sign up', 'sitemap', 'privacy policy', 'terms'
+]);
+const PHONE_LINE_RE = /^(?:(?:tel|phone|call|mobile|mob|fax|contact)[^\w+(]*)?[+(]?\d[\d\s().\-]{6,}$/i;
+const EMAIL_LINE_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function calculateDescriptionQuality(text) {
+    if (typeof text !== 'string') return { score: 0, reasons: ['not_a_string'] };
+    const norm = text.replace(/\r\n?/g, '\n').trim();
+    if (!norm) return { score: 0, reasons: ['empty'] };
+
+    const lines = norm.split('\n').map((l) => l.trim()).filter(Boolean);
+    const lineChars = lines.reduce((n, l) => n + l.length, 0);
+    const longChars = lines.reduce((n, l) => n + (l.length >= 60 ? l.length : 0), 0);
+    const sentences = (norm.match(/[.!?](?:\s|$)/g) || []).length;
+
+    // Long-description guard: never nullify long prose.
+    if (norm.length >= 500 && (longChars / lineChars >= 0.5 || sentences >= 4)) {
+        return { score: 100, reasons: ['long_prose'] };
+    }
+
+    let penalty = 0;
+    const reasons = [];
+
+    if (lines.length >= 3) {
+        const shortCount = lines.filter((l) => l.length < 30).length;
+        const ratio = shortCount / lines.length;
+        if (ratio > 0.5) {
+            penalty += Math.round((ratio - 0.5) * 2 * 30);
+            reasons.push('short_lines:' + shortCount + '/' + lines.length);
+        }
+    }
+
+    let strong = 0;
+    for (const re of FOOTER_STRONG_RES) if (re.test(norm)) strong++;
+    if (strong > 0) {
+        penalty += Math.min(60, strong * 30);
+        reasons.push('footer_keywords:' + strong);
+    }
+
+    let nav = 0;
+    let contact = 0;
+    for (const l of lines) {
+        const key = l.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+        if (NAV_LINE_WORDS.has(key)) nav++;
+        if (PHONE_LINE_RE.test(l) || EMAIL_LINE_RE.test(l)) contact++;
+    }
+    if (nav > 0) { penalty += Math.min(30, nav * 10); reasons.push('nav_lines:' + nav); }
+    if (contact > 0) { penalty += Math.min(30, contact * 15); reasons.push('contact_lines:' + contact); }
+
+    if (lines.length >= 2 && norm.length < 200 && sentences === 0) {
+        penalty += 10;
+        reasons.push('no_sentences');
+    }
+
+    return { score: Math.max(0, 100 - penalty), reasons };
+}
+
 function sanitizeEventFields(event) {
     if (!event) return event;
     const warnings = [];
@@ -55,6 +165,28 @@ function sanitizeEventFields(event) {
     if (typeof event.organizer === 'string') {
         const o = stripLogoSuffix(event.organizer);
         if (o !== event.organizer) event.organizer = o;
+    }
+
+    // ---------- Concatenated text (Session 2) ----------
+    // "SeniorVacancy: 1View Details" -> "Senior Vacancy: 1". Explicit patterns only; silent
+    // like the logo-suffix strip. Title edits keep the original in rawSuspectTitle.
+    let descriptionQuality = null;
+    if (typeof event.title === 'string') {
+        const t = cleanupConcatenatedText(event.title, { stripTrailingCta: true });
+        if (t !== event.title) {
+            if (!event.rawSuspectTitle) event.rawSuspectTitle = event.title;
+            event.title = t;
+        }
+    }
+    for (const f of ['company', 'organizer', 'location']) {
+        if (typeof event[f] === 'string') {
+            const c = cleanupConcatenatedText(event[f], { collapseSpaces: true });
+            if (c !== event[f]) event[f] = c;
+        }
+    }
+    if (typeof event.description === 'string') {
+        const d = cleanupConcatenatedText(event.description, {});
+        if (d !== event.description) event.description = d;
     }
 
     // ---------- Date ----------
@@ -129,6 +261,19 @@ function sanitizeEventFields(event) {
         event.category = null;
     }
 
+    // ---------- Description quality (Session 2) ----------
+    // Footer/nav text scraped as a description is nullified WITHOUT a data-quality warning
+    // (an empty description never blocks a post). Manual items are never scored, so Customize
+    // and the dashboard cannot have a human-written description wiped.
+    if (event.source !== 'manual' && typeof event.description === 'string' && event.description.trim()) {
+        const q = calculateDescriptionQuality(event.description);
+        if (q.score < DESC_QUALITY_MIN) {
+            if (!event.rawSuspectDescription) event.rawSuspectDescription = event.description;
+            descriptionQuality = { score: q.score, reasons: q.reasons, cleared: true };
+            event.description = null;
+        }
+    }
+
     // ---------- URLs ----------
     // Non-http(s) or unparseable URL means a JS-injection placeholder, a
     // data URI, or a scraper-target mistake. Clear so downstream never
@@ -181,6 +326,8 @@ function sanitizeEventFields(event) {
             rawSuspectTime: event.rawSuspectTime || null,
             rawSuspectOrganizer: event.rawSuspectOrganizer || null,
             rawSuspectCategory: event.rawSuspectCategory || null,
+            rawSuspectDescription: event.rawSuspectDescription || null,
+            descriptionQuality,
             event
         }
     );
@@ -188,4 +335,4 @@ function sanitizeEventFields(event) {
     return event;
 }
 
-module.exports = { sanitizeEventFields };
+module.exports = { sanitizeEventFields, calculateDescriptionQuality, cleanupConcatenatedText, DESC_QUALITY_MIN };

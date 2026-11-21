@@ -34,7 +34,7 @@ const { isEventPast, isEventTooSoon, parseEventDate, compareByEventDate } = requ
 const { sanitizeEventFields } = require('../core/sanitize');
 const discordLog = require('../core/discordLog');
 const { determineCategory } = require('./category');
-const { hasValidImage, hasDataQualityWarnings } = require('./gates');
+const { hasValidImage, hasDataQualityWarnings, hasSufficientData } = require('./gates');
 const { hasBeenPostedToChannel } = require('./reconcile');
 // Note: do NOT import postEventToCategory directly from './post'.
 // bot.postEventToCategory is wrapped by extensions/index.js (attachPostHooks)
@@ -55,6 +55,11 @@ const { DateTime } = require('luxon');
 
 const ITEM_TYPES = ['events', 'jobs', 'scholarships'];
 const MODES = ['test', 'live'];
+
+// Insufficient-data skips are audited once per item per process, so an item that stays
+// insufficient does not write one audit line per tick.
+const INSUFFICIENT_AUDITED = new Set();
+const INSUFFICIENT_AUDITED_MAX = 5000;
 
 function getItemTypes() { return ITEM_TYPES; }
 function getModes() { return MODES; }
@@ -346,13 +351,35 @@ async function _runAutopostTickLocked(bot, itemType, mode) {
         }
     }
 
-    const candidates = afterImage.sort((a, b) => compareByEventDate(a, b));
+    // Sufficient-data filter (live only): a job needs an apply-by date, a location or a salary.
+    const afterData = [];
+    for (const e of afterImage) {
+        if (channelMode === 'main' && !hasSufficientData(e)) {
+            const key = String(e.id || e.title || '');
+            if (!INSUFFICIENT_AUDITED.has(key)) {
+                if (INSUFFICIENT_AUDITED.size >= INSUFFICIENT_AUDITED_MAX) INSUFFICIENT_AUDITED.clear();
+                INSUFFICIENT_AUDITED.add(key);
+                auditLog('autopost_filter_skip', 'Autopost (' + itemType + '/' + mode + '): "' + e.title + '" removed by sufficient-data filter', {
+                    mode, eventId: e.id || null, title: e.title || null, filter: 'sufficient_data_filter'
+                }, 'warn');
+            }
+        } else {
+            afterData.push(e);
+        }
+    }
+
+    const candidates = afterData.sort((a, b) => compareByEventDate(a, b));
 
     // Walk candidates in date order; post the first that survives gates.
     for (const event of candidates) {
         sanitizeEventFields(event);
 
         if (hasDataQualityWarnings(event)) {
+            continue;
+        }
+
+        // sanitize may have cleared a field, so re-check after it (live only).
+        if (channelMode === 'main' && !hasSufficientData(event)) {
             continue;
         }
 

@@ -240,7 +240,7 @@ module.exports = {
                     company_status: 'extracted',
                     company_evidence: 'og:site_name metadata',
 
-                    url: applicationUrl || CAREER_URL,
+                    url: CAREER_URL,
 
                     location,
                     location_status: 'extracted',

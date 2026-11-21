@@ -24,6 +24,7 @@
 //                                   bypass. See the junk-title gate block below.
 
 const { isValidImageUrl } = require('../core/normalize');
+const { canUsePlaceholder } = require('../scrapers/placeholderRender');
 
 function hasValidImage(bot, event) {
     if (!event) return false;
@@ -34,7 +35,30 @@ function hasValidImage(bot, event) {
     // "Post to Live" button disabled state, and the needs-attention
     // archival sweep all see the same answer.
     if (event.itemType === 'scholarship') return true;
-    return isValidImageUrl(event.image);
+    // Session 2: a null image (or one of our own placeholder URLs) is fine, because
+    // post.js and /pending render the placeholder PNG locally and attach it.
+    return isValidImageUrl(event.image) || canUsePlaceholder(event);
+}
+
+// Session 2: a JOB must carry at least one of: apply-by date, location, salary.
+// Stateless (judged on the current fields), LIVE only, no force bypass. Scoped to jobs
+// because those fields only exist on jobs; events and scholarships always pass.
+//   apply-by : applicationEndsRaw or date (non-blank, not TBD-like)
+//   location : non-blank, not TBD-like
+//   salary   : salary or price containing at least one digit (rejects "rs, K")
+const SUFFICIENCY_BLANK_RE = /^(?:tbd|tba|n\/a|na|none|null|undefined|-+)$/i;
+function hasText(v) {
+    if (typeof v !== 'string') return false;
+    const s = v.trim();
+    return s !== '' && !SUFFICIENCY_BLANK_RE.test(s);
+}
+function hasSufficientData(event) {
+    if (!event) return false;
+    if (event.itemType !== 'job') return true;
+    if (hasText(event.applicationEndsRaw) || hasText(event.date)) return true;
+    if (hasText(event.location)) return true;
+    const pay = [event.salary, event.price].find((v) => v !== null && v !== undefined && /\d/.test(String(v)));
+    return pay !== undefined;
 }
 
 function shouldPingForEvent(bot, event) {
@@ -194,5 +218,6 @@ module.exports = {
     hasJunkTitle,
     hasValidImage,
     shouldPingForEvent,
-    hasDataQualityWarnings
+    hasDataQualityWarnings,
+    hasSufficientData
 };

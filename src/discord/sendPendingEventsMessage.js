@@ -2,10 +2,12 @@
 // Renders the /pending list — one EmbedBuilder + one ActionRow per item,
 // with the four review buttons (post_live, post_test, customize, skip).
 
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require('discord.js');
 const { auditLog } = require('../core/auditLogger');
 const { isEventPast, compareByEventDate } = require('../core/dateUtils');
 const { deduplicateEventsByKey } = require('../posting/dedup');
+const { hasSufficientData } = require('../posting/gates');
+const { renderPlaceholderPng, canUsePlaceholder, placeholderLabelFor } = require('../scrapers/placeholderRender');
 
 const EMBED_LIMITS = { title: 256, description: 4096, fieldName: 256, fieldValueTarget: 1000 };
 
@@ -54,6 +56,14 @@ async function sendOnePendingEmbed(bot, channel, event) {
         description += `\n\n⏳ **Less than ${bot.getAutopostMinLeadDays()} day(s) away** - registration is likely closing/closed. Autopost will skip this; post manually only if you are sure it is still valid.`;
     }
     const eventHasImage = bot.hasValidImage(event);
+    const usePlaceholder = canUsePlaceholder(event);
+    const dataSufficient = hasSufficientData(event);
+    if (usePlaceholder && !event.image) {
+        description += '\n\n\u{1F5BC}\u{FE0F} **No image** - a branded placeholder is generated and attached when this is posted.';
+    }
+    if (!dataSufficient) {
+        description += '\n\n\u26D4 **Insufficient data** - a job needs at least one of: apply-by date, location, salary. It cannot go to a LIVE channel until one is added (Customize).';
+    }
     if (!eventHasImage) {
         description += '\n\n🖼️ **No image** - this can never go to a LIVE channel until one is added. Use Customize to add an image URL, or it will stay Test-only.';
     }
@@ -100,21 +110,31 @@ async function sendOnePendingEmbed(bot, channel, event) {
         .setTitle(clampText(event.title || 'Untitled', EMBED_LIMITS.title))
         .setDescription(safeDescription)
         .addFields(...safeFields)
-        .setColor((bot.hasDataQualityWarnings(event) || bot.isEventTooSoon(event) || !eventHasImage) ? 0xE67E22 : 0x00AE86)
+        .setColor((bot.hasDataQualityWarnings(event) || bot.isEventTooSoon(event) || !eventHasImage || !dataSufficient) ? 0xE67E22 : 0x00AE86)
         .setFooter({ text: `Source: ${source}  •  ID: ${event.id}` });
 
-    if (bot.hasValidImage(event)) embed.setImage(event.image);
+    const files = [];
+    if (usePlaceholder) {
+        try {
+            files.push(new AttachmentBuilder(renderPlaceholderPng(placeholderLabelFor(event)), { name: 'placeholder.png' }));
+            embed.setImage('attachment://placeholder.png');
+        } catch (renderError) {
+            console.warn('Placeholder render failed for pending preview:', renderError.message);
+        }
+    } else if (bot.hasValidImage(event)) {
+        embed.setImage(event.image);
+    }
     if (isEventPast(event)) embed.setDescription(embed.data.description + '\n\n⚠️ **This item appears to be in the past.**');
 
     const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`post_live:${event.id}`).setLabel('Post to Live').setStyle(ButtonStyle.Success).setDisabled(!eventHasImage),
+        new ButtonBuilder().setCustomId(`post_live:${event.id}`).setLabel('Post to Live').setStyle(ButtonStyle.Success).setDisabled(!eventHasImage || !dataSufficient),
         new ButtonBuilder().setCustomId(`post_test:${event.id}`).setLabel('Post to Test').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`customize:${event.id}`).setLabel('Customize').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`skip:${event.id}`).setLabel('Skip').setStyle(ButtonStyle.Danger)
     );
 
     try {
-        await channel.send({ embeds: [embed], components: [row] });
+        await channel.send({ embeds: [embed], components: [row], files });
     } catch (error) {
         console.error(`❌ Failed to send pending-event message for "${event.title}":`, error);
         auditLog('discord_api_error', `channel.send() failed for "${event.title}"`, {

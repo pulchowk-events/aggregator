@@ -29,6 +29,15 @@ const {
     SCHOLARSHIP_FUZZY_TITLE_SIMILARITY_THRESHOLD
 } = require('../config/constants');
 
+// Session 2: sanitize rewrites glued titles ("SeniorVacancy: 1View Details" ->
+// "Senior Vacancy: 1") and nullifies footer-text descriptions, keeping the originals in
+// rawSuspectTitle / rawSuspectDescription. Dedup must keep seeing the ORIGINAL text. Otherwise
+// an item's key changes the moment sanitize runs on it, and an already-posted item re-posts.
+// Items without those fields behave exactly as before.
+function dedupTitleOf(event) {
+    return (event && (event.rawSuspectTitle || event.title)) || '';
+}
+
 // Fallback component for date-less items. Deliberately NOT a bare "null"
 // — that would collapse every date-less item onto the same key and merge
 // unrelated events. Prefer registrationUrl (stable, uniquely identifies the
@@ -36,7 +45,7 @@ const {
 function getDedupFallbackComponent(event) {
     const url = (event.registrationUrl || event.url || '').trim();
     if (url) return `url:${url.toLowerCase()}`;
-    const desc = (event.description || '').trim().slice(0, 200).toLowerCase();
+    const desc = (event.rawSuspectDescription || event.description || '').trim().slice(0, 200).toLowerCase();
     const source = (event.source || '').toLowerCase();
     const hash = shortHash(`${source}|${desc}`, 12);
     return `hash:${hash}`;
@@ -49,7 +58,7 @@ function getDedupFallbackComponent(event) {
 //
 // Lowercased so the key is case-insensitive end-to-end.
 function getEventDedupKey(event) {
-    const normalizedTitle = normalizeEventName(event.title || '');
+    const normalizedTitle = normalizeEventName(dedupTitleOf(event));
     const canonicalDate = getCanonicalDateForDedup(event);
     if (canonicalDate) return `${normalizedTitle}|${canonicalDate}`.toLowerCase();
     const fallback = getDedupFallbackComponent(event);
@@ -77,7 +86,7 @@ function findFuzzyDuplicateMatch(event, candidatePool) {
 
     const canonicalDate = getCanonicalDateForDedup(event);
     if (!canonicalDate) return null;
-    const normalizedTitle = normalizeEventName(event.title || '');
+    const normalizedTitle = normalizeEventName(dedupTitleOf(event));
     if (!normalizedTitle) return null;
 
     const threshold = event.itemType === 'scholarship'
@@ -88,7 +97,7 @@ function findFuzzyDuplicateMatch(event, candidatePool) {
         if (!candidate || candidate === event) continue;
         const candidateDate = getCanonicalDateForDedup(candidate);
         if (candidateDate !== canonicalDate) continue;
-        const candidateTitle = normalizeEventName(candidate.title || '');
+        const candidateTitle = normalizeEventName(dedupTitleOf(candidate));
         if (!candidateTitle || candidateTitle === normalizedTitle) continue;
         const similarity = titleSimilarity(normalizedTitle, candidateTitle);
         if (similarity >= threshold) return { candidate, similarity };
@@ -140,7 +149,7 @@ function findYearDriftDuplicate(event, candidatePool) {
 
     const canonicalNew = getCanonicalDateForDedup(event);
     if (!canonicalNew) return null;
-    const normalizedTitle = normalizeEventName(event.title || '');
+    const normalizedTitle = normalizeEventName(dedupTitleOf(event));
     if (!normalizedTitle) return null;
 
     const { DateTime } = require('luxon');
@@ -152,7 +161,7 @@ function findYearDriftDuplicate(event, candidatePool) {
         if (!candidate || candidate === event) continue;
         const candSourceDate = String(candidate.date || candidate.startDate || '').trim();
         if (candSourceDate !== sourceDate) continue;
-        const candTitle = normalizeEventName(candidate.title || '');
+        const candTitle = normalizeEventName(dedupTitleOf(candidate));
         if (candTitle !== normalizedTitle) continue;
         const candCanonical = getCanonicalDateForDedup(candidate);
         if (!candCanonical) continue;

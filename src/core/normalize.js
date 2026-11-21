@@ -129,33 +129,53 @@ function stripLogoSuffix(value) {
     return stripped || value;
 }
 
-// DQ-2: apply-by-email fallback. A mailto: registration link is not a web URL, but it is
-// a real way to apply. Move the address to item.applyEmail and point registrationUrl at
-// the source page (item.url). Also recovers items that were already cleared on an earlier
-// pass (registrationUrl null, mailto kept in rawSuspectRegistrationUrl) and drops the stale
-// mailto warning, so they stop being blocked by hasDataQualityWarnings.
-// Mutates item. Returns true when it changed anything. Needs a valid item.url.
-function applyMailtoFallback(item) {
-    if (!item || !isValidRegistrationUrl(item.url)) return false;
-    let src = null;
-    if (typeof item.registrationUrl === 'string' && /^\s*mailto:/i.test(item.registrationUrl)) {
-        src = item.registrationUrl;
-    } else if (!item.registrationUrl && typeof item.rawSuspectRegistrationUrl === 'string' &&
-               /^\s*mailto:/i.test(item.rawSuspectRegistrationUrl)) {
-        src = item.rawSuspectRegistrationUrl;
-    }
-    if (!src) return false;
-    let addr = src.trim().replace(/^mailto:/i, '').split('?')[0];
+// DQ-2: pull the bare address out of a mailto: value. Drops the "?subject=..." query,
+// decodes %xx escapes, and takes the first address of a comma-separated list.
+// Returns null when the value is not a mailto: or holds no valid address. Pure.
+function extractMailtoAddress(value) {
+    if (typeof value !== 'string') return null;
+    const v = value.trim();
+    if (!/^mailto:/i.test(v)) return null;
+    let addr = v.replace(/^mailto:/i, '').split('?')[0];
     try { addr = decodeURIComponent(addr); } catch (e) { /* keep raw */ }
     const email = addr.split(',')[0].trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return false;
-    if (!item.applyEmail) item.applyEmail = email;
-    item.registrationUrl = item.url;
-    if (Array.isArray(item.dataQualityWarnings)) {
-        item.dataQualityWarnings = item.dataQualityWarnings.filter(
-            (w) => !/^Registration URL was not a well-formed http\(s\) URL: "mailto:/i.test(String(w)));
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+}
+
+// DQ-2: apply-by-email fallback. A mailto: link is not a web URL, but it is a real way to
+// apply. The address moves to item.applyEmail; url / registrationUrl are pointed at a real
+// page (item.url, else item.registrationUrl, else item.companyUrl) when they are not already
+// valid http(s). Scans every field a scraper or an earlier sanitize pass may have left the
+// mailto in, including the rawSuspect* audit copies, so already-cleared items recover on
+// re-runs. Also drops stale "...not a well-formed http(s) URL: "mailto:" warnings (both the
+// Registration and the Event variants) so they stop tripping hasDataQualityWarnings.
+// Mutates item. Returns true when it changed anything. Needs a valid page URL to fall back to.
+const MAILTO_SOURCE_FIELDS = ['registrationUrl', 'url', 'applicationUrl', 'rawSuspectRegistrationUrl', 'rawSuspectUrl'];
+const MAILTO_WARNING_RE = /^(?:Registration|Event) URL was not a well-formed http\(s\) URL: "mailto:/i;
+function applyMailtoFallback(item) {
+    if (!item) return false;
+    let email = null;
+    for (const f of MAILTO_SOURCE_FIELDS) {
+        email = extractMailtoAddress(item[f]);
+        if (email) break;
     }
-    return true;
+    if (!email) return false;
+
+    let pageUrl = null;
+    for (const c of [item.url, item.registrationUrl, item.companyUrl]) {
+        if (isValidRegistrationUrl(c)) { pageUrl = c.trim(); break; }
+    }
+    if (!pageUrl) return false;
+
+    let changed = false;
+    if (!item.applyEmail) { item.applyEmail = email; changed = true; }
+    if (!isValidRegistrationUrl(item.registrationUrl)) { item.registrationUrl = pageUrl; changed = true; }
+    if (!isValidRegistrationUrl(item.url)) { item.url = pageUrl; changed = true; }
+    if (Array.isArray(item.dataQualityWarnings)) {
+        const kept = item.dataQualityWarnings.filter((w) => !MAILTO_WARNING_RE.test(String(w)));
+        if (kept.length !== item.dataQualityWarnings.length) { item.dataQualityWarnings = kept; changed = true; }
+    }
+    return changed;
 }
 
 // Final shape-check for tags rendered in a post body. Rejects anything
@@ -211,6 +231,7 @@ module.exports = {
     isValidImageUrl,
     isValidRegistrationUrl,
     applyMailtoFallback,
+    extractMailtoAddress,
     stripLogoSuffix,
     sanitizeTagsForDisplay,
     hardTruncateDescription,
