@@ -35,8 +35,8 @@
 const MESSAGES = {
     'insufficient_data': {
         label: 'Not enough job details',
-        explanation: 'A job needs at least one of: an apply-by date, a location, or a salary before it can go to a live or test channel. This item has none of them, which usually means the scraper grabbed a nav or error page. Test-channel posts are not gated, and force-post does not bypass this.',
-        fix: 'Open /pending, click Customize, and add a location, apply-by date or salary. Or click Post to Test.',
+        explanation: 'A job needs at least one of: an apply-by date, a short location (under 50 characters), or a salary figure (under 30 characters) before it can go to a live or test channel. This item has none of them, which usually means the scraper grabbed a nav or error page or pasted paragraph text into those fields. The gate applies to live and test posts alike, and force-post does not bypass it.',
+        fix: 'Open /pending, click Customize, and add a short location, an apply-by date or a salary figure. Post to Test stays disabled until then.',
         severity: 'warn'
     },
     // ============ PASSING STATES ============
