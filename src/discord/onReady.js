@@ -77,6 +77,7 @@ async function onReady(bot) {
 
     await step('missed-scrape check scheduled', async () => {
         bot.scheduleMissedScrapeCheck();
+        require('../posting/socialSchedule').start(bot);
         return 'every 15 min';
     });
 

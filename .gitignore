@@ -3,6 +3,7 @@ node_modules
 .env.*
 !.env.example
 data/
+data/instagram/
 puppeteer_data/
 posted-channel-markers/
 cache.json
@@ -16,3 +17,6 @@ error-*.png
 Thumbs.db
 .idea/
 .vscode/
+data/instagram/clubs.json
+data/instagram/dp/
+data/instagram/schedule.json

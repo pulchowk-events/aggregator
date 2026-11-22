@@ -12,7 +12,7 @@ const { MessageFlags } = require('discord.js');
 // require ../.. /bot for state, but the definitions array only needs the
 // builders. The handlers require nothing from this file, so a plain map
 // at module scope is safe.
-const COMMAND_NAMES = ['scrape', 'pending', 'status', 'settings', 'autopost', 'shutdown', 'ping'];
+const COMMAND_NAMES = ['scrape', 'pending', 'status', 'settings', 'autopost', 'shutdown', 'ping', 'insta-login', 'club'];
 
 function definitions() {
     const defs = COMMAND_NAMES.map((name) => {

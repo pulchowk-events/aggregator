@@ -33,6 +33,7 @@
     "dotenv": "^17.2.0",
     "express": "^5.1.0",
     "luxon": "^3.7.2",
+    "nepali-date-converter": "3.4.2",
     "node-cron": "^4.2.1",
     "puppeteer": "^22.12.1",
     "puppeteer-extra": "^3.3.6",
