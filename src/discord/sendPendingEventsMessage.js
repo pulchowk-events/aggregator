@@ -8,6 +8,7 @@ const { isEventPast, compareByEventDate } = require('../core/dateUtils');
 const { deduplicateEventsByKey } = require('../posting/dedup');
 const { hasSufficientData, canAttachPlaceholder } = require('../posting/gates');
 const { renderPlaceholderPng, placeholderLabelFor } = require('../scrapers/placeholderRender');
+const { igChipsOf, igDescription, dropUrlDupes } = require('../scrapers/lib/insta-chip-dedupe');
 
 const EMBED_LIMITS = { title: 256, description: 4096, fieldName: 256, fieldValueTarget: 1000 };
 
@@ -44,7 +45,7 @@ async function sendPendingEventsMessage(bot, channel, eventsToShow = null) {
 
 async function sendOnePendingEmbed(bot, channel, event) {
     const source = event.source || 'unknown';
-    let description = clampText(event.description || 'No description', 3000);
+    let description = clampText(igDescription(event), 3000);
 
     if (event.testPosted) {
         description += '\n\n✅ **Test-posted** - use **Post to Live** below when you are ready.';
@@ -94,9 +95,14 @@ async function sendOnePendingEmbed(bot, channel, event) {
         fields.push({ name: 'Provider', value: event.organizer || 'TBD', inline: true });
         fields.push({ name: 'Funding', value: event.price || 'TBD', inline: true });
     } else {
-        fields.push({ name: 'Date', value: event.date || 'TBD', inline: true });
-        fields.push({ name: 'Location', value: event.location || 'TBD', inline: true });
-        fields.push({ name: 'Price', value: event.price || 'TBD', inline: true });
+        const igChips = igChipsOf(event);
+        if (igChips) {
+            igChips.slice(0, 3).forEach((c) => fields.push({ name: c.label, value: c.value, inline: true }));
+        } else {
+            fields.push({ name: 'Date', value: event.date || 'TBD', inline: true });
+            fields.push({ name: 'Location', value: event.location || 'TBD', inline: true });
+            fields.push({ name: 'Price', value: event.price || 'TBD', inline: true });
+        }
     }
 
     const safeFields = fields.map((f) => ({
@@ -105,6 +111,8 @@ async function sendOnePendingEmbed(bot, channel, event) {
         inline: f.inline
     }));
     const safeDescription = clampText(description, isEventPast(event) ? 4000 : EMBED_LIMITS.description);
+
+    { const igAll = igChipsOf(event); if (igAll && Array.isArray(safeFields)) dropUrlDupes(safeFields, igAll); }
 
     const embed = new EmbedBuilder()
         .setTitle(clampText(event.title || 'Untitled', EMBED_LIMITS.title))

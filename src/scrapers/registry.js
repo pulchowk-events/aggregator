@@ -28,9 +28,17 @@ const path = require('path');
 const { auditLog } = require('../core/auditLogger');
 
 const SOURCES_ROOT = path.join(__dirname, 'sources');
-const SOURCE_TYPES = ['events', 'jobs', 'scholarships'];
+const SOURCE_TYPES = ['events', 'jobs', 'scholarships', 'social'];
 
 let registry = null;
+
+// Social (Instagram) sources are opt-in: loaded and validated like any plugin,
+// but invisible to getAllSources/listSources/getSource unless IG_SOCIAL_ENABLED
+// is truthy. Read at call time so .env loading order does not matter.
+function isTypeEnabled(type) {
+    if (type !== 'social') return true;
+    return /^(1|true|yes|on)$/i.test(String(process.env.IG_SOCIAL_ENABLED || '').trim());
+}
 
 function listJsFiles(dir) {
     try {
@@ -66,7 +74,8 @@ function loadAll() {
     const r = {
         events: new Map(),
         jobs: new Map(),
-        scholarships: new Map()
+        scholarships: new Map(),
+        social: new Map()
     };
     const all = [];
     const loadErrors = [];
@@ -123,18 +132,18 @@ function loadAll() {
 // Return the plugin object for (type, name), or null.
 function getSource(type, name) {
     const r = loadAll();
-    return r[type] ? (r[type].get(name) || null) : null;
+    return (r[type] && isTypeEnabled(type)) ? (r[type].get(name) || null) : null;
 }
 
 // Return array of plugin names for a given type (sorted deterministically).
 function listSources(type) {
     const r = loadAll();
-    return r[type] ? Array.from(r[type].keys()) : [];
+    return (r[type] && isTypeEnabled(type)) ? Array.from(r[type].keys()) : [];
 }
 
 // Return all plugin objects across all types.
 function getAllSources() {
-    return loadAll()._all;
+    return loadAll()._all.filter((p) => isTypeEnabled(p.type));
 }
 
 // Return array of load failures (for /health or diagnostics).

@@ -13,6 +13,10 @@ async function handleButton(bot, interaction) {
         return interaction.reply({ content: '❌ You need Administrator permissions.', flags: MessageFlags.Ephemeral });
     }
 
+    if (interaction.customId.startsWith('igrev:')) {
+        return require('../posting/socialPost').bridgeToReview(bot, interaction);
+    }
+
     if (interaction.customId.startsWith('confirm_post_force:') || interaction.customId.startsWith('confirm_post:')) {
         return require('./handleConfirmPost').handleConfirmPost(bot, interaction);
     }
