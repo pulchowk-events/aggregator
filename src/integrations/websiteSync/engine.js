@@ -808,5 +808,11 @@ module.exports = {
     getJobWebsiteDedupKey,
     getScholarshipWebsiteDedupKey,
     triggerRevalidation,
-    scheduleSync
+    scheduleSync,
+    syncOneTable,
+    chunkArray,
+    deterministicUUID,
+    sleep,
+    BOT_USER_ID,
+    getWebsiteSupabase: () => websiteSupabase
 };

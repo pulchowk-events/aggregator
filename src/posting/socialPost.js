@@ -146,6 +146,10 @@ async function postItems(client, items, opts = {}) {
         try { markers.confirm(key, channelId); } catch (e) { console.warn('[social-post] confirm failed for', key, e.message); }
         const pstore = opts.postsStore || postsStore;
         try { recordPost(enr && enr.title ? Object.assign({}, it, { linkTitle: enr.title }) : it, club, pstore); } catch (e) { console.warn('[social-post] posts.json write failed for', key, e.message); }
+        // website clubs feed: fire-and-forget, never blocks or fails the Discord post (off unless WEBSITE_CLUBS_SYNC_ENABLED)
+        if (/^(1|true|yes|on)$/i.test(String(process.env.WEBSITE_CLUBS_SYNC_ENABLED || ''))) {
+            try { require('../integrations/websiteSync/clubsOps').fireAndForget(it, club); } catch (e) { console.warn('[social-post] website clubs hook failed for', key, e.message); }
+        }
         if (opts.bot) {
             try { if (queueItem(opts.bot, it, pstore) === 'queued') res.queued++; }
             catch (e) { console.warn('[social-post] queue to review failed for', key, e.message); }

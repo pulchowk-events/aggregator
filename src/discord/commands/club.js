@@ -97,7 +97,21 @@ async function handle(bot, interaction, deps = {}) {
         }
         if (sub === 'remove') {
             const u = social.normUser(interaction.options.getString('username', true));
-            return say(store.remove(u) ? `${OK} Removed ${u}.` : `${WARN} ${u} is not in the list.`);
+            const removed = store.remove(u);
+            let note = '';
+            // website takedown (only when the clubs feed is on): rows + storage files + club row, never blocks the reply for long
+            if (/^(1|true|yes|on)$/i.test(String(process.env.WEBSITE_CLUBS_SYNC_ENABLED || ''))) {
+                try {
+                    const runTakedown = deps.takedown || ((x) => require('../../integrations/websiteSync/clubsOps').takedownClub(x));
+                    const td = Promise.resolve().then(() => runTakedown(u)).catch((e) => ({ ok: false, reason: e.message }));
+                    const r = await Promise.race([td, new Promise((res) => setTimeout(() => res(null), 2000))]);
+                    if (r === null) note = '\nWebsite takedown is running in the background.';
+                    else if (r.ok) note = '\nWebsite takedown done.';
+                    else if (r.skipped || r.reason) note = '\nWebsite takedown skipped (' + (r.skipped || r.reason) + ').';
+                    else note = '\nWebsite takedown had errors, check the logs.';
+                } catch (e) { note = '\nWebsite takedown failed to start.'; }
+            }
+            return say((removed ? `${OK} Removed ${u}.` : `${WARN} ${u} is not in the list.`) + note);
         }
         if (sub === 'list') {
             const list = store.list();

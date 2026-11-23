@@ -6,6 +6,7 @@
 const cron = require('node-cron');
 const env = require('../../config/env');
 const engine = require('./engine');
+const clubsSync = require('./clubs');
 const { commands, handleCommand } = require('./commands');
 
 function attachHooks(bot) {
@@ -86,7 +87,7 @@ function attach(bot) {
         isConfigured: engine.isConfigured,
         syncNow: (opts) => engine.syncWebsite(bot, opts),
         health: () => engine.checkWebsiteSyncHealth(bot),
-        getMode: () => ({ dryRun: engine.DRY_RUN, eventsTable: engine.WEBSITE_TABLE, jobsTable: engine.JOBS_SYNC_ENABLED ? engine.WEBSITE_JOBS_TABLE : null, scholarshipsTable: engine.SCHOLARSHIPS_SYNC_ENABLED ? engine.WEBSITE_SCHOLARSHIPS_TABLE : null, enabled: engine.isEnabled() })
+        getMode: () => ({ dryRun: engine.DRY_RUN, eventsTable: engine.WEBSITE_TABLE, jobsTable: engine.JOBS_SYNC_ENABLED ? engine.WEBSITE_JOBS_TABLE : null, scholarshipsTable: engine.SCHOLARSHIPS_SYNC_ENABLED ? engine.WEBSITE_SCHOLARSHIPS_TABLE : null, clubsTable: clubsSync.isEnabled() ? clubsSync.clubsTableName() : null, clubPostsTable: clubsSync.isEnabled() ? clubsSync.clubPostsTableName() : null, enabled: engine.isEnabled() })
     };
 
     console.log(
@@ -109,5 +110,5 @@ module.exports = {
     syncWebsiteEvents: engine.syncWebsite,
     checkWebsiteSyncHealth: engine.checkWebsiteSyncHealth,
     isConfigured: engine.isConfigured,
-    getMode: () => ({ dryRun: engine.DRY_RUN, eventsTable: engine.WEBSITE_TABLE, jobsTable: engine.JOBS_SYNC_ENABLED ? engine.WEBSITE_JOBS_TABLE : null, scholarshipsTable: engine.SCHOLARSHIPS_SYNC_ENABLED ? engine.WEBSITE_SCHOLARSHIPS_TABLE : null, enabled: engine.isEnabled() })
+    getMode: () => ({ dryRun: engine.DRY_RUN, eventsTable: engine.WEBSITE_TABLE, jobsTable: engine.JOBS_SYNC_ENABLED ? engine.WEBSITE_JOBS_TABLE : null, scholarshipsTable: engine.SCHOLARSHIPS_SYNC_ENABLED ? engine.WEBSITE_SCHOLARSHIPS_TABLE : null, clubsTable: clubsSync.isEnabled() ? clubsSync.clubsTableName() : null, clubPostsTable: clubsSync.isEnabled() ? clubsSync.clubPostsTableName() : null, enabled: engine.isEnabled() })
 };
