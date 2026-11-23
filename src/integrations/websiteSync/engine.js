@@ -223,10 +223,10 @@ function eventToWebsiteRow(bot, event) {
 // stable, so it's the correct anchor for website identity.
 
 function getJobWebsiteDedupKey(job) {
-    const url = job.url || job.registrationUrl || '';
-    if (url) return `url:${url.trim().toLowerCase()}`;
-    const title = (job.title || '').trim().toLowerCase();
-    const company = (job.company || '').trim().toLowerCase();
+    const url = toText(job.url) || toText(job.registrationUrl);
+    if (url) return `url:${url.toLowerCase()}`;
+    const title = toText(job.title).toLowerCase();
+    const company = toText(job.company).toLowerCase();
     return `job:${title}|${company}`;
 }
 
@@ -267,6 +267,8 @@ function computeEligibleJobs(bot) {
 
 function normalizeEmploymentType(raw) {
     if (!raw) return null;
+    raw = toText(raw);
+    if (!raw) return null;
     const s = raw.toLowerCase().replace(/[^a-z]/g, '');
     if (s.includes('full')) return 'Full-time';
     if (s.includes('part')) return 'Part-time';
@@ -278,6 +280,8 @@ function normalizeEmploymentType(raw) {
 }
 
 function normalizeAttendanceMode(raw) {
+    if (!raw) return null;
+    raw = toText(raw);
     if (!raw) return null;
     const s = raw.toLowerCase().replace(/[^a-z]/g, '');
     if (s.includes('remote')) return 'Remote';
@@ -292,18 +296,29 @@ function normalizeOpenings(raw) {
     return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// Coerce any scraped field to a trimmed string. Never throws.
+// array -> non-empty items joined by newline, null/undefined -> '', number -> string, object -> ''.
+function toText(v) {
+    if (v == null) return '';
+    if (typeof v === 'string') return v.trim();
+    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+    if (typeof v === 'boolean') return String(v);
+    if (Array.isArray(v)) return v.map(toText).filter(Boolean).join('\n');
+    return '';
+}
+
 function buildJobDescription(job) {
     const parts = [];
-    if (job.description) parts.push(job.description.trim());
-    if (job.responsibilities) parts.push(`Responsibilities:\n${job.responsibilities.trim()}`);
-    if (job.requirements) parts.push(`Requirements:\n${job.requirements.trim()}`);
+    if (toText(job.description)) parts.push(toText(job.description));
+    if (toText(job.responsibilities)) parts.push(`Responsibilities:\n${toText(job.responsibilities)}`);
+    if (toText(job.requirements)) parts.push(`Requirements:\n${toText(job.requirements)}`);
     return parts.join('\n\n').slice(0, 8000);
 }
 
 function jobToWebsiteRow(bot, job) {
-    const url = job.url || job.registrationUrl;
+    const url = toText(job.url) || toText(job.registrationUrl);
     if (!url) return null;
-    const company = job.company;
+    const company = toText(job.company);
     if (!company) return null;
     const dedupKey = getJobWebsiteDedupKey(job);
     const endsAt = jobEndsAt(job);
@@ -314,13 +329,13 @@ function jobToWebsiteRow(bot, job) {
         id: deterministicUUID(dedupKey),
         bot_dedup_key: dedupKey,
         origin: `scraper:${job.source || 'unknown'}`,
-        title: job.title || 'Untitled Job',
+        title: toText(job.title) || 'Untitled Job',
         company,
         description: buildJobDescription(job),
-        location: job.location || null,
-        salary: job.salary || null,
-        experience: job.experience || null,
-        level: job.level || null,
+        location: toText(job.location) || null,
+        salary: toText(job.salary) || null,
+        experience: toText(job.experience) || null,
+        level: toText(job.level) || null,
         openings: normalizeOpenings(job.openings),
         employment_type: normalizeEmploymentType(job.employmentType),
         attendance_mode: normalizeAttendanceMode(job.attendanceMode),
@@ -579,9 +594,17 @@ async function syncWebsite(bot, options = {}) {
         if (DEBUG_BATCHES) log('Computing eligible jobs...');
         emit({ phase: 'computing', table: 'jobs' });
         const jobEligible = computeEligibleJobs(bot);
-        const jobRowsRaw = jobEligible.map(({ job }) => jobToWebsiteRow(bot, job));
+        let jobConvertErrors = 0;
+        const jobRowsRaw = jobEligible.map(({ job }) => {
+            try { return jobToWebsiteRow(bot, job); }
+            catch (err) {
+                jobConvertErrors++;
+                console.warn('[websiteSync] job row skipped, conversion error: ' + (err && err.message) + ' | source=' + (job && job.source) + ' | url=' + (job && (job.url || job.registrationUrl)));
+                return null;
+            }
+        });
         const jobRows = jobRowsRaw.filter(Boolean);
-        const jobSkippedNoUrl = jobEligible.length - jobRows.length;
+        const jobSkippedNoUrl = jobEligible.length - jobRows.length - jobConvertErrors;
         if (DEBUG_BATCHES) log(`Jobs: ${jobEligible.length} eligible, ${jobRows.length} mappable, ${jobSkippedNoUrl} skipped (no URL/company)`);
         jobResult = await syncOneTable(bot, {
             tableName: WEBSITE_JOBS_TABLE, rows: jobRows, label: 'jobs', emit, log, startMs,
@@ -804,6 +827,7 @@ module.exports = {
     passesScholarshipGates,
     eventToWebsiteRow,
     jobToWebsiteRow,
+    toText,
     scholarshipToWebsiteRow,
     getJobWebsiteDedupKey,
     getScholarshipWebsiteDedupKey,
