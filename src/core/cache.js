@@ -148,6 +148,30 @@ function removeFromPending(bot, eventId) {
     bot.cache.pendingEvents = bot.cache.pendingEvents.filter((e) => e.id !== eventId);
 }
 
+// postedEvents over the cap: drop the oldest items, but keep unexpired jobs and
+// scholarships. The website sync deletes any site row whose item is missing from
+// postedEvents, so trimming a live one removes it from the public site.
+// POSTED_HARD_CAP bounds growth if too many items stay live.
+const POSTED_HARD_CAP = CACHE_CAP * 2;
+function isLiveWebsiteItem(bot, e) {
+    if (!e || (e.itemType !== 'job' && e.itemType !== 'scholarship')) return false;
+    try { return !(bot && typeof bot.isEventPast === 'function' && bot.isEventPast(e)); } catch (_) { return false; }
+}
+function trimPostedEvents(bot) {
+    const arr = bot.cache.postedEvents;
+    if (!Array.isArray(arr) || arr.length <= CACHE_CAP) return;
+    let excess = arr.length - CACHE_CAP;
+    const drop = new Set();
+    for (let i = 0; i < arr.length && excess > 0; i++) {
+        if (isLiveWebsiteItem(bot, arr[i])) continue;
+        drop.add(i);
+        excess--;
+    }
+    let next = arr.filter((_, i) => !drop.has(i));
+    if (next.length > POSTED_HARD_CAP) next = next.slice(-POSTED_HARD_CAP);
+    bot.cache.postedEvents = next;
+}
+
 // Move an item from pending → posted: push to postedEvents, register its
 // dedup key, its name, its id. Every tracking array is capped at CACHE_CAP
 // (oldest dropped) so cache.json can't grow unbounded.
@@ -173,7 +197,7 @@ function markEventPosted(bot, event) {
 
     if (bot.cache.postedEventNames.length > CACHE_CAP) bot.cache.postedEventNames = bot.cache.postedEventNames.slice(-CACHE_CAP);
     if (bot.cache.lastEventIds.length > CACHE_CAP)     bot.cache.lastEventIds     = bot.cache.lastEventIds.slice(-CACHE_CAP);
-    if (bot.cache.postedEvents.length > CACHE_CAP)     bot.cache.postedEvents     = bot.cache.postedEvents.slice(-CACHE_CAP);
+    trimPostedEvents(bot);
     if (bot.cache.postedEventKeys.length > CACHE_CAP)  bot.cache.postedEventKeys  = bot.cache.postedEventKeys.slice(-CACHE_CAP);
 }
 
@@ -197,5 +221,6 @@ module.exports = {
     quarantineCorruptCacheFile,
     removeFromPending,
     markEventPosted,
+    trimPostedEvents,
     pushToSkipped
 };
