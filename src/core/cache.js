@@ -168,8 +168,62 @@ function trimPostedEvents(bot) {
         excess--;
     }
     let next = arr.filter((_, i) => !drop.has(i));
-    if (next.length > POSTED_HARD_CAP) next = next.slice(-POSTED_HARD_CAP);
+    if (next.length > POSTED_HARD_CAP) {
+        const cut = next.length - POSTED_HARD_CAP;
+        const lost = next.slice(0, cut).filter((e) => isLiveWebsiteItem(bot, e));
+        if (lost.length > 0) warnLiveDropped(bot, lost, cut);
+        next = next.slice(-POSTED_HARD_CAP);
+    }
     bot.cache.postedEvents = next;
+}
+
+// The hard ceiling drops the oldest items even when they are live, which
+// removes their website rows on the next sync. Never do that quietly.
+let lastLiveDropWarnAt = 0;
+const LIVE_DROP_WARN_INTERVAL_MS = 10 * 60 * 1000;
+function warnLiveDropped(bot, lost, cut) {
+    const sample = lost.slice(0, 5).map((e) => (e.itemType || '?') + ':' + String(e.title || e.id || '?').slice(0, 40)).join(' | ');
+    const msg = 'postedEvents hard ceiling (' + POSTED_HARD_CAP + ') dropped ' + lost.length + ' live job/scholarship item(s) of ' + cut + ' cut; their website rows may be pruned. Sample: ' + sample;
+    console.warn('[cache] WARNING ' + msg);
+    const now = Date.now();
+    if (now - lastLiveDropWarnAt >= LIVE_DROP_WARN_INTERVAL_MS && bot && typeof bot.sendLogMessage === 'function') {
+        lastLiveDropWarnAt = now;
+        try { Promise.resolve(bot.sendLogMessage('WARNING: ' + msg)).catch(() => {}); } catch (_) { /* logging only */ }
+    }
+}
+
+// postedEventKeys / postedEventNames / lastEventIds: trim oldest first, but never
+// drop the entry of an item that is still in postedEvents. A live item whose
+// key fell off would look new to the already-posted check and be pushed again.
+// Result is bounded by POSTED_HARD_CAP.
+function trimKeepingProtected(arr, keep) {
+    if (!Array.isArray(arr) || arr.length <= CACHE_CAP) return arr;
+    let excess = arr.length - CACHE_CAP;
+    const out = [];
+    for (let i = 0; i < arr.length; i++) {
+        if (excess > 0 && !keep.has(arr[i])) { excess--; continue; }
+        out.push(arr[i]);
+    }
+    return out.length > POSTED_HARD_CAP ? out.slice(-POSTED_HARD_CAP) : out;
+}
+function trimTrackingArrays(bot) {
+    const c = bot.cache;
+    const over = (a) => Array.isArray(a) && a.length > CACHE_CAP;
+    if (!over(c.postedEventKeys) && !over(c.postedEventNames) && !over(c.lastEventIds)) return;
+    const posted = Array.isArray(c.postedEvents) ? c.postedEvents : [];
+    const keepKeys = new Set();
+    const keepNames = new Set();
+    const keepIds = new Set();
+    for (const e of posted) {
+        if (!e) continue;
+        try { keepKeys.add(getEventDedupKey(e)); } catch (_) { /* unkeyable item: not protected */ }
+        const n = normalizeEventName(e.title || '');
+        if (n) keepNames.add(n);
+        if (e.id) keepIds.add(e.id);
+    }
+    if (Array.isArray(c.postedEventKeys)) c.postedEventKeys = trimKeepingProtected(c.postedEventKeys, keepKeys);
+    if (Array.isArray(c.postedEventNames)) c.postedEventNames = trimKeepingProtected(c.postedEventNames, keepNames);
+    if (Array.isArray(c.lastEventIds)) c.lastEventIds = trimKeepingProtected(c.lastEventIds, keepIds);
 }
 
 // Move an item from pending → posted: push to postedEvents, register its
@@ -195,10 +249,8 @@ function markEventPosted(bot, event) {
         bot.cache.lastEventIds.push(event.id);
     }
 
-    if (bot.cache.postedEventNames.length > CACHE_CAP) bot.cache.postedEventNames = bot.cache.postedEventNames.slice(-CACHE_CAP);
-    if (bot.cache.lastEventIds.length > CACHE_CAP)     bot.cache.lastEventIds     = bot.cache.lastEventIds.slice(-CACHE_CAP);
     trimPostedEvents(bot);
-    if (bot.cache.postedEventKeys.length > CACHE_CAP)  bot.cache.postedEventKeys  = bot.cache.postedEventKeys.slice(-CACHE_CAP);
+    trimTrackingArrays(bot);
 }
 
 // Cap-enforced push to skippedEvents. Used by /skip and the blacklist
@@ -214,6 +266,7 @@ function pushToSkipped(bot, event) {
 
 module.exports = {
     CACHE_FILE,
+    trimTrackingArrays,
     loadCache,
     saveCache,
     flushCacheSync,
