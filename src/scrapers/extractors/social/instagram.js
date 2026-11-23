@@ -624,6 +624,6 @@ module.exports = {
     _internal: {
         readConfig, loadClubs, normalizeCookie, hasSessionCookies, classifyProfileState, waitForProfile,
         parseTilesFromHtml, classifyAlt, buildItemFromTile, selectNewTiles, applyDetail, makeTitle,
-        probeProfileInPage
+        probeProfileInPage, fetchDetail, readCookieFile, injectCookies, readCookieNames
     }
 };
