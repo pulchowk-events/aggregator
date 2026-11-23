@@ -427,9 +427,11 @@ async function triggerRevalidation(tags) {
     try {
         const res = await fetch(REVALIDATE_URL, {
             method: 'POST',
+            redirect: 'manual',
             headers: { 'Content-Type': 'application/json', 'X-Revalidate-Secret': REVALIDATE_SECRET },
             body: JSON.stringify({ tags })
         });
+        if (res.status >= 300 && res.status < 400) console.warn(`[websiteSync] Revalidation URL redirected (${res.status}) to ${(res.headers && res.headers.get && res.headers.get('location')) || 'unknown'} - update WEBSITE_REVALIDATE_URL to the final URL`);
         if (!res.ok) console.warn(`⚠️ [websiteSync] Revalidation returned ${res.status}`);
         else console.log(`🔄 [websiteSync] Revalidated tags: ${tags.join(', ')}`);
     } catch (err) {
