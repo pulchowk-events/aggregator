@@ -437,6 +437,24 @@ async function triggerRevalidation(tags) {
     }
 }
 
+// Prune safety guard. Orphans = site rows (origin scraper:%) whose key is not
+// in the current eligible set. Normal expiry removes a few rows per run; a big
+// jump means the eligible set shrank for a bad reason (cache trim, skipped
+// rows, bad scrape), so the prune is skipped. Runs AFTER the empty-set and
+// >50% guards, so it covers the band between its limit and 50%.
+// Pure and exported for tests.
+function pruneGuard(orphanCount, existingCount, opts = {}) {
+    const envNum = (name, fallback) => {
+        const raw = process.env[name];
+        const v = Number(raw);
+        return raw !== undefined && raw !== '' && Number.isFinite(v) && v >= 0 ? v : fallback;
+    };
+    const maxFraction = opts.maxFraction !== undefined ? opts.maxFraction : envNum('WEBSITE_SYNC_PRUNE_MAX_FRACTION', 0.10);
+    const minAbs = opts.minAbs !== undefined ? opts.minAbs : envNum('WEBSITE_SYNC_PRUNE_MIN_ABS', 10);
+    const limit = Math.max(minAbs, Math.floor(existingCount * maxFraction));
+    return { abort: orphanCount > limit, limit, minAbs, maxFraction, orphanCount, existingCount };
+}
+
 // ---------- Generic per-table sync with guards ----------
 async function syncOneTable(bot, { tableName, rows, label, emit, log, startMs, skippedInfo = {} }) {
     const tableStartMs = Date.now();
@@ -495,6 +513,15 @@ async function syncOneTable(bot, { tableName, rows, label, emit, log, startMs, s
             pruneResult.aborted = true;
             pruneResult.reason = 'delete_threshold_exceeded';
             log(`[${label}] 🚨 Prune ABORTED: would delete ${orphans.length}/${existing.length} (>50%)`);
+        } else if (pruneGuard(orphans.length, (existing || []).length).abort) {
+            const g = pruneGuard(orphans.length, (existing || []).length);
+            pruneResult.aborted = true;
+            pruneResult.reason = 'prune_limit_exceeded';
+            log(`[${label}] PRUNE SKIPPED: ${orphans.length}/${existing.length} orphan(s) exceeds limit ${g.limit} (max(${g.minAbs}, ${Math.round(g.maxFraction * 100)}%)). Nothing deleted this run.`);
+            auditLog('website_sync', `[${label}] Prune skipped by guard: ${orphans.length}/${existing.length} orphan(s), limit ${g.limit}`, {
+                table: tableName, orphans: orphans.length, existing: existing.length, limit: g.limit,
+                sampleKeys: orphans.slice(0, 25).map((o) => o.bot_dedup_key)
+            }, 'warn');
         } else if (orphans.length > 0) {
             if (DRY_RUN) {
                 pruneResult.deleted = orphans.length;
@@ -509,6 +536,9 @@ async function syncOneTable(bot, { tableName, rows, label, emit, log, startMs, s
                     await sleep(50);
                 }
                 if (DEBUG_BATCHES) log(`[${label}] Pruned ${pruneResult.deleted}/${orphans.length} orphan(s)`);
+                auditLog('website_sync', `[${label}] Pruned ${pruneResult.deleted}/${orphans.length} orphan(s)`, {
+                    table: tableName, deleted: pruneResult.deleted, keys: orphans.map((o) => o.bot_dedup_key).slice(0, 200)
+                });
             }
         }
     } catch (err) {
@@ -824,6 +854,7 @@ module.exports = {
     computeEligibleScholarships,
     passesWebsiteGates,
     passesJobGates,
+    pruneGuard,
     passesScholarshipGates,
     eventToWebsiteRow,
     jobToWebsiteRow,
